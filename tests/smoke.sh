@@ -1182,6 +1182,21 @@ PY
         F_AFFECT[2]="ssh!|x"; ui_checklist() { echo 0; echo 2; }
         manage_kept
         grep -q $'^check_sudo\tsudo works without a password\t.*\tmedium$' "$KS/kept" && [[ "${F_STATE[2]}" == kept ]] && echo "kept-worse-reticked"
+        # Overlapping entries: a narrower one kept at medium and a broader one
+        # at high. The high problem is kept (the broader entry allows it);
+        # saving it ticked merges them into one entry (all ports, high, the
+        # earliest date); unticking removes every entry that kept it.
+        printf 'check_listening_services\t# service(s) can be reached from your network [22/tcp]\t2026-11-01\tSSH\tmedium\ncheck_listening_services\t# service(s) can be reached from your network [22/tcp,27036/tcp]\t2026-11-05\tSSH\thigh\n' > "$KS/kept"; kept_load
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_FIX=(); F_STATE=(); F_VERIFY=(); F_AFFECT=(); F_KEYX=(); F_KEPT_SEV=(); F_KEPT_FROM=()
+        CURRENT_CHECK=check_listening_services
+        finding high "1 service(s) can be reached from your network" d m true; finding_keep_key "22/tcp"; finding_affects "ssh!|x"
+        kept_apply
+        ui_checklist() { echo 0; }; manage_kept
+        [[ "${F_STATE[0]}" == kept && "$(grep -c . "$KS/kept")" == 1 ]] \
+            && grep -q $'^check_listening_services\t# service(s) can be reached from your network \\[22/tcp,27036/tcp\\]\t2026-11-01\t[^\t]*\thigh$' "$KS/kept" && echo "kept-overlap-merged"
+        printf 'check_listening_services\t# service(s) can be reached from your network [22/tcp]\t2026-11-01\tSSH\tmedium\ncheck_listening_services\t# service(s) can be reached from your network [22/tcp,27036/tcp]\t2026-11-05\tSSH\thigh\n' > "$KS/kept"; kept_load
+        ui_checklist() { return 0; }; manage_kept
+        [[ ! -s "$KS/kept" && -z "$(_keep_candidates | grep $'\ton$')" ]] && echo "kept-overlap-untick-all"
         rm -f "$KS/kept"; ln -s "$W/elsewhere" "$KS/kept"; kept_load
         ! _kept_save "x" && [[ ! -e "$W/elsewhere" ]] && echo "kept-symlink-refused"
         [[ "$(_dashboard_answer '{"action":"keep"}')" == keep ]] && echo "dashboard-keep-action"
@@ -1399,7 +1414,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
-         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked; do
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all; do
     expect "$W/t6.out" "$m" "$m"
 done
 

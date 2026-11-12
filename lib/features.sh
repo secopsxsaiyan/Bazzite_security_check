@@ -8,6 +8,7 @@
 #         this PC uses the feature, and the finding can be kept on purpose)
 #   KEY?  the fix asks what to keep for it
 #   KEY+  the fix is what the feature needs
+#   KEY~  the fix leaves it as it is (manual steps would change it)
 #   KEY   the fix changes how the feature works
 # Every place that shows a finding - the fix list, the Apply dialog, a
 # check's page, the dashboard row, the report - then says which features are
@@ -21,8 +22,9 @@
 #   CHECK_ID<TAB>KEY<TAB>DATE<TAB>FEATURES<TAB>SEVERITY
 # KEY is the finding's title with numbers replaced by "#", so "3 day(s)"
 # and "4 day(s)" are the same finding, followed by the evidence a check
-# gave with finding_keep_key (the exact ports): keeping "port 22 can be
-# reached" does not cover a port that opens later. A kept finding counts
+# gave with finding_keep_key (its ports): a kept entry covers the finding
+# while every port it reports is among the kept ones - a kept port that is
+# closed this run is still covered, a port that opens later is not. A kept finding counts
 # again when it gets more severe than when it was kept. Lines without a
 # severity (written before it was stored) never count again that way.
 
@@ -59,9 +61,9 @@ finding_affects() {
     local i=$(( ${#F_SEV[@]} - 1 )) a key
     (( i >= 0 )) || return 0
     for a in "$@"; do
-        key="${a%%|*}"; key="${key%[+?!]}"
+        key="${a%%|*}"; key="${key%[+?!~]}"
         [[ -n "$key" && -n "${FEATURE_NAME[$key]:-}" && "$a" == *"|"* ]] || continue
-        [[ $'\n'"${F_AFFECT[i]:-}" =~ $'\n'"${key}"[+?!]?\| ]] && continue
+        [[ $'\n'"${F_AFFECT[i]:-}" =~ $'\n'"${key}"[+?!~]?\| ]] && continue
         F_AFFECT[i]+="${F_AFFECT[i]:+$'\n'}${a//$'\n'/ }"
     done
     return 0
@@ -172,8 +174,8 @@ feature_status() {
 
 # _affect_key ENTRY / _affect_mark ENTRY — the feature key of a
 # finding_affects entry, and its mark ("!", "?", "+" or empty).
-_affect_key() { local k="${1%%|*}"; printf '%s' "${k%[+?!]}"; }
-_affect_mark() { local k="${1%%|*}"; [[ "$k" == *[+?!] ]] && printf '%s' "${k: -1}"; return 0; }
+_affect_key() { local k="${1%%|*}"; printf '%s' "${k%[+?!~]}"; }
+_affect_mark() { local k="${1%%|*}"; [[ "$k" == *[+?!~] ]] && printf '%s' "${k: -1}"; return 0; }
 
 # _affects_in_use I — finding I's fix stops a feature this PC uses.
 _affects_in_use() {
@@ -200,8 +202,8 @@ _affects_maybe_in_use() {
 
 # affects_list I — finding I's affected features, those in use first, one
 # per line: "KEY<TAB>NAME<TAB>STATUS<TAB>WHY<TAB>MARK<TAB>SENTENCE" (STATUS
-# in, out or unknown; WHY "-" when there is none; MARK "!", "?", "+" or
-# "-"). No field is empty: "read" with a tab IFS would merge empty ones.
+# in, out or unknown; WHY "-" when there is none; MARK "!", "?", "+", "~"
+# or "-"). No field is empty: "read" with a tab IFS would merge empty ones.
 affects_list() {
     local a key st why mark
     while IFS= read -r a; do
@@ -218,7 +220,8 @@ affects_list() {
 # _mark_text MARK — how the fix touches the feature, for the person.
 _mark_text() {
     case "$1" in
-        "!") echo "stops it" ;; "?") echo "you choose in the fix" ;; "+") echo "helps it" ;; *) echo "changes it" ;;
+        "!") echo "stops it" ;; "?") echo "you choose in the fix" ;; "+") echo "helps it" ;;
+        "~") echo "left as it is" ;; *) echo "changes it" ;;
     esac
 }
 
@@ -292,7 +295,10 @@ _ports_affects() {
 }
 
 # ====================== KEPT ON PURPOSE ======================
-# _finding_key TITLE — the stable part of a finding's title.
+# _finding_key TITLE — the stable part of a finding's title. Numbers become
+# "#", so two findings of one check whose titles differ only in numbers
+# share a key; checks that can report such findings separately give
+# evidence with finding_keep_key (the ports) to tell them apart.
 _finding_key() {
     local t="${1//$'\t'/ }"
     t="${t//$'\n'/ }"
@@ -331,30 +337,51 @@ _kept_entry() {
     printf '%s' "${KEPT[$k]}"
 }
 
-# _kept_match I — the KEPT key that covers finding I. For a finding with
-# evidence (ports), a kept entry covers it when every current port is among
-# the kept ones: a port that is closed now (Steam not running) is still
-# covered, a new port is not.
-_kept_match() {
-    [[ ${#KEPT[@]} -gt 0 ]] || return 1
-    local base k list p ok
+# _orig_sev I — finding I's own severity (before keeping made it a note).
+_orig_sev() { printf '%s' "${F_KEPT_SEV[$1]:-${F_SEV[$1]}}"; }
+
+# _sev_allows STORED SEV — a problem kept at STORED severity stays kept at
+# SEV (not more severe; no STORED: always).
+_sev_allows() { [[ -z "$1" ]] || (( $(_sev_rank "$2") >= $(_sev_rank "$1") )); }
+
+# _kept_related I — the kept entries about finding I, one per line as
+# "cover<TAB>KEY" (it covers every port the finding reports now) or
+# "sub<TAB>KEY" (its ports are all among the finding's, so it is about the
+# same problem but does not cover it). Without evidence: the exact key.
+_kept_related() {
+    [[ ${#KEPT[@]} -gt 0 ]] || return 0
+    local base k list cur p cover sub
     base="${F_CHECK[$1]}"$'\t'"$(_finding_key "${F_TITLE[$1]}")"
     if [[ -z "${F_KEYX[$1]:-}" ]]; then
-        [[ -n "${KEPT[$base]:-}" ]] || return 1
-        printf '%s' "$base"
+        [[ -n "${KEPT[$base]:-}" ]] && printf 'cover\t%s\n' "$base"
         return 0
     fi
+    cur=",${F_KEYX[$1]},"
     for k in "${!KEPT[@]}"; do
         [[ "$k" == "$base ["*"]" ]] || continue
         list="${k#"$base ["}"; list=",${list%]},"
-        ok=1
-        for p in ${F_KEYX[$1]//,/ }; do
-            [[ "$list" == *",${p},"* ]] || { ok=0; break; }
-        done
-        (( ok )) && { printf '%s' "$k"; return 0; }
+        cover=1; sub=1
+        for p in ${F_KEYX[$1]//,/ }; do [[ "$list" == *",${p},"* ]] || { cover=0; break; }; done
+        for p in ${list//,/ }; do [[ "$cur" == *",${p},"* ]] || { sub=0; break; }; done
+        if (( cover )); then printf 'cover\t%s\n' "$k"
+        elif (( sub )); then printf 'sub\t%s\n' "$k"; fi
     done
+    return 0
+}
+
+# _kept_match I — a kept entry that covers finding I at its severity now
+# (any of them: one that allows it is enough).
+_kept_match() {
+    local kind k v sev
+    sev=$(_orig_sev "$1")
+    while IFS=$'\t' read -r kind k; do
+        [[ "$kind" == cover && -n "$k" ]] || continue
+        v="${KEPT[$k]##*$'\t'}"
+        _sev_allows "$v" "$sev" && { printf '%s' "$k"; return 0; }
+    done < <(_kept_related "$1")
     return 1
 }
+
 
 # kept_apply — turn the findings kept on purpose into notes: they no longer
 # lower the score, offer no fix and say since when they are kept. Run after
@@ -371,11 +398,12 @@ kept_apply() {
     local v
     for i in "${!F_SEV[@]}"; do
         [[ "${F_STATE[$i]}" == "open" && "${F_SEV[$i]}" != "info" ]] || continue
+        # Kept by an entry that allows its severity now (one kept at a
+        # milder severity does not count; it is worse now).
         e=$(_kept_entry "$i") || continue
         d="${e%%$'\t'*}"; e="${e#*$'\t'}"; f="${e%%$'\t'*}"; v="${e#*$'\t'}"
-        # Worse than when it was kept: it counts again.
-        [[ -n "$v" ]] && (( $(_sev_rank "${F_SEV[$i]}") < $(_sev_rank "$v") )) && continue
         F_KEPT_SEV[i]="${F_SEV[$i]}"
+        F_KEPT_FROM[i]="$v"
         F_SEV[i]="info"
         F_FIX[i]=""
         F_STATE[i]="kept"
@@ -402,6 +430,7 @@ _kept_recount() {
 }
 
 declare -ga F_KEPT_SEV=()       # the severity a kept finding had
+declare -ga F_KEPT_FROM=()      # the severity it was kept at (from the file)
 
 # _keep_candidates — findings that can be kept: open problems whose fix
 # affects a feature this PC uses, and the findings kept already. Prints
@@ -423,11 +452,10 @@ _keep_candidates() {
 # kept_offered — there is something to keep (or kept already).
 kept_offered() { [[ -n "$(_keep_candidates)" ]]; }
 
-# kept_count — how many findings are kept on purpose in this run.
+# kept_count — how many findings are kept on purpose (as the kept list
+# would tick them: one unticked in this session no longer counts).
 kept_count() {
-    local s n=0
-    for s in "${F_STATE[@]}"; do [[ "$s" == "kept" ]] && n=$((n + 1)); done
-    echo "$n"
+    _keep_candidates | grep -c $'\ton$' || true
 }
 
 # _kept_features I — the features in use (or maybe in use) that finding I's
@@ -445,11 +473,20 @@ _kept_features() {
 # this time stay as they are.
 manage_kept() {
     local -a items=() picked=() rows=() offered=()
-    local i on row
+    local i on row feats kind k was
     while IFS=$'\t' read -r i on; do
         [[ -n "$i" ]] || continue
-        row="$(_sev_label "${F_KEPT_SEV[$i]:-${F_SEV[$i]}}") · ${F_TITLE[$i]//$'\n'/ }"
-        [[ -n "$(_kept_features "$i")" ]] && row+="  —  for: $(_kept_features "$i")"
+        row="$(_sev_label "$(_orig_sev "$i")") · ${F_TITLE[$i]//$'\n'/ }"
+        feats=$(_kept_features "$i")
+        [[ -n "$feats" ]] && row+="  —  for: ${feats}"
+        # Kept before at a milder level: say why it is unticked now.
+        if [[ "$on" == off && "${F_STATE[$i]}" == open ]]; then
+            while IFS=$'\t' read -r kind k; do
+                [[ "$kind" == cover && -n "$k" ]] || continue
+                was="${KEPT[$k]##*$'\t'}"
+                [[ -n "$was" ]] && { row+="  (kept before at $(_sev_label "$was"), worse now - tick to keep it again)"; break; }
+            done < <(_kept_related "$i")
+        fi
         items+=("$i" "$row" "$on")
         offered+=("$i")
     done < <(_keep_candidates)
@@ -465,31 +502,41 @@ manage_kept() {
     for i in "${offered[@]}"; do is_offered["$i"]=1; done
     for i in "${picked[@]}"; do [[ "$i" =~ ^[0-9]+$ && -n "${is_offered[$i]:-}" ]] && want["$i"]=1; done
 
-    # Every kept entry no offered problem matched stays (a check that did
-    # not run, ports not open right now); the offered ones are replaced by
-    # what was ticked, under the entry that already covered them.
+    # Every kept entry about an offered problem is replaced (all of them:
+    # covering and narrower ones), so an untick cannot leave one behind
+    # that still keeps it. Entries about anything else stay (a check that
+    # did not run, ports not open right now).
     local -A drop=()
-    local k v today
+    local k v today kind
     for i in "${offered[@]}"; do
-        k=$(_kept_match "$i") && drop["$k"]=1
+        while IFS=$'\t' read -r kind k; do [[ -n "$k" ]] && drop["$k"]=1; done < <(_kept_related "$i")
     done
     today=$(date +%Y-%m-%d)
     for k in "${!KEPT[@]}"; do
         [[ -n "${drop[$k]:-}" ]] && continue
         rows+=("${k}"$'\t'"${KEPT[$k]}")
     done
+    # A ticked problem gets one entry: every port of the entries it
+    # replaces and its own, the most severe level any of them accepted (or
+    # its own), the earliest date.
+    local ports sev date feats ek ed ef ev
     for i in "${!want[@]}"; do
-        if k=$(_kept_match "$i") && [[ "${F_STATE[$i]}" == "kept" ]]; then
-            v="${KEPT[$k]}"
-        elif [[ -n "$k" ]]; then
-            # Kept before but worse now: ticking it again keeps it at the
-            # severity it has now.
-            v="${today}"$'\t'"$(_kept_features "$i")"$'\t'"${F_SEV[$i]}"
-        else
-            k="${F_CHECK[$i]}"$'\t'"$(_kept_key "$i")"
-            v="${today}"$'\t'"$(_kept_features "$i")"$'\t'"${F_KEPT_SEV[$i]:-${F_SEV[$i]}}"
+        ports="${F_KEYX[$i]:-}"; sev=$(_orig_sev "$i"); date="$today"; feats=$(_kept_features "$i")
+        [[ -n "${F_KEPT_FROM[$i]:-}" ]] && (( $(_sev_rank "${F_KEPT_FROM[$i]}") < $(_sev_rank "$sev") )) && sev="${F_KEPT_FROM[$i]}"
+        while IFS=$'\t' read -r kind k; do
+            [[ -n "$k" ]] || continue
+            IFS=$'\x1f' read -r ed ef ev <<< "${KEPT[$k]//$'\t'/$'\x1f'}"
+            [[ -n "$ed" && "$ed" < "$date" ]] && date="$ed"
+            [[ -z "$feats" ]] && feats="$ef"
+            [[ -n "$ev" ]] && (( $(_sev_rank "$ev") < $(_sev_rank "$sev") )) && sev="$ev"
+            if [[ "$k" == *" ["*"]" ]]; then ek="${k##* [}"; ports+="${ports:+,}${ek%]}"; fi
+        done < <(_kept_related "$i")
+        k="${F_CHECK[$i]}"$'\t'"$(_finding_key "${F_TITLE[$i]}")"
+        if [[ -n "${F_KEYX[$i]:-}" ]]; then
+            ports=$(tr ',' '\n' <<< "$ports" | grep -v '^$' | sort -u | paste -sd, -)
+            k+=" [${ports}]"
         fi
-        rows+=("${k}"$'\t'"${v}")
+        rows+=("${k}"$'\t'"${date}"$'\t'"${feats}"$'\t'"${sev}")
     done
     _kept_save "${rows[@]}" || { ui_error "Could not save the kept problems in ${KEPT_FILE}."; return 0; }
     # Keeping takes effect now: the dashboard, score and reports update.

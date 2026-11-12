@@ -111,7 +111,7 @@ Fixes that touch a Bazzite feature say so, in the fix list, the Apply dialog, ea
 | Flatpak apps | Flatpak app permissions | the apps listed |
 | Finding this PC by name from Windows PCs | LLMNR | cannot be told; you decide |
 
-**Kept on purpose.** On the dashboard, *Kept on purpose…* lists the problems whose fix would stop a feature you use. Tick the ones you accept: they are listed as kept, do not lower the score and are not offered as fixes, now and in later checks. A kept problem counts again if it gets more severe, and for open ports only the exact ports you kept are covered - a new one counts again. Untick one to count it again from the next check. The choices are stored in `/var/lib/bazzite-sec-audit/kept`, which only root can change.
+**Kept on purpose.** On the dashboard, *Kept on purpose…* lists the problems whose fix would stop a feature you use. Tick the ones you accept: they are listed as kept, do not lower the score and are not offered as fixes, now and in later checks. A kept problem counts again if it gets more severe, and for open ports a kept problem is covered while every port it reports is one you kept - a kept port that is closed right now (Steam not running) is still covered, a new port counts again. Untick one to count it again from the next check. The choices are stored in `/var/lib/bazzite-sec-audit/kept`, which only root can change.
 
 ## Install from a release
 

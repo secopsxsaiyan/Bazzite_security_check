@@ -132,6 +132,9 @@ _check_row() {
 # _check_affects CHECK — for the dashboard row: the features in use that the
 # fixes of CHECK's open findings would stop, or ask about (kept findings
 # have no fix).
+# Only features known to be in use are named here; ones whose use cannot
+# be told (Remote Play with only Steam installed) are named on the check's
+# page, in the Apply dialog and in the kept list.
 _check_affects() {
     local i key name st why mark x stop="" ask="" out=""
     local -A seen=() names=()
@@ -147,9 +150,11 @@ _check_affects() {
         done < <(affects_list "$i")
     done < <(_check_findings "$1")
     # "Stops" wins over "asks" for a feature two findings touch.
-    for key in "${!seen[@]}"; do
-        if [[ "${seen[$key]}" == '!' ]]; then stop+="${stop:+, }${names[$key]}"; else ask+="${ask:+, }${names[$key]}"; fi
-    done
+    # Sorted by name so the row reads the same every time.
+    while IFS=$'\t' read -r name key; do
+        [[ -n "$key" ]] || continue
+        if [[ "${seen[$key]}" == '!' ]]; then stop+="${stop:+, }${name}"; else ask+="${ask:+, }${name}"; fi
+    done < <(for key in "${!seen[@]}"; do printf '%s\t%s\n' "${names[$key]}" "$key"; done | sort)
     [[ -n "$stop" ]] && out="fix would stop ${stop}"
     [[ -n "$ask" ]] && out+="${out:+; }fix asks what to keep for ${ask}"
     [[ -n "$out" ]] && printf 'In use here: %s' "$out"
