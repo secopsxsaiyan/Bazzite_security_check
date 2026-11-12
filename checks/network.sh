@@ -227,6 +227,7 @@ Or use the Firewall settings app (firewall-config)." \
         "kdeconnect?|The fix lists it and keeps it reachable from other devices if you tick it there." \
         "ssh?|The fix lists it and keeps it reachable from other devices if you tick it there." \
         "sharing?|The fix lists it and keeps it reachable from other devices if you tick it there." \
+        "discovery?|The fix lists mDNS (ticked); leave it ticked to keep finding printers and other devices." \
         "game_server?|Ports you opened yourself stay ticked in the fix's list; anything you untick can no longer be reached by other players."
     return 0
 }
@@ -789,7 +790,7 @@ then: sudo systemctl restart systemd-resolved" \
         finding_change "LLMNR on (systemd-resolved answers on 5355)" "LLMNR=no (mDNS .local names keep working)" \
             "DNS restarts|systemd-resolved restarts; name lookups pause for a moment."
         finding_affects \
-            "local_names|Windows PCs can no longer find this PC by its bare name through LLMNR. .local names (mDNS) and IP addresses keep working."
+            "local_names!|Windows PCs can no longer find this PC by its bare name through LLMNR. .local names (mDNS) and IP addresses keep working."
     fi
     return 0
 }

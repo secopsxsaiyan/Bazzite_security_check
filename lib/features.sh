@@ -9,14 +9,14 @@
 #   KEY?  the fix asks what to keep for it
 #   KEY+  the fix is what the feature needs
 #   KEY   the fix changes how the feature works
-# Every place that shows
-# a finding - the fix list, the Apply dialog, a check's page, the report -
-# then says which features are affected and whether this PC uses them
-# ("in use here: Steam is installed"), so the person can decide whether to
-# touch the setting. Fixes that affect a feature in use start unticked.
+# Every place that shows a finding - the fix list, the Apply dialog, a
+# check's page, the dashboard row, the report - then says which features are
+# affected and whether this PC uses them ("in use here: ..."), so the person
+# can decide whether to touch the setting. Only a fix marked "!" for a
+# feature in use starts unticked.
 #
-# A finding can be kept on purpose ("I use this"): from the next check on it
-# is listed as kept, does not lower the score and offers no fix. The choices
+# A finding can be kept on purpose ("I use this"): it is then listed as
+# kept, does not lower the score and offers no fix. The choices
 # are in KEPT_FILE (root only), one finding per line:
 #   CHECK_ID<TAB>KEY<TAB>DATE<TAB>FEATURES<TAB>SEVERITY
 # KEY is the finding's title with numbers replaced by "#", so "3 day(s)"
@@ -142,7 +142,9 @@ _feature_use() {
         ssh) [[ "$USE_SSH" -eq 1 ]] && echo "SSH" ;;
         sharing) [[ "$USE_SHARING" -eq 1 ]] && echo "file sharing" ;;
         docker|containers|dev_tools) [[ "$USE_DEV" -eq 1 ]] && echo "development" ;;
-        performance|anticheat|couch|game_server) [[ "$USE_GAMING" -eq 1 ]] && echo "gaming" ;;
+        # Not game_server: gaming is the default answer and says nothing
+        # about hosting a server.
+        performance|anticheat|couch) [[ "$USE_GAMING" -eq 1 ]] && echo "gaming" ;;
     esac
     return 0
 }
@@ -262,7 +264,7 @@ _ports_affects() {
         [[ "$n" =~ ^[0-9]+$ ]] || continue
         key=""
         if   (( n >= 27031 && n <= 27040 )); then key=remote_play
-        elif (( n >= 47984 && n <= 48010 )); then key=sunshine
+        elif (( n >= 47984 && n <= 48010 && n != 47990 )); then key=sunshine   # 47990: admin page, not streaming
         elif (( n >= 1714 && n <= 1764 ));   then key=kdeconnect
         elif (( n == 22 ));                  then key=ssh
         elif (( n == 445 || n == 139 || n == 53317 || n == 22000 || n == 21027 )); then key=sharing

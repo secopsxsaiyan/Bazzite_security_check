@@ -269,7 +269,7 @@ Kirigami.ApplicationWindow {
                                 delegate: QQC2.ItemDelegate {
                                     Layout.fillWidth: true
                                     onClicked: root.act("check", modelData.id)
-                                    Accessible.name: modelData.title + ", " + modelData.summary + ((modelData.affects || "") !== "" ? ", fix would stop " + modelData.affects : "")
+                                    Accessible.name: modelData.title + ", " + modelData.summary + ((modelData.affects || "") !== "" ? ", " + modelData.affects : "")
                                     contentItem: RowLayout {
                                         spacing: Kirigami.Units.largeSpacing
                                         Kirigami.Icon {
@@ -282,7 +282,7 @@ Kirigami.ApplicationWindow {
                                             QQC2.Label { text: modelData.title; textFormat: Text.PlainText; Layout.fillWidth: true; elide: Text.ElideRight }
                                             QQC2.Label {
                                                 visible: (modelData.affects || "") !== ""
-                                                text: "Fix would stop " + (modelData.affects || "") + " (in use here)"
+                                                text: modelData.affects || ""
                                                 textFormat: Text.PlainText
                                                 font: Kirigami.Theme.smallFont
                                                 opacity: 0.75

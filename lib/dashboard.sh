@@ -129,20 +129,26 @@ _check_row() {
     printf '%s  %s  —  %s' "$(_state_icon "$st")" "${CHECK_TITLE[$id]}" "$sum"
 }
 
-# _check_affects CHECK — the features in use that the fixes of CHECK's open
-# findings would stop, for the dashboard row (kept findings have no fix).
+# _check_affects CHECK — for the dashboard row: the features in use that the
+# fixes of CHECK's open findings would stop, or ask about (kept findings
+# have no fix).
 _check_affects() {
-    local i key name st why mark x out=""
+    local i key name st why mark x stop="" ask="" out=""
     local -A seen=()
     while IFS= read -r i; do
         [[ -n "$i" && "${F_STATE[$i]}" != "kept" ]] && _still_open "$i" || continue
         while IFS=$'\t' read -r key name st why mark x; do
-            [[ "$st" == in && "$mark" == "!" && -z "${seen[$key]:-}" ]] || continue
-            seen["$key"]=1
-            out+="${out:+, }${name}"
+            [[ "$st" == in && -z "${seen[$key]:-}" ]] || continue
+            case "$mark" in
+                "!") seen["$key"]=1; stop+="${stop:+, }${name}" ;;
+                "?") seen["$key"]=1; ask+="${ask:+, }${name}" ;;
+            esac
         done < <(affects_list "$i")
     done < <(_check_findings "$1")
-    printf '%s' "$out"
+    [[ -n "$stop" ]] && out="fix would stop ${stop}"
+    [[ -n "$ask" ]] && out+="${out:+; }fix asks what to keep for ${ask}"
+    [[ -n "$out" ]] && printf 'In use here: %s' "$out"
+    return 0
 }
 
 # _state_rank STATE — how bad a check state is (for an area's summary).

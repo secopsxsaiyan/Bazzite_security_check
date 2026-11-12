@@ -1106,6 +1106,18 @@ PY
         _affects_in_use 0 || echo "affects-change-not-unticked"
     )
 
+    # The real detection rules: Steam alone does not mean Remote Play is
+    # used, the default gaming answer does not mean a game server is
+    # hosted, and Sunshine's admin port is not a streaming port.
+    (
+        _have() { [[ "$1" == steam ]]; }; _flatpak_installed() { return 1; }
+        USE_GAMING=1; USE_STREAMING=0; USE_SSH=0; USE_SHARING=0; USE_DEV=0; DETECTED=(); _FEATURE_SEEN=()
+        [[ "$(feature_status remote_play)" == unknown$'\t'"Steam is installed" && "$(feature_status game_server)" == unknown$'\t' \
+           && "$(feature_status anticheat)" == in$'\t'"Steam is installed" ]] \
+            && USE_STREAMING=1 && [[ "$(feature_status remote_play)" == in$'\t'* ]] && echo "detect-honest-steam-and-servers"
+        [[ -z "$(_ports_affects "!" s 47990/tcp)" && "$(_ports_affects "!" s 47990/tcp 47989/tcp)" == "sunshine!|s" ]] && echo "sunshine-admin-port-not-streaming"
+    )
+
     # Kept on purpose: a kept finding becomes a note that does not lower the
     # score and offers no fix; counts in titles do not matter; the file is
     # root's and a symlink is refused; unticking counts it again.
@@ -1373,7 +1385,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
-         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added; do
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming; do
     expect "$W/t6.out" "$m" "$m"
 done
 

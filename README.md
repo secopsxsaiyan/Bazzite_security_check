@@ -94,13 +94,15 @@ Fixes that touch a Bazzite feature say so, in the fix list, the Apply dialog, ea
 
 | Feature | Checks that can touch it | How "in use" is detected |
 | --- | --- | --- |
-| Steam Remote Play and LAN game transfers | firewall zone, open and unused firewall ports | you chose game streaming (Steam being installed alone is shown as "may be in use") |
+| Steam Remote Play and LAN game transfers | firewall zone, open and unused firewall ports | you chose game streaming; Steam being installed alone is shown as "can't be told" |
 | Sunshine game streaming (Moonlight) | firewall, Sunshine autostart, admin page, UPnP | Sunshine is installed, or you chose game streaming |
 | KDE Connect | firewall zone, firewall ports | KDE Connect is installed |
 | SSH logins to this PC | SSH server and its settings, firewall | an account has `authorized_keys`, or you chose SSH |
-| File sharing (Samba, Syncthing, LocalSend) | firewall zone, firewall ports | the service is running or the app is installed |
-| Game servers you host | firewall ports, containers reachable from the network | cannot be told; you decide |
-| Docker / containers you run | docker group, Docker API, published container ports | Docker is installed or containers exist |
+| File sharing (Samba, Syncthing, LocalSend) | firewall zone, firewall ports | the service is running or LocalSend is installed, or you chose file sharing |
+| Finding printers and devices (mDNS) | firewall zone, port 5353 | avahi-daemon is running |
+| Game servers you host | firewall ports, containers reachable from the network | cannot be told; you decide (choosing gaming does not count) |
+| Docker | docker group, Docker API | the docker command or socket exists, or you chose development |
+| Containers you run | containers reachable from the network | Docker is installed or Podman/Distrobox containers exist, or you chose development |
 | Games with Easy Anti-Cheat | anti-cheat readiness | Steam is installed |
 | Hibernation and unsigned kernel modules | anti-cheat readiness (kernel lockdown) | hibernation is set up, or DKMS/akmods build modules |
 | Game performance | CPU vulnerability protections | Steam is installed, or you chose gaming |
