@@ -101,22 +101,24 @@ Kirigami.ApplicationWindow {
                     Repeater {
                         model: root.items
                         delegate: QQC2.RadioDelegate {
+                            id: radio
                             Layout.fillWidth: true
+                            leftPadding: radio.indicator.width + radio.spacing * 2
                             checked: root.picked === modelData.tag
                             onClicked: root.picked = modelData.tag
                             contentItem: ColumnLayout {
                                 spacing: 0
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    QQC2.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.weight: Font.DemiBold; text: modelData.label; leftPadding: Kirigami.Units.gridUnit * 1.5 }
+                                    QQC2.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.weight: Font.DemiBold; text: modelData.label }
                                     QQC2.Label {
                                         visible: !!modelData.risk
                                         text: modelData.risk ? modelData.risk + " risk" : ""
                                         color: root.riskColor(modelData.risk); font: Kirigami.Theme.smallFont
                                     }
                                 }
-                                QQC2.Label { Layout.fillWidth: true; visible: !!modelData.detail; wrapMode: Text.Wrap; textFormat: Text.PlainText; opacity: 0.8; text: modelData.detail || ""; leftPadding: Kirigami.Units.gridUnit * 1.5 }
-                                QQC2.Label { Layout.fillWidth: true; visible: !!modelData.warn; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: modelData.warn || ""; leftPadding: Kirigami.Units.gridUnit * 1.5
+                                QQC2.Label { Layout.fillWidth: true; visible: !!modelData.detail; wrapMode: Text.Wrap; textFormat: Text.PlainText; opacity: 0.8; text: modelData.detail || "" }
+                                QQC2.Label { Layout.fillWidth: true; visible: !!modelData.warn; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: modelData.warn || ""
                                              color: modelData.risk === "high" ? Kirigami.Theme.negativeTextColor : modelData.risk === "medium" ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.textColor }
                             }
                         }
@@ -154,7 +156,7 @@ Kirigami.ApplicationWindow {
                         required property int index
                         text: modelData.label
                         icon.name: modelData.icon || ""
-                        highlighted: index === root.buttons.length - 1
+                        highlighted: index === (root.d.primary !== undefined ? root.d.primary : root.buttons.length - 1)
                         font.bold: highlighted
                         onClicked: root.answer(index)
                     }

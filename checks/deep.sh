@@ -70,7 +70,7 @@ fix_strip_suid() {
     local e m p
     for e in "$@"; do
         IFS='|' read -r m p <<< "$e"
-        if [[ "${p##*/}" =~ ^(passwd|sudo|su|pkexec|mount|umount|newgrp|chsh|chfn|gpasswd|fusermount3?|unix_chkpwd|ping)$ ]]; then
+        if [[ "${p##*/}" =~ ^(passwd|sudo|su|pkexec|mount|umount|newgrp|chsh|chfn|gpasswd|fusermount3?|unix_chkpwd|ping|polkit-agent-helper-1|newuidmap|newgidmap|ssh-keysign)$ ]]; then
             list+=("$e" "$(ui_item "$p" "mode ${m}" high "A system tool that needs the bit (logins, sudo, mounting): taking it away breaks it for normal accounts.")" off)
         elif [[ "$p" =~ [Ss]team|vpn|VPN|sandbox|chrome|chromium|electron|bwrap ]]; then
             list+=("$e" "$(ui_item "$p" "mode ${m}" high "Looks like a sandbox, game or VPN helper that needs the bit: it will likely stop working.")" off)

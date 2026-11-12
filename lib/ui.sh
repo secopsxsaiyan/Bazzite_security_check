@@ -231,8 +231,9 @@ _tty_read() {
     printf '%s' "$__v"
 }
 
-# ui_msg TEXT — an information dialog.
 # _ui_dialog KIND TEXT DETAILS BUTTON... [-- TAG LABEL on|off ...] — the
+# (UI_DIALOG_PRIMARY: the number of the button to highlight, -1 for none;
+# default the last one.) The
 # Kirigami dialog (KIND info, warning, error or question; TEXT plain or
 # rich; buttons left to right, the primary one last; after "--", items to
 # pick one of). Prints the button's number, and the picked tag on a second
@@ -256,7 +257,7 @@ _ui_dialog() {
         title=$(_html2text "<html>${BASH_REMATCH[1]}")
         html="${html/"${BASH_REMATCH[0]}"/}"
     fi
-    out=$(ui_app dialog "$(python3 -I -c '
+    out=$(ui_app dialog "$(BSA_PRIMARY="${UI_DIALOG_PRIMARY:-}" python3 -I -c '
 import json, sys
 a = sys.argv[1:]
 kind, title, html, details, nb = a[0], a[1], a[2], a[3], int(a[4])
@@ -268,8 +269,11 @@ for i in range(0, len(rest) - 2, 3):
     items.append({"tag": rest[i], "label": p[0], "detail": p[1],
                   "risk": p[2] if p[2] in ("low", "medium", "high") else "", "warn": p[3], "on": rest[i + 2] == "on"})
 default = {"error": "Something went wrong", "warning": "Please check", "question": "Security Check"}.get(kind, "Security Check")
+import os
+p = os.environ.get("BSA_PRIMARY", "")
+primary = int(p) if p.lstrip("-").isdigit() else len(buttons) - 1
 print(json.dumps({"kind": kind, "title": title.strip() or default, "html": html, "details": details,
-                  "buttons": buttons, "items": items}))' "$kind" "$title" "$html" "$details" "${#btn[@]}" "${btn[@]}" "$@")")
+                  "buttons": buttons, "items": items, "primary": primary}))' "$kind" "$title" "$html" "$details" "${#btn[@]}" "${btn[@]}" "$@")")
     rc=$?
     [[ $rc -eq 0 ]] || return "$rc"
     # Only a button that was there, and only a tag that was offered.
@@ -294,6 +298,7 @@ if tags:
     print(t)' "$out" "${#btn[@]}" "${tags[@]}" || { log "dialog: front-end answer rejected"; return 3; }
 }
 
+# ui_msg TEXT — an information dialog.
 ui_msg() {
     # The Kirigami dialog when it can run (closing it is OK too).
     _ui_dialog info "$1" "" "OK" >/dev/null; [[ $? -le 1 ]] && return 0
@@ -337,7 +342,7 @@ ui_error() {
 ui_yesno() {
     local text="$1" yes="${2:-Yes}" no="${3:-No}" def="${4:-n}" kind="--yesno" a rc
     [[ "${5:-}" == "warn" ]] && kind="--warningyesno"
-    a=$(_ui_dialog "$([[ ${5:-} == warn ]] && echo warning || echo question)" "$text" "" "$no" "$yes")
+    a=$(UI_DIALOG_PRIMARY="$([[ $def == n && ${5:-} == warn ]] && echo 0 || echo 1)" _ui_dialog "$([[ ${5:-} == warn ]] && echo warning || echo question)" "$text" "" "$no" "$yes")
     case $? in
         0) [[ "$a" == 1 ]] && return 0; return 1 ;;
         1) return 1 ;;
@@ -366,7 +371,7 @@ ui_yesno() {
 ui_choice3() {
     local html="$1" text="$2" yes="$3" no="$4" cancel="$5" kind="--yesnocancel" def="${7:-n}" a rc
     [[ "${6:-}" == "warn" ]] && kind="--warningyesnocancel"
-    a=$(_ui_dialog "$([[ ${6:-} == warn ]] && echo warning || echo question)" "$html" "" "$cancel" "$no" "$yes")
+    a=$(UI_DIALOG_PRIMARY="$([[ $def == n && ${6:-} == warn ]] && echo 1 || echo 2)" _ui_dialog "$([[ ${6:-} == warn ]] && echo warning || echo question)" "$html" "" "$cancel" "$no" "$yes")
     case $? in
         0) case "$a" in 2) return 0 ;; 1) return 1 ;; *) return 2 ;; esac ;;
         1) return 2 ;;

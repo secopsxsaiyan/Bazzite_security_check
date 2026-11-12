@@ -398,10 +398,12 @@ _open_report() {
         ui_msg "The report is in ${REPORT_HTML}, which only root can read."
         return 0
     fi
-    # xdg-open hands the file to the browser and returns; say where the
-    # report is when nothing could open it.
-    if ! _as_desktop_user timeout 30 xdg-open "$REPORT_HTML" >/dev/null 2>&1; then
-        log "report: xdg-open failed for ${REPORT_HTML}"
+    # Open it in the background (xdg-open may run the browser itself); say
+    # where the report is when no program for web pages is set up.
+    if ! _have xdg-mime || [[ -n "$(_as_desktop_user xdg-mime query default text/html 2>/dev/null)" ]]; then
+        _as_desktop_user setsid -f xdg-open "$REPORT_HTML" >/dev/null 2>&1 || true
+    else
+        log "report: no handler for text/html"
         ui_msg "The report could not be opened in a browser. Open it yourself: ${REPORT_HTML}"
     fi
 }

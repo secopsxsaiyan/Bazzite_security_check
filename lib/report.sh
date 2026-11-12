@@ -213,7 +213,10 @@ _report_group() {
 # _report_todo I — the one thing to do about finding I.
 _report_todo() {
     local i="$1" first
-    if [[ -n "${F_FIX[$i]}" ]]; then
+    if [[ -n "${F_FIX[$i]}" && "$FIX_MODE" != "confirm" && -n "${F_MANUAL[$i]}" ]]; then
+        # Report-only run: no fix is offered in it.
+        printf 'By hand: %s (or run Security Check with fixes offered)' "$(_clip "${F_MANUAL[$i]%%$'\n'*}" 140)"
+    elif [[ -n "${F_FIX[$i]}" ]]; then
         printf 'Fix it in Security Check: dashboard → %s → %s (shown with its commands first; can be undone).' \
             "$(_check_area "${F_CHECK[$i]}")" "${CHECK_TITLE[${F_CHECK[$i]}]:-${F_CHECK[$i]}}"
     elif [[ -n "${F_MANUAL[$i]}" ]]; then

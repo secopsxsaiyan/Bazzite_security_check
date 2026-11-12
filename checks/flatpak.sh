@@ -329,8 +329,10 @@ fix_flatpak_restrict() {
         risk="${risk_of[$e]}"
         case "$risk" in
             low)
-                if [[ ",$flags," == *,host,* || ",$flags," == *,hostro,* ]]; then
+                if [[ ",$flags," == *,host,* ]]; then
                     w="Keeps your home folder; files elsewhere open through the file chooser."
+                elif [[ ",$flags," == *,hostro,* ]]; then
+                    w="Keeps reading your home folder; files elsewhere open through the file chooser."
                 elif [[ ",$flags," == *,hostos,* ]]; then
                     w="Loses only system folders (/usr, /etc); its access to your files does not change."
                 else
