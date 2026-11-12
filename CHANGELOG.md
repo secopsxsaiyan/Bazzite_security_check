@@ -6,6 +6,30 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-12
+
+### Changed
+
+- A check's page is a Kirigami window in the wizard's style: what the
+  check saw, and each finding as a card with the setting now and after the
+  fix, what it affects on Bazzite, its side effects and the manual steps
+  (long details fold out). Every finding that can be fixed has its own
+  tick box, with Select all.
+- Choosing what a fix changes (Flatpak apps, firewall ports and services,
+  containers, layered packages, SUID files, the fix list) is a Kirigami
+  window: each item has its own tick box, a risk (low, medium, high) and a
+  warning in its own words, with Select all, Select none and Low risk only.
+  A port that belongs to a feature this PC uses is high risk and starts
+  unticked; unticking a service the PC uses in the firewall list warns.
+- Confirming a fix is a Kirigami window too: now and after, what it
+  affects, side effects, the exact commands and whether it can be undone.
+- The kdialog and terminal versions show each item's risk and warning in
+  its line.
+- Dashboard: a cut-off "In use here" line shows in full as a tooltip; a
+  check with only medium problems reads orange, not red.
+- Kept list: names every feature of the kept entries, says when a problem
+  came back because a new port opened, and no longer shows an empty date.
+
 ## [1.3.0] - 2026-11-12
 
 ### Added
@@ -213,7 +237,8 @@ First release.
   a symlink in a user's folder. Changes to `sshd` and `sudoers` are
   validated and rolled back if they fail.
 
-[Unreleased]: https://github.com/secopsxsaiyan/Bazzite_security_check/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/secopsxsaiyan/Bazzite_security_check/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.4.0
 [1.3.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.3.0
 [1.2.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.2.0
 [1.1.0]: https://github.com/secopsxsaiyan/bazzite-sec-audit/releases/tag/v1.1.0

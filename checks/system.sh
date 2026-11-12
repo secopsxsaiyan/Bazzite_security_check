@@ -284,7 +284,13 @@ rpm-ostree override reset PACKAGE    (or --all), then reboot"
 fix_layered_remove() {
     local -a items=() pick=()
     local p
-    for p in "$@"; do items+=("$p" "$p" off); done
+    for p in "$@"; do
+        if [[ "$p" =~ (akmod|kmod|nvidia|mesa|gamescope|steam|sunshine|tailscale|virt|qemu|libvirt|docker|podman|firmware|driver) ]]; then
+            items+=("$p" "$(ui_item "$p" "layered on the system image" high "A driver or system component: removing it can break graphics, gaming, VMs or a service that needs it.")" off)
+        else
+            items+=("$p" "$(ui_item "$p" "layered on the system image" medium "Its programs are gone after the reboot; install them as a Flatpak, with Homebrew or in a Distrobox if you still need them.")" off)
+        fi
+    done
     mapfile -t pick < <(ui_checklist "Which layered packages do you want to remove?
 Leave a package unticked to keep it. Removal takes effect after a reboot." "${items[@]}") || return 1
     [[ ${#pick[@]} -gt 0 && -n "${pick[0]}" ]] || return 1

@@ -99,6 +99,31 @@ _warnings_html() {
     printf '</ul>'
 }
 
+# _warnings_json WARNING... — "tag|text" side effects as a JSON list.
+_warnings_json() {
+    local w out=""
+    for w in "$@"; do
+        [[ -n "$w" ]] && out+="${out:+,}{\"tag\":$(_json_str "$(_warn_tag "$w")"),\"text\":$(_json_str "$(_warn_text "$w")")}"
+    done
+    printf '[%s]' "$out"
+}
+
+# _confirm_answer JSON — the Kirigami confirm window's answer: prints 0
+# (apply), 1 (skip) or 2 (stop); status 1 for anything else.
+_confirm_answer() {
+    python3 -I -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+c = d.get("choice") if isinstance(d, dict) else None
+m = {"apply": 0, "skip": 1, "stop": 2}
+if c not in m:
+    sys.exit(1)
+print(m[c])' "$1"
+}
+
 # apply_change SCRIPT UNDO [NOTE] [REBOOT_REASON]
 # Show the finding under review - what the setting is now and what it will
 # be, its side effects, the commands SCRIPT runs and whether UNDO can
@@ -130,9 +155,24 @@ apply_change() {
     fi
     [[ -n "$note" ]] && html+="<p><i>$(_rich "$note")</i></p>"
 
-    ui_choice3 "$html" "" "Apply" "Skip" "Stop reviewing" \
-        "$([[ ${#warns[@]} -gt 0 ]] && echo warn)"
-    rc=$?
+    rc=255
+    # The Kirigami window when it can run: the same parts, in the theme.
+    if _qml_ok; then
+        local json out
+        json="{\"sev\":$(_json_str "$sev"),\"title\":$(_json_str "$title"),\"now\":$(_json_str "$now"),\"after\":$(_json_str "$after")"
+        json+=",\"detail\":$(_json_str "$detail"),\"affects\":$(affects_json "$i"),\"warnings\":$(_warnings_json "${warns[@]}")"
+        json+=",\"commands\":$(_json_str "$script"),\"undo\":$([[ -n $undo ]] && echo true || echo false),\"note\":$(_json_str "$(_ui_plain "<html>${note}")")}"
+        out=$(ui_app confirm "$json")
+        case $? in
+            0) rc=$(_confirm_answer "$out") || { log "confirm: front-end answer rejected"; rc=255; } ;;
+            1) rc=2 ;;
+        esac
+    fi
+    if [[ "$rc" == 255 ]]; then
+        ui_choice3 "$html" "" "Apply" "Skip" "Stop reviewing" \
+            "$([[ ${#warns[@]} -gt 0 ]] && echo warn)"
+        rc=$?
+    fi
     case "$rc" in
         0) ;;
         1) log "Skipped fix: ${title}"; return 1 ;;
@@ -233,6 +273,22 @@ _fix_row() {
     printf '%s' "$row"
 }
 
+# _fix_item I — finding I in the fix list (ui_item): its title, the
+# setting now → after, how risky the fix is and why - high when it stops
+# a feature this PC uses, medium with side effects (a reboot, a restart,
+# no undo), low otherwise.
+_fix_item() {
+    local i="$1" tags="" w risk=low warn="" stops
+    while IFS= read -r w; do
+        [[ -n "$w" ]] && tags+="${tags:+; }$(_warn_tag "$w"): $(_warn_text "$w")"
+    done < <(_fix_warnings "$i" "x" "")
+    [[ -n "$tags" ]] && { risk=medium; warn="$tags"; }
+    stops=$(affects_tags "$i")
+    if [[ -n "$stops" ]]; then risk=high; warn="Stops ${stops} (in use here).${warn:+ $warn}"; fi
+    ui_item "$(_sev_label "${F_SEV[$i]}") · ${F_TITLE[$i]//$'\n'/ }$(case "${F_STATE[$i]}" in skipped) echo " (skipped earlier)" ;; failed) echo " (failed earlier)" ;; esac)" \
+        "$([[ -n "${F_NOW[$i]}${F_AFTER[$i]}" ]] && printf '%s → %s' "${F_NOW[$i]:-?}" "${F_AFTER[$i]:-?}")" "$risk" "$warn"
+}
+
 # _choose_fixes — the fix list: print the findings the person ticks.
 _choose_fixes() {
     local -a cand=() items=()
@@ -245,7 +301,7 @@ _choose_fixes() {
         # A fix that changes a feature this PC uses is the person's call.
         if _affects_in_use "$i"; then on=off; n_use=$((n_use + 1)); fi
         [[ -n "$(_fix_warnings "$i" "x" "")" ]] && n_warn=$((n_warn + 1))
-        items+=("$i" "$(_fix_row "$i")" "$on")
+        items+=("$i" "$(_fix_item "$i")" "$on")
     done
     ui_checklist "<html><h3>Choose what to fix</h3><p>${#cand[@]} problem(s) can be fixed from here. The high and medium ones are ticked$([[ $n_use -gt 0 ]] && echo ", except ${n_use} that would stop a feature this PC uses (marked ★)"). Each line shows the setting now → after the fix.</p><p>Nothing runs yet: every ticked fix is shown again with its exact commands and side effects, and runs only when you press <b>Apply</b> there.$([[ $n_warn -gt 0 ]] && echo " <font color=\"${C_MEDIUM}\">⚠</font> marks ${n_warn} fix(es) with side effects (a reboot, a restarted service, no undo, ...).")</p></html>" \
         "${items[@]}"

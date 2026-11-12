@@ -290,12 +290,19 @@ Kirigami.ApplicationWindow {
                                                 wrapMode: Text.Wrap
                                                 maximumLineCount: 2
                                                 elide: Text.ElideRight
+                                                // The whole line when it is cut off.
+                                                QQC2.ToolTip.visible: truncated && affectsHover.hovered
+                                                QQC2.ToolTip.text: text
+                                                HoverHandler { id: affectsHover }
                                             }
                                         }
                                         QQC2.Label {
                                             text: modelData.summary
                                             textFormat: Text.PlainText
-                                            color: (modelData.state === "ok" || modelData.state === "na") ? Kirigami.Theme.textColor : root.stateColor(modelData.state)
+                                            // Medium only (no high) reads orange, like the header's dot.
+                                            color: (modelData.state === "ok" || modelData.state === "na") ? Kirigami.Theme.textColor
+                                                 : modelData.state === "bad" && modelData.summary.indexOf(" high") < 0 ? Kirigami.Theme.neutralTextColor
+                                                 : root.stateColor(modelData.state)
                                             opacity: (modelData.state === "ok" || modelData.state === "na") ? 0.7 : 1
                                             font.bold: modelData.state === "bad" || modelData.state === "warn"
                                             elide: Text.ElideRight

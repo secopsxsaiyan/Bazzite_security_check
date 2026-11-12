@@ -300,7 +300,7 @@ flatpak override --nofilesystem=host --filesystem=home --no-talk-name=org.freede
 # pre-selected with the low-risk ones, all of them, or none.
 fix_flatpak_restrict() {
     local -a list=() pick=() order=()
-    local e inst app flags risk why grade label preset nlow=0
+    local e inst app flags risk why grade label preset w nlow=0
     local -A risk_of=() why_of=()
     for e in "$@"; do
         IFS='|' read -r inst app flags <<< "$e"
@@ -314,7 +314,9 @@ fix_flatpak_restrict() {
         for e in "$@"; do [[ "${risk_of[$e]:-}" == "$grade" ]] && order+=("$e"); done
     done
     [[ ${#order[@]} -gt 0 ]] || return 1
-    preset=$(ui_radiolist "<html><p>${#order[@]} apps can be restricted. Each is graded by how likely the change breaks it:</p>
+    # The Kirigami chooser has Select all / none / low risk only itself.
+    preset=low
+    _qml_ok || preset=$(ui_radiolist "<html><p>${#order[@]} apps can be restricted. Each is graded by how likely the change breaks it:</p>
 <p><b>low</b> - keeps your home folder; files elsewhere open through the file chooser<br>
 <b>medium</b> - may lose folders or host commands it uses<br>
 <b>high</b> - its job needs the host; it will probably stop working</p>
@@ -325,14 +327,19 @@ fix_flatpak_restrict() {
     for e in "${order[@]}"; do
         IFS='|' read -r inst app flags <<< "$e"
         risk="${risk_of[$e]}"
-        label="[${risk}] ${app}$([[ $inst != system ]] && echo " (${inst})") - ${why_of[$e]} · removes: $(_flatpak_flag_short "$flags")"
+        case "$risk" in
+            low)    w="Keeps your home folder; files elsewhere open through the file chooser." ;;
+            medium) w="May lose folders or host commands it uses (${why_of[$e]}). Undo it or allow them again in Flatseal if it does." ;;
+            *)      w="Its job needs the host (${why_of[$e]}): it will probably stop working after this." ;;
+        esac
+        label=$(ui_item "${app}$([[ $inst != system ]] && echo " (${inst})")" "${why_of[$e]} · removes: $(_flatpak_flag_short "$flags")" "$risk" "$w")
         case "$preset" in
             all) list+=("$e" "$label" on) ;;
             none) list+=("$e" "$label" off) ;;
             *) list+=("$e" "$label" "$([[ $risk == low ]] && echo on || echo off)") ;;
         esac
     done
-    mapfile -t pick < <(ui_checklist "<html><p>Which apps should lose these permissions?</p>
+    mapfile -t pick < <(UI_CHOOSE_TITLE="Which apps should lose these permissions?" ui_checklist "<html><p>Which apps should lose these permissions?</p>
 <p><b>all files</b> becomes your home folder; <b>host commands</b> are removed.<br>
 Selected apps are restricted. Undo later, or change single apps in Flatseal.</p></html>" "${list[@]}") || return 1
     [[ ${#pick[@]} -gt 0 && -n "${pick[0]}" ]] || return 1

@@ -274,14 +274,92 @@ _finding_html() {
     printf '%s' "$h"
 }
 
-# show_check CHECK — a check's page: its result, the settings it saw and
-# each finding; offers the fixes that are still open.
-show_check() {
-    local id="$1" st html i
-    local -a fixable=() fidx=()
+# _check_fixable I — finding I's fix can be offered from its check's page.
+_check_fixable() {
+    [[ "$FIX_MODE" == "confirm" && -n "${F_FIX[$1]}" && "${F_STATE[$1]}" != "fixed" && "${F_VERIFY[$1]}" != "gone" ]] \
+        && declare -F "${F_FIX[$1]%% *}" >/dev/null
+}
+
+# _check_input CHECK — the Kirigami check page's input (JSON): the check,
+# what it saw and each finding with what its fix changes and affects.
+_check_input() {
+    local id="$1" st i n out="" notes="" fixable on
+    local -a warns=()
     st=$(_check_state "$id")
+    while IFS= read -r n; do
+        [[ -n "$n" ]] && notes+="${notes:+,}$(_json_str "$n")"
+    done <<< "${CHECK_NOTE[$id]:-}${CHECK_NA[$id]:+$'\n'Not applicable: ${CHECK_NA[$id]}}${CHECK_SKIPPED[$id]:+$'\n'Not checked: ${CHECK_SKIPPED[$id]}}"
+    while IFS= read -r i; do
+        [[ -n "$i" ]] || continue
+        fixable=false; on=false; warns=()
+        if _check_fixable "$i"; then
+            fixable=true
+            # As in the fix list: high and medium ticked, unless the fix
+            # would stop a feature this PC uses.
+            [[ "${F_SEV[$i]}" =~ ^(high|medium)$ ]] && ! _affects_in_use "$i" && on=true
+        fi
+        if _still_open "$i" && [[ -n "${F_FIX[$i]}" ]]; then
+            mapfile -t warns < <(_fix_warnings "$i" "x" "")
+            [[ -n "${warns[0]:-}" ]] || warns=()
+        fi
+        out+="${out:+,}{\"id\":\"$i\",\"sev\":$(_json_str "${F_SEV[$i]}"),\"title\":$(_json_str "${F_TITLE[$i]}")"
+        out+=",\"status\":$(_json_str "$(_finding_state_label "$i")"),\"now\":$(_json_str "${F_NOW[$i]}"),\"after\":$(_json_str "${F_AFTER[$i]}")"
+        out+=",\"after_label\":$(_json_str "$([[ -n ${F_FIX[$i]} ]] && echo "After the fix" || echo "Goal")"),\"detail\":$(_json_str "${F_DETAIL[$i]}")"
+        out+=",\"affects\":$(_still_open "$i" && affects_json "$i" || echo '[]'),\"warnings\":$(_warnings_json "${warns[@]}")"
+        out+=",\"manual\":$(_json_str "$(_still_open "$i" && printf '%s' "${F_MANUAL[$i]}")"),\"fixable\":${fixable},\"on\":${on}}"
+    done < <(_check_findings "$id")
+    printf '{"id":%s,"title":%s,"area":%s,"state":%s,"summary":%s,"notes":[%s],"findings":[%s]}\n' \
+        "$(_json_str "$id")" "$(_json_str "${CHECK_TITLE[$id]}")" "$(_json_str "$(_check_area "$id")")" "$(_json_str "$st")" \
+        "$(_json_str "$(_check_row "$id" | sed 's/^.*  —  //')")" "$notes" "$out"
+}
+
+# _check_answer JSON — the check page's answer: prints "back", or "fix"
+# then the chosen finding indexes, one per line (status 1 for anything
+# else). The caller keeps only indexes it offered.
+_check_answer() {
+    python3 -I -c '
+import json, re, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+a = d.get("action") if isinstance(d, dict) else None
+if a == "back":
+    print("back")
+elif a == "fix" and isinstance(d.get("ids"), list) and all(isinstance(x, str) and re.fullmatch(r"[0-9]{1,6}", x) for x in d["ids"]):
+    print("fix")
+    for x in d["ids"]:
+        print(x)
+else:
+    sys.exit(1)' "$1"
+}
+
+# show_check CHECK — a check's page: its result, the settings it saw and
+# each finding; the ones that can be fixed are ticked or not one by one.
+show_check() {
+    local id="$1" st html i out rc
+    local -a fixable=() fidx=() pick=() ans=()
     mapfile -t fidx < <(_check_findings "$id")
     [[ -n "${fidx[0]:-}" ]] || fidx=()
+    for i in "${fidx[@]}"; do _check_fixable "$i" && fixable+=("$i"); done
+    # The Kirigami page when it can run.
+    if _qml_ok; then
+        out=$(ui_app check "$(_check_input "$id")")
+        rc=$?
+        if [[ $rc -eq 0 ]] && mapfile -t ans < <(_check_answer "$out") && [[ -n "${ans[0]:-}" ]]; then
+            if [[ "${ans[0]}" == fix ]]; then
+                local -A offered=()
+                for i in "${fixable[@]}"; do offered["$i"]=1; done
+                for i in "${ans[@]:1}"; do [[ -n "${offered[$i]:-}" ]] && pick+=("$i"); done
+                [[ ${#pick[@]} -gt 0 ]] && run_fix_session "${pick[@]}"
+            fi
+            _ui_sync
+            return 0
+        fi
+        [[ $rc -eq 1 ]] && { _ui_sync; return 0; }
+        [[ $rc -eq 0 ]] && log "check page: front-end answer rejected"
+    fi
+    st=$(_check_state "$id")
     html="<html><h3><font color=\"$(_state_color "$st")\">$(_state_icon "$st")</font> $(_html "${CHECK_TITLE[$id]}")</h3>"
     html+="<p><i>$(_html "$(_check_area "$id")") · $(_html "$(_check_row "$id" | sed 's/^.*  —  //')")</i></p>"
     if [[ -n "${CHECK_NOTE[$id]:-}${CHECK_NA[$id]:-}${CHECK_SKIPPED[$id]:-}" ]]; then
@@ -294,14 +372,19 @@ show_check() {
     [[ ${#fidx[@]} -gt 0 ]] || html+="<p>Nothing to report.</p>"
     for i in "${fidx[@]}"; do
         html+="<hr>$(_finding_html "$i")"
-        if [[ "$FIX_MODE" == "confirm" && -n "${F_FIX[$i]}" && "${F_STATE[$i]}" != "fixed" && "${F_VERIFY[$i]}" != "gone" ]]; then
-            declare -F "${F_FIX[$i]%% *}" >/dev/null && fixable+=("$i")
-        fi
     done
     html+="</html>"
     if [[ ${#fixable[@]} -gt 0 ]]; then
         if ui_yesno "$html" "Fix…" "Back" "n"; then
-            run_fix_session "${fixable[@]}"
+            # Several fixes: pick them one by one (each with its own tick).
+            if [[ ${#fixable[@]} -gt 1 ]]; then
+                local -a items=()
+                for i in "${fixable[@]}"; do items+=("$i" "$(_fix_row "$i")" "$(_affects_in_use "$i" && echo off || echo on)"); done
+                mapfile -t pick < <(UI_CHOOSE_TITLE="Fix which problems of ${CHECK_TITLE[$id]}?" ui_checklist "Each one is shown again with its commands before it runs." "${items[@]}")
+                [[ -n "${pick[0]:-}" ]] && run_fix_session "${pick[@]}"
+            else
+                run_fix_session "${fixable[@]}"
+            fi
         fi
     else
         ui_page "$html"

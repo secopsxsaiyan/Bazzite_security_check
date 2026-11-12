@@ -359,11 +359,103 @@ ui_radiolist() {
     printf '%s\n' "$def"
 }
 
+# ui_item LABEL [DETAIL] [RISK] [WARNING] — the LABEL of a ui_checklist
+# item with more to say about it: a second line, how likely the change is
+# to break something (low, medium, high) and what could break. The Kirigami
+# chooser shows each part; kdialog and the terminal show them in one line.
+ui_item() {
+    local IFS=$'\x1f'
+    printf '%s' "${*//$'\n'/ }"
+}
+
+# _ui_item_part LABEL N — part N of an item label (0 label, 1 detail,
+# 2 risk, 3 warning).
+_ui_item_part() {
+    local -a p=()
+    IFS=$'\x1f' read -r -a p <<< "$1"
+    printf '%s' "${p[$2]:-}"
+}
+
+# _ui_item_line LABEL — an item label in one line (kdialog, terminal).
+_ui_item_line() {
+    local l d r w
+    l=$(_ui_item_part "$1" 0); d=$(_ui_item_part "$1" 1); r=$(_ui_item_part "$1" 2); w=$(_ui_item_part "$1" 3)
+    # In one line only a risk worth a look is named.
+    [[ "$r" == low ]] && r=""
+    printf '%s%s%s%s' "$l" "${d:+  —  $d}" "${r:+  [$r risk]}" "${w:+  ⚠ $w}"
+}
+
+# _choose_input TEXT TAG LABEL on|off ... — the Kirigami chooser's input
+# (JSON): a title, the text as plain text and each item's parts. Callers
+# may set UI_CHOOSE_TITLE, UI_CHOOSE_OK (the button), UI_CHOOSE_ALLOW_NONE=1
+# (continue with nothing ticked) and UI_CHOOSE_NOTE=0 (no "nothing changes
+# yet" line) for the call.
+_choose_input() {
+    local text="$1" title="${UI_CHOOSE_TITLE:-}"
+    shift
+    if [[ -z "$title" && "$text" =~ \<h3\>([^<]*)\</h3\> ]]; then
+        title="${BASH_REMATCH[1]}"
+        text="${text/<h3>${title}<\/h3>/}"
+        title=$(_html2text "<html>${title}")
+    fi
+    text=$(_ui_plain "$text")
+    if [[ -z "$title" ]]; then title="${text%%$'\n'*}"; text="${text#"$title"}"; fi
+    python3 -I -c '
+import json, sys
+a = sys.argv[1:]
+title, intro, ok, none, note = a[:5]
+items = []
+for i in range(5, len(a) - 2, 3):
+    p = (a[i + 1].split("\x1f") + ["", "", ""])[:4]
+    items.append({"tag": a[i], "label": p[0], "detail": p[1],
+                  "risk": p[2] if p[2] in ("low", "medium", "high") else "",
+                  "warn": p[3], "on": a[i + 2] == "on"})
+print(json.dumps({"title": title.strip(), "intro": intro.strip(), "ok": ok or "Continue",
+                  "allow_none": none == "1", "note_nothing_yet": note != "0", "items": items}))' \
+        "$title" "$text" "${UI_CHOOSE_OK:-}" "${UI_CHOOSE_ALLOW_NONE:-0}" "${UI_CHOOSE_NOTE:-1}" "$@"
+}
+
+# _choose_answer JSON — the tags in the chooser's answer, one per line
+# (status 1 when it is not a list of tags). The caller keeps only tags it
+# offered.
+_choose_answer() {
+    python3 -I -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+t = d.get("tags") if isinstance(d, dict) else None
+if not isinstance(t, list) or not all(isinstance(x, str) and "\n" not in x for x in t):
+    sys.exit(1)
+for x in t:
+    print(x)' "$1"
+}
+
 # ui_checklist TEXT TAG LABEL on|off ... — print the chosen TAGs, one per
-# line (status 1 if cancelled).
+# line (status 1 if cancelled). A LABEL made with ui_item adds a detail
+# line, a risk and a warning for that item.
 ui_checklist() {
     local text="$1" out rc i n a t geo=()
     shift
+    # The Kirigami chooser: each item with its risk and warning, Select
+    # all / none / low risk only.
+    if _qml_ok; then
+        out=$(ui_app choose "$(_choose_input "$text" "$@")")
+        rc=$?
+        case "$rc" in
+            0) if out=$(_choose_answer "$out"); then _ui_offered 3 "$out" "$@"; return 0; fi
+               log "choose: front-end answer rejected" ;;
+            1) return 1 ;;
+        esac
+    fi
+    # kdialog and the terminal show each item in one line.
+    local -a flat=()
+    while [[ $# -ge 3 ]]; do
+        flat+=("$1" "$(_ui_item_line "$2")" "$3")
+        shift 3
+    done
+    set -- "${flat[@]}"
     # Long lists (the fix list, the firewall services) get a bigger window.
     (( $# / 3 > 6 )) && geo=(--geometry 900x620)
     if [[ "$UI_MODE" == "kde" ]]; then
