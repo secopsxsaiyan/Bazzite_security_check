@@ -207,6 +207,7 @@ Kirigami.ApplicationWindow {
                     text: "Nothing changes yet: each fix is shown with its commands before it runs."
                     visible: root.d.note_nothing_yet !== false
                 }
+                Item { Layout.fillWidth: true; visible: root.d.note_nothing_yet === false }
                 QQC2.Button { text: "Cancel"; icon.name: "dialog-cancel"; onClicked: bridge.cancel() }
                 QQC2.Button {
                     text: (root.d.ok || "Continue") + " (" + root.count + ")"
