@@ -10,6 +10,10 @@
 #   app.py wizard    < {"facts": ..., "detected": ..., "answers": ...}
 #   app.py settings  < {"version": ..., "theme": ..., "repo": ...}
 #   app.py dashboard < {"score": ..., "areas": [...], "checks": [...], ...}
+#   app.py check     < {"title": ..., "notes": [...], "findings": [...]}
+#   app.py choose    < {"title": ..., "intro": ..., "items": [{tag, label, ...}]}
+#   app.py confirm   < {"title": ..., "now": ..., "commands": ..., ...}
+#   app.py dialog    < {"kind": ..., "title": ..., "html": ..., "buttons": [...]}
 #   app.py progress  < {"heading": ...}, then progress lines until EOF:
 #                      "PERCENT<TAB>SLOW<TAB>LABEL<TAB>DETAIL" (PERCENT "-"
 #                      for no steps, SLOW 1 for a long step); a window and a
@@ -22,6 +26,8 @@ import sys
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 SCHEMES = {"light": "BreezeLight", "dark": "BreezeDark"}
+QML = {"wizard": "Wizard.qml", "settings": "Settings.qml", "dashboard": "Dashboard.qml", "progress": "Progress.qml",
+       "check": "Check.qml", "choose": "Choose.qml", "confirm": "Confirm.qml", "dialog": "Dialog.qml"}
 
 
 def _scheme_path(theme):
@@ -116,8 +122,8 @@ def _theme_dir(theme):
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == "theme-dir" and sys.argv[2] in SCHEMES:
         return _theme_dir(sys.argv[2])
-    if len(sys.argv) != 2 or sys.argv[1] not in ("wizard", "settings", "dashboard", "progress"):
-        print("usage: app.py wizard|settings|dashboard|progress|theme-dir light|dark", file=sys.stderr)
+    if len(sys.argv) != 2 or sys.argv[1] not in QML:
+        print("usage: app.py %s|theme-dir light|dark" % "|".join(QML), file=sys.stderr)
         return 2
     mode = sys.argv[1]
     try:
@@ -179,7 +185,7 @@ def main():
     bridge = Bridge()
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("bridge", bridge)
-    qml = {"wizard": "Wizard.qml", "settings": "Settings.qml", "dashboard": "Dashboard.qml", "progress": "Progress.qml"}[mode]
+    qml = QML[mode]
     engine.load(QUrl.fromLocalFile(os.path.join(HERE, "qml", qml)))
     if not engine.rootObjects():
         return 3

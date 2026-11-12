@@ -504,9 +504,11 @@ fix_containers_localhost() {
         plan=$(_ctr_fixable "$engine" "$name" 2>/dev/null) || continue
         plans["$e"]="$plan"
         method="${plan%%"$_CTR_US"*}"
-        items+=("$e" "${name} (${engine}$([[ $engine == podman ]] && echo ", root")) - $([[ $method == compose ]] && echo "change its compose file and recreate it" || echo "run a new one; the old one is kept, stopped")" on)
+        items+=("$e" "$(ui_item "${name} (${engine}$([[ $engine == podman ]] && echo ", root"))" \
+            "$([[ $method == compose ]] && echo "its compose file is changed and it is created again" || echo "a new one is run; the old one is kept, stopped")" \
+            medium "Other devices can no longer reach its ports: a game or media server in it stops working for them. It restarts while it is recreated.")" on)
     done
-    [[ "$want_ip" == 1 ]] && items=("docker-default" "Make 127.0.0.1 the default for new Docker containers (restarts Docker)" on "${items[@]}")
+    [[ "$want_ip" == 1 ]] && items=("docker-default" "$(ui_item "Make 127.0.0.1 the default for new Docker containers" "daemon.json gets \"ip\": \"127.0.0.1\"" medium "Docker restarts: running containers without a restart policy stop.")" on "${items[@]}")
     [[ ${#items[@]} -gt 0 ]] || return 1
     mapfile -t pick < <(ui_checklist "Choose the containers to publish on this PC only.
 Each one is created again from the same image and settings, with

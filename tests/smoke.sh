@@ -409,7 +409,7 @@ expect "$W/run2.out" "✖  System image signature  —  1 high · fix available"
 expect "$W/run2.out" "Choose what to fix" "fix list shown"
 expect "$W/run2.out" "[x] 1. HIGH · System updates are installed without checking their signature" "high fix ticked in the list"
 expect "$W/run2.out" "→ same image and updates, signature checked" "fix list shows now → after"
-expect "$W/run2.out" "⚠ downloads, needs a reboot" "fix list shows side effects"
+expect "$W/run2.out" "[medium risk]  ⚠ Downloads: Downloads data while the fix runs; this can take several minutes. · Needs a reboot: " "fix list shows side effects and risk"
 expect "$W/run2.out" "Now  image pulled without a signature check (ostree-unverified-registry)" "fix dialog shows the current setting"
 expect "$W/run2.out" "Before you apply:" "fix dialog lists the side effects"
 expect "$W/run2.out" "Fixes: 1 applied · 2 skipped · 0 failed" "session summary"
@@ -1106,6 +1106,74 @@ PY
         _affects_in_use 0 || echo "affects-change-not-unticked"
     )
 
+    # Kirigami chooser, check page and confirm window: inputs are JSON with
+    # every part as text, and only offered answers are taken back.
+    (
+        it=$(ui_item "App <b>x</b>" "removes: host" high "will break")
+        [[ "$(_ui_item_part "$it" 0)" == "App <b>x</b>" && "$(_ui_item_part "$it" 2)" == high \
+           && "$(_ui_item_line "$it")" == "App <b>x</b>  —  removes: host  [high risk]  ⚠ will break" \
+           && "$(_ui_item_line "$(ui_item plain "" low "")")" == plain ]] && echo "ui-item-parts"
+        j=$(_choose_input "<html><h3>Pick &lt;apps&gt;</h3><p>Some &amp; text</p></html>" a "$it" on b "$(ui_item B "" bogus "")" off)
+        python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); i=d["items"]
+assert d["title"]=="Pick <apps>" and "Some & text" in d["intro"] and i[0]=={"tag":"a","label":"App <b>x</b>","detail":"removes: host","risk":"high","warn":"will break","on":True}
+assert i[1]["risk"]=="" and i[1]["on"] is False and d["allow_none"] is False' "$j" && echo "choose-input-json"
+        # Earlier tests stubbed ui_checklist; take the real one.
+        eval "$(sed -n '/^ui_checklist() {/,/^}/p' "$HERE/../lib/ui.sh")"
+        _qml_ok() { return 0; }
+        ui_app() { cat > "$W/app-in.json" <<< "$2"; printf '%s' "$APP_OUT"; return "${APP_RC:-0}"; }
+        APP_OUT='{"tags":["b","zzz","a"]}'
+        [[ "$(ui_checklist "t" a A on b B off | tr '\n' ' ')" == "b a " ]] \
+            && APP_OUT='{"tags":"a"}' && UI_MODE=none && [[ -z "$(ui_checklist "t" a A off b B off)" ]] \
+            && APP_RC=1 && ! ui_checklist "t" a A on && echo "choose-answer-offered-only"
+        APP_RC=0; UI_MODE=kde
+        [[ "$(_confirm_answer '{"choice":"apply"}')" == 0 && "$(_confirm_answer '{"choice":"stop"}')" == 2 ]] \
+            && ! _confirm_answer '{"choice":"rm"}' && ! _confirm_answer 'x' && echo "confirm-answer-checked"
+        [[ "$(_check_answer '{"action":"fix","ids":["3","5"]}' | tr '\n' ' ')" == "fix 3 5 " && "$(_check_answer '{"action":"back"}')" == back ]] \
+            && ! _check_answer '{"action":"fix","ids":["1;rm"]}' && ! _check_answer '{"action":"fix","ids":[3]}' && echo "check-answer-checked"
+        # The check page: findings as JSON; only offered fixes run.
+        F_SEV=(medium low); F_CHECK=(check_firewall check_firewall); F_TITLE=("Wide <zone>" "Other"); F_DETAIL=(d d); F_MANUAL=(m m)
+        F_FIX=(true ""); F_STATE=(open open); F_NOW=(now ""); F_AFTER=(after ""); F_WARN=("" ""); F_VERIFY=("" ""); F_AFFECT=("remote_play?|x" "")
+        CHECK_TITLE["check_firewall"]="Firewall"; CHECK_NOTE["check_firewall"]=$'seen 1\nseen 2'; FIX_MODE=confirm; _CF_READY=0
+        true() { :; }
+        python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); f=d["findings"]
+assert d["title"]=="Firewall" and d["notes"]==["seen 1","seen 2"] and [x["id"] for x in f]==["0","1"]
+assert f[0]["fixable"] is True and f[0]["on"] is True and f[0]["title"]=="Wide <zone>" and f[0]["affects"][0]["how"]=="you choose in the fix"
+assert f[1]["fixable"] is False' "$(_check_input check_firewall)" && echo "check-input-json"
+        # shellcheck disable=SC2120
+        run_fix_session() { printf '%s\n' "$@" > "$W/fixrun"; }
+        APP_OUT='{"action":"fix","ids":["1","0","9"]}'; : > "$W/fixrun"
+        show_check check_firewall
+        [[ "$(cat "$W/fixrun")" == 0 ]] && echo "check-page-fixes-offered-only"
+        # Closing a port of a feature in use is high risk and starts unticked.
+        feature_status() { [[ "$1" == remote_play ]] && printf 'in\tSteam is installed' || printf 'out'; }
+        [[ "$(_port_close_risk 27036/tcp)" == "high|"*"in use here: Steam is installed"*"|off" && "$(_port_close_risk 8000/tcp)" == low\|*\|on ]] \
+            && echo "port-close-risk"
+        # Where a tick keeps something (the firewall list) there is no "Low
+        # risk only"; the fix list rates a fix that may stop an undetectable
+        # feature medium, with a warning.
+        python3 -I -c 'import json,sys; assert json.loads(sys.argv[1])["low_only"] is False and json.loads(sys.argv[2])["low_only"] is True' \
+            "$(UI_CHOOSE_LOWONLY=0 _choose_input t a A on)" "$(_choose_input t a A on)" \
+            && grep -q 'UI_CHOOSE_LOWONLY=0 UI_CHOOSE_NOTE=0 ui_checklist "Choose what other devices' "$HERE/../checks/network.sh" && echo "firewall-list-no-low-only"
+        feature_status() { [[ "$1" == remote_play ]] && printf 'unknown\tSteam is installed' || printf 'out'; }
+        F_AFFECT[0]="remote_play!|x"; F_WARN[0]=""
+        [[ "$(_ui_item_part "$(_fix_item 0)" 2)" == medium && "$(_ui_item_part "$(_fix_item 0)" 3)" == "May stop Steam Remote Play"* ]] && echo "fix-item-maybe-medium"
+        # The Apply window: a bad answer falls back to the plain dialog;
+        # closing it skips the fix.
+        eval "$(sed -n '/^apply_change() {/,/^}/p' "$HERE/../lib/fixes.sh")"   # earlier tests stubbed it
+        ui_choice3() { echo choice3 > "$W/c3"; return 1; }
+        CURRENT_FINDING=0; : > "$W/c3"; APP_OUT='{"choice":"rm"}'; APP_RC=0
+        apply_change "true" "" >/dev/null 2>&1; r1=$?
+        APP_RC=1; : > "$W/c3-none"; apply_change "true" "" >/dev/null 2>&1; r2=$?
+        [[ $r1 -eq 1 && "$(cat "$W/c3")" == choice3 && $r2 -eq 1 ]] && echo "confirm-fallback-and-close-skips"
+        APP_RC=0
+        # The themed dialog: only a button that was there and a tag offered.
+        APP_OUT='{"button":1}'; ui_yesno "q" && APP_OUT='{"button":0}' && ! ui_yesno "q" \
+            && APP_OUT='{"button":7}' && UI_MODE=none && ! ui_yesno "q" && UI_MODE=kde \
+            && APP_OUT='{"button":1,"tag":"b"}' && [[ "$(ui_radiolist "t" a A on b B off)" == b ]] \
+            && APP_OUT='{"button":1,"tag":"zz"}' && UI_MODE=none && [[ "$(ui_radiolist "t" a A on b B off)" == a ]] && echo "dialog-answer-checked"
+        UI_MODE=kde
+    )
+
     # The real detection rules: Steam alone does not mean Remote Play is
     # used, the default gaming answer does not mean a game server is
     # hosted, and Sunshine's admin port is not a streaming port.
@@ -1145,6 +1213,11 @@ PY
         # open medium one 5 points: 100 * 15 / 20 = 75.
         [[ "$(_score found)" == 75 ]] && echo "kept-not-scored"
         [[ "$(_finding_state_label 0)" == "Kept on purpose"* && "$(kept_count)" == 1 ]] && kept_offered && echo "kept-labelled"
+        # A kept entry without a date says no "since".
+        printf 'check_sudo\tsudo works without a password\t\t\thigh\n' > "$KS/kept.nodate"
+        ( KEPT_FILE=""; STATE_DIR="$KS"; cp "$KS/kept.nodate" "$KS/kept"; kept_load
+          F_SEV=(medium); F_CHECK=(check_sudo); F_TITLE=("sudo works without a password"); F_DETAIL=(d); F_FIX=(x); F_STATE=(open); F_VERIFY=(""); F_AFFECT=(""); F_KEYX=("")
+          kept_apply; [[ "${F_STATE[0]}" == kept && "${F_DETAIL[0]}" == "Kept on purpose: this does not lower"* ]] ) && echo "kept-no-date-no-since"
         # The dialog: the kept one is ticked, the SSH one offered; keep both,
         # and the entry of a check that did not run stays.
         ui_checklist() { shift; while [[ $# -ge 3 ]]; do echo "$1"; shift 3; done; }
@@ -1432,7 +1505,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
-         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any; do
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked kept-no-date-no-since; do
     expect "$W/t6.out" "$m" "$m"
 done
 

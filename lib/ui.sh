@@ -231,8 +231,77 @@ _tty_read() {
     printf '%s' "$__v"
 }
 
+# _ui_dialog KIND TEXT DETAILS BUTTON... [-- TAG LABEL on|off ...] — the
+# (UI_DIALOG_PRIMARY: the number of the button to highlight, -1 for none;
+# default the last one.) The
+# Kirigami dialog (KIND info, warning, error or question; TEXT plain or
+# rich; buttons left to right, the primary one last; after "--", items to
+# pick one of). Prints the button's number, and the picked tag on a second
+# line. Status 0 answered, 1 closed, 3 or 4 it cannot run here.
+_ui_dialog() {
+    _qml_ok || return 4
+    local kind="$1" text="$2" details="$3" html title="" out rc
+    shift 3
+    local -a btn=()
+    while [[ $# -gt 0 && "$1" != -- ]]; do btn+=("$1"); shift; done
+    [[ "${1:-}" == -- ]] && shift
+    # Plain text: a short first line (a question) is the title.
+    if [[ "$text" != "<html>"* ]]; then
+        local first="${text%%$'\n'*}"
+        if (( ${#first} <= 90 )) && [[ "$text" == *$'\n'* || "$first" == *"?" ]]; then
+            title="$first"; text="${text#"$first"}"; text="${text#$'\n'}"
+        fi
+    fi
+    html=""; [[ -n "$text" ]] && html=$(_ui_html "$text")
+    if [[ "$html" =~ \<h3\>(([^<]|\<font[^>]*\>|\</font\>|\<b\>|\</b\>)*)\</h3\> ]]; then
+        title=$(_html2text "<html>${BASH_REMATCH[1]}")
+        html="${html/"${BASH_REMATCH[0]}"/}"
+    fi
+    out=$(ui_app dialog "$(BSA_PRIMARY="${UI_DIALOG_PRIMARY:-}" python3 -I -c '
+import json, sys
+a = sys.argv[1:]
+kind, title, html, details, nb = a[0], a[1], a[2], a[3], int(a[4])
+buttons = [{"label": b} for b in a[5:5 + nb]]
+rest = a[5 + nb:]
+items = []
+for i in range(0, len(rest) - 2, 3):
+    p = (rest[i + 1].split("\x1f") + ["", "", ""])[:4]
+    items.append({"tag": rest[i], "label": p[0], "detail": p[1],
+                  "risk": p[2] if p[2] in ("low", "medium", "high") else "", "warn": p[3], "on": rest[i + 2] == "on"})
+default = {"error": "Something went wrong", "warning": "Please check", "question": "Security Check"}.get(kind, "Security Check")
+import os
+p = os.environ.get("BSA_PRIMARY", "")
+primary = int(p) if p.lstrip("-").isdigit() else len(buttons) - 1
+print(json.dumps({"kind": kind, "title": title.strip() or default, "html": html, "details": details,
+                  "buttons": buttons, "items": items, "primary": primary}))' "$kind" "$title" "$html" "$details" "${#btn[@]}" "${btn[@]}" "$@")")
+    rc=$?
+    [[ $rc -eq 0 ]] || return "$rc"
+    # Only a button that was there, and only a tag that was offered.
+    local -a tags=()
+    local i
+    for (( i = 1; i <= $#; i += 3 )); do tags+=("${!i}"); done
+    python3 -I -c '
+import json, sys
+nb = int(sys.argv[2]); tags = sys.argv[3:]
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(3)
+b = d.get("button") if isinstance(d, dict) else None
+if not isinstance(b, int) or isinstance(b, bool) or not 0 <= b < nb:
+    sys.exit(3)
+print(b)
+if tags:
+    t = d.get("tag")
+    if t not in tags:
+        sys.exit(3)
+    print(t)' "$out" "${#btn[@]}" "${tags[@]}" || { log "dialog: front-end answer rejected"; return 3; }
+}
+
 # ui_msg TEXT — an information dialog.
 ui_msg() {
+    # The Kirigami dialog when it can run (closing it is OK too).
+    _ui_dialog info "$1" "" "OK" >/dev/null; [[ $? -le 1 ]] && return 0
     if [[ "$UI_MODE" == "kde" ]]; then
         _kd --msgbox "$(_ui_html "$1")" && return 0
         [[ $? -ne 255 ]] && return 0
@@ -254,6 +323,7 @@ ui_page() {
 
 # ui_error TEXT [DETAILS] — an error dialog.
 ui_error() {
+    _ui_dialog error "$1" "${2:-}" "OK" >/dev/null; [[ $? -le 1 ]] && return 0
     if [[ "$UI_MODE" == "kde" ]]; then
         if [[ -n "${2:-}" ]]; then
             _kd --detailederror "<html>$(_rich "$1")</html>" "$2" && return 0
@@ -272,6 +342,11 @@ ui_error() {
 ui_yesno() {
     local text="$1" yes="${2:-Yes}" no="${3:-No}" def="${4:-n}" kind="--yesno" a rc
     [[ "${5:-}" == "warn" ]] && kind="--warningyesno"
+    a=$(UI_DIALOG_PRIMARY="$([[ $def == n && ${5:-} == warn ]] && echo 0 || echo 1)" _ui_dialog "$([[ ${5:-} == warn ]] && echo warning || echo question)" "$text" "" "$no" "$yes")
+    case $? in
+        0) [[ "$a" == 1 ]] && return 0; return 1 ;;
+        1) return 1 ;;
+    esac
     if [[ "$UI_MODE" == "kde" ]]; then
         _kd --yes-label "$yes" --no-label "$no" \
             "$kind" "$(_ui_html "$text")"
@@ -296,6 +371,11 @@ ui_yesno() {
 ui_choice3() {
     local html="$1" text="$2" yes="$3" no="$4" cancel="$5" kind="--yesnocancel" def="${7:-n}" a rc
     [[ "${6:-}" == "warn" ]] && kind="--warningyesnocancel"
+    a=$(UI_DIALOG_PRIMARY="$([[ $def == n && ${6:-} == warn ]] && echo 1 || echo 2)" _ui_dialog "$([[ ${6:-} == warn ]] && echo warning || echo question)" "$html" "" "$cancel" "$no" "$yes")
+    case $? in
+        0) case "$a" in 2) return 0 ;; 1) return 1 ;; *) return 2 ;; esac ;;
+        1) return 2 ;;
+    esac
     if [[ "$UI_MODE" == "kde" ]]; then
         _kd --yes-label "$yes" --no-label "$no" --cancel-label "$cancel" \
             "$kind" "<html>${html#<html>}"
@@ -322,6 +402,14 @@ ui_choice3() {
 ui_radiolist() {
     local text="$1" out rc i n a def=""
     shift
+    out=$(_ui_dialog question "$text" "" "Cancel" "OK" -- "$@")
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        [[ "${out%%$'\n'*}" == 1 ]] || return 1
+        printf '%s\n' "${out#*$'\n'}"
+        return 0
+    fi
+    [[ $rc -eq 1 ]] && return 1
     if [[ "$UI_MODE" == "kde" ]]; then
         out=$(_kd --radiolist "$(_ui_html "$text")" "$@")
         rc=$?
@@ -359,11 +447,109 @@ ui_radiolist() {
     printf '%s\n' "$def"
 }
 
+# ui_item LABEL [DETAIL] [RISK] [WARNING] — the LABEL of a ui_checklist
+# item with more to say about it: a second line, how likely the change is
+# to break something (low, medium, high) and what could break. The Kirigami
+# chooser shows each part; kdialog and the terminal show them in one line.
+ui_item() {
+    local IFS=$'\x1f'
+    printf '%s' "${*//$'\n'/ }"
+}
+
+# _ui_item_part LABEL N — part N of an item label (0 label, 1 detail,
+# 2 risk, 3 warning).
+_ui_item_part() {
+    local -a p=()
+    IFS=$'\x1f' read -r -a p <<< "$1"
+    printf '%s' "${p[$2]:-}"
+}
+
+# _ui_item_line LABEL — an item label in one line (kdialog, terminal).
+_ui_item_line() {
+    local l d r w
+    l=$(_ui_item_part "$1" 0); d=$(_ui_item_part "$1" 1); r=$(_ui_item_part "$1" 2); w=$(_ui_item_part "$1" 3)
+    # In one line only a risk worth a look is named.
+    [[ "$r" == low ]] && r=""
+    printf '%s%s%s%s' "$l" "${d:+  —  $d}" "${r:+  [$r risk]}" "${w:+  ⚠ $w}"
+}
+
+# _choose_input TEXT TAG LABEL on|off ... — the Kirigami chooser's input
+# (JSON): a title, the text as plain text and each item's parts. Callers
+# may set UI_CHOOSE_TITLE, UI_CHOOSE_OK (the button), UI_CHOOSE_ALLOW_NONE=1
+# (continue with nothing ticked), UI_CHOOSE_NOTE=0 (no "nothing changes
+# yet" line) and UI_CHOOSE_LOWONLY=0 (no "Low risk only": for lists where a
+# tick keeps something, like the firewall's) for the call.
+_choose_input() {
+    local text="$1" title="${UI_CHOOSE_TITLE:-}"
+    shift
+    if [[ -z "$title" && "$text" =~ \<(h[23])\>([^<]*)\</h[23]\> ]]; then
+        title="${BASH_REMATCH[2]}"
+        text="${text/"${BASH_REMATCH[0]}"/}"
+        title=$(_html2text "<html>${title}")
+    fi
+    text=$(_ui_plain "$text")
+    if [[ -z "$title" ]]; then title="${text%%$'\n'*}"; text="${text#"$title"}"; fi
+    python3 -I -c '
+import json, re, sys
+a = sys.argv[1:]
+title, intro, ok, none, note, low = a[:6]
+# The text as paragraphs that wrap in the window, without the title again.
+intro = intro.strip()
+if title.strip() and intro.startswith(title.strip()):
+    intro = intro[len(title.strip()):].strip()
+intro = "\n\n".join(" ".join(p.split()) for p in re.split(r"\n\s*\n", intro) if p.strip())
+items = []
+for i in range(6, len(a) - 2, 3):
+    p = (a[i + 1].split("\x1f") + ["", "", ""])[:4]
+    items.append({"tag": a[i], "label": p[0], "detail": p[1],
+                  "risk": p[2] if p[2] in ("low", "medium", "high") else "",
+                  "warn": p[3], "on": a[i + 2] == "on"})
+print(json.dumps({"title": title.strip(), "intro": intro.strip(), "ok": ok or "Continue",
+                  "allow_none": none == "1", "note_nothing_yet": note != "0", "low_only": low != "0", "items": items}))' \
+        "$title" "$text" "${UI_CHOOSE_OK:-}" "${UI_CHOOSE_ALLOW_NONE:-0}" "${UI_CHOOSE_NOTE:-1}" "${UI_CHOOSE_LOWONLY:-1}" "$@"
+}
+
+# _choose_answer JSON — the tags in the chooser's answer, one per line
+# (status 1 when it is not a list of tags). The caller keeps only tags it
+# offered.
+_choose_answer() {
+    python3 -I -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+t = d.get("tags") if isinstance(d, dict) else None
+if not isinstance(t, list) or not all(isinstance(x, str) and "\n" not in x for x in t):
+    sys.exit(1)
+for x in t:
+    print(x)' "$1"
+}
+
 # ui_checklist TEXT TAG LABEL on|off ... — print the chosen TAGs, one per
-# line (status 1 if cancelled).
+# line (status 1 if cancelled). A LABEL made with ui_item adds a detail
+# line, a risk and a warning for that item.
 ui_checklist() {
     local text="$1" out rc i n a t geo=()
     shift
+    # The Kirigami chooser: each item with its risk and warning, Select
+    # all / none / low risk only.
+    if _qml_ok; then
+        out=$(ui_app choose "$(_choose_input "$text" "$@")")
+        rc=$?
+        case "$rc" in
+            0) if out=$(_choose_answer "$out"); then _ui_offered 3 "$out" "$@"; return 0; fi
+               log "choose: front-end answer rejected" ;;
+            1) return 1 ;;
+        esac
+    fi
+    # kdialog and the terminal show each item in one line.
+    local -a flat=()
+    while [[ $# -ge 3 ]]; do
+        flat+=("$1" "$(_ui_item_line "$2")" "$3")
+        shift 3
+    done
+    set -- "${flat[@]}"
     # Long lists (the fix list, the firewall services) get a bigger window.
     (( $# / 3 > 6 )) && geo=(--geometry 900x620)
     if [[ "$UI_MODE" == "kde" ]]; then

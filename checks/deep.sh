@@ -70,7 +70,13 @@ fix_strip_suid() {
     local e m p
     for e in "$@"; do
         IFS='|' read -r m p <<< "$e"
-        list+=("$e" "${p} (mode ${m})" off)
+        if [[ "${p##*/}" =~ ^(passwd|sudo|su|pkexec|mount|umount|newgrp|chsh|chfn|gpasswd|fusermount3?|unix_chkpwd|ping|polkit-agent-helper-1|newuidmap|newgidmap|ssh-keysign)$ ]]; then
+            list+=("$e" "$(ui_item "$p" "mode ${m}" high "A system tool that needs the bit (logins, sudo, mounting): taking it away breaks it for normal accounts.")" off)
+        elif [[ "$p" =~ [Ss]team|vpn|VPN|sandbox|chrome|chromium|electron|bwrap ]]; then
+            list+=("$e" "$(ui_item "$p" "mode ${m}" high "Looks like a sandbox, game or VPN helper that needs the bit: it will likely stop working.")" off)
+        else
+            list+=("$e" "$(ui_item "$p" "mode ${m}" medium "A program that needs the bit stops working until you undo this.")" off)
+        fi
     done
     mapfile -t pick < <(ui_checklist "Remove the SUID/SGID bit from which files?" "${list[@]}") || return 1
     [[ ${#pick[@]} -gt 0 && -n "${pick[0]}" ]] || return 1

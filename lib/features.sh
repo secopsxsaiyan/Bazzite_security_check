@@ -263,6 +263,19 @@ affects_html() {
         "$([[ -n $rest ]] && printf '<li><i>Also touches, not set up on this PC: %s</i></li>' "$rest")"
 }
 
+# affects_json I — finding I's affected features as a JSON list for the
+# Kirigami windows: name, how the fix touches it, where (in use here ...),
+# status, mark, whether the fix stops it, and the sentence.
+affects_json() {
+    local key name st why mark sent out=""
+    while IFS=$'\t' read -r key name st why mark sent; do
+        [[ -n "$key" ]] || continue
+        out+="${out:+,}{\"name\":$(_json_str "$name"),\"how\":$(_json_str "$(_mark_text "$mark")"),\"where\":$(_json_str "$(_affect_status_text "$st" "$why")")"
+        out+=",\"status\":$(_json_str "$st"),\"mark\":$(_json_str "$mark"),\"stops\":$([[ $mark == "!" ]] && echo true || echo false),\"sentence\":$(_json_str "$sent")}"
+    done < <(affects_list "$1")
+    printf '[%s]' "$out"
+}
+
 # affects_text I — the same as plain lines "NAME (status): sentence".
 affects_text() {
     local key name st why mark s
@@ -331,12 +344,6 @@ _kept_key() {
     printf '%s' "$k"
 }
 
-# _kept_entry I — "DATE<TAB>FEATURES<TAB>SEVERITY" when finding I is kept.
-_kept_entry() {
-    local k
-    k=$(_kept_match "$1") || return 1
-    printf '%s' "${KEPT[$k]}"
-}
 
 # _orig_sev I — finding I's own severity (before keeping made it a note).
 _orig_sev() { printf '%s' "${F_KEPT_SEV[$1]:-${F_SEV[$1]}}"; }
@@ -386,7 +393,8 @@ _kept_view() {
         # fewer ports.
         [[ "$kind" == cover ]] || continue
         [[ -n "$ed" && ( -z "$date" || "$ed" < "$date" ) ]] && date="$ed"
-        [[ -z "$feats" ]] && feats="$ef"
+        # Every feature named by a covering entry, each once.
+        [[ -n "$ef" && ", ${feats}, " != *", ${ef}, "* ]] && feats+="${feats:+, }${ef}"
         [[ -n "$ev" ]] || ev=high
         [[ -z "$sev" ]] || (( $(_sev_rank "$ev") < $(_sev_rank "$sev") )) && sev="$ev"
     done < <(_kept_related "$1")
@@ -434,7 +442,8 @@ kept_apply() {
         F_SEV[i]="info"
         F_FIX[i]=""
         F_STATE[i]="kept"
-        F_DETAIL[i]="Kept on purpose since ${d}${f:+ (for ${f})}: this does not lower the score. Change it under \"Kept on purpose\" on the dashboard."$'\n'"${F_DETAIL[$i]}"
+        d="${d#-}"
+        F_DETAIL[i]="Kept on purpose${d:+ since ${d}}${f:+ (for ${f})}: this does not lower the score. Change it under \"Kept on purpose\" on the dashboard."$'\n'"${F_DETAIL[$i]}"
     done
     _kept_recount
 }
@@ -511,7 +520,11 @@ manage_kept() {
         # Kept before at a milder level: say why it is unticked now.
         if [[ "$on" == off && "${F_STATE[$i]}" == open ]]; then
             was=$(_kept_view "$i"); was="${was%%$'\t'*}"
-            [[ "$was" != - ]] && row+="  (kept before at $(_sev_label "$was"), worse now - tick to keep it again)"
+            if [[ "$was" != - ]]; then
+                row+="  (kept before at $(_sev_label "$was"), worse now - tick to keep it again)"
+            elif [[ -n "$(_kept_related "$i")" ]]; then
+                row+="  (kept before for fewer ports - a new port opened; tick to keep it again)"
+            fi
         fi
         items+=("$i" "$row" "$on")
         offered+=("$i")
@@ -521,7 +534,7 @@ manage_kept() {
         return 0
     fi
     local out
-    out=$(ui_checklist "<html><h3>Kept on purpose</h3><p>Tick the problems you accept because you use the feature they are there for (Steam Remote Play, Sunshine, SSH, ...). A kept problem is listed as kept, does not lower the score and is not offered as a fix - in this run's dashboard and report right away, and in later checks.</p><p>Untick one to count it again from the next check.</p></html>" "${items[@]}") || return 0
+    out=$(UI_CHOOSE_OK="Save" UI_CHOOSE_ALLOW_NONE=1 UI_CHOOSE_NOTE=0 ui_checklist "<html><h3>Kept on purpose</h3><p>Tick the problems you accept because you use the feature they are there for (Steam Remote Play, Sunshine, SSH, ...). A kept problem is listed as kept, does not lower the score and is not offered as a fix - in this run's dashboard and report right away, and in later checks.</p><p>Untick one to count it again from the next check.</p></html>" "${items[@]}") || return 0
     mapfile -t picked <<< "$out"
     local -A want=()
     local -A is_offered=()

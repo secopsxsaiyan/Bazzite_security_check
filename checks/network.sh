@@ -359,8 +359,24 @@ fix_firewall_zone() {
         done
     done < <(_listeners | awk -F'\t' '{print $1 "\t" $3 "\t" $4}')
 
+    # Each item says what unticking it stops when this PC uses it.
+    local fkey fst fwhy a2
+    for (( i = 0; i < ${#items[@]}; i += 3 )); do
+        case "${items[$i]}" in
+            steam) fkey=remote_play ;; kdeconnect|sunshine|ssh) fkey="${items[$i]}" ;;
+            samba|syncthing|localsend) fkey=sharing ;; mdns) fkey=discovery ;;
+            port:*) a2=$(_ports_affects "" x "${items[$i]#port:}"); fkey=$(_affect_key "${a2:-}") ;;
+            *) fkey="" ;;
+        esac
+        [[ -n "$fkey" ]] || continue
+        fst=$(feature_status "$fkey"); fwhy=""; [[ "$fst" == *$'\t'* ]] && fwhy="${fst#*$'\t'}"
+        case "${fst%%$'\t'*}" in
+            in) items[i + 1]=$(ui_item "${items[$((i + 1))]}" "" high "Untick it and other devices can no longer use ${FEATURE_NAME[$fkey]} (in use here: ${fwhy})."); items[i + 2]=on ;;
+            unknown) items[i + 1]=$(ui_item "${items[$((i + 1))]}" "" medium "Untick it only if you do not use ${FEATURE_NAME[$fkey]}${fwhy:+ (${fwhy})}.") ;;
+        esac
+    done
     local chosen
-    chosen=$(ui_checklist "Choose what other devices on your network may reach on this PC.
+    chosen=$(UI_CHOOSE_TITLE="What may other devices reach on this PC?" UI_CHOOSE_ALLOW_NONE=1 UI_CHOOSE_LOWONLY=0 UI_CHOOSE_NOTE=0 ui_checklist "Choose what other devices on your network may reach on this PC.
 Everything not ticked is blocked for incoming connections (this PC can still
 connect out to anything, and games and browsing are not affected).
 Pre-selected from what is installed and how you said you use the PC." "${items[@]}") || return 1
@@ -798,17 +814,48 @@ then: sudo systemctl restart systemd-resolved" \
     return 0
 }
 
+# _port_typical PORT/PROTO — what a port is usually used for ("" if unknown).
+_port_typical() {
+    local n="${1%%/*}"
+    case "$n" in
+        3000|3001|4200|5000|5173|8000|8001|8080|8081|8888|9000) echo "usually a development web server" ;;
+        5432|5433) echo "usually PostgreSQL" ;; 3306) echo "usually MySQL / MariaDB" ;; 6379) echo "usually Redis" ;;
+        27017) echo "usually MongoDB" ;; 11434) echo "usually Ollama" ;; 25565) echo "usually a Minecraft server" ;;
+        19132) echo "usually Minecraft Bedrock" ;; 7777) echo "usually a game server (Terraria, ARK, ...)" ;;
+        2456|2457) echo "usually a Valheim server" ;; 27015|27016) echo "usually a Steam game server" ;;
+        8096) echo "usually Jellyfin" ;; 32400) echo "usually Plex" ;; 22) echo "SSH" ;;
+    esac
+}
+
+# _port_close_risk PORT/PROTO — "RISK|WARNING|on|off" for closing a port:
+# high (and unticked) when it belongs to a feature this PC uses, medium when
+# that cannot be told, low otherwise.
+_port_close_risk() {
+    local a key st why
+    a=$(_ports_affects "!" "x" "$1")
+    if [[ -n "$a" ]]; then
+        key=$(_affect_key "$a"); st=$(feature_status "$key"); why=""
+        [[ "$st" == *$'\t'* ]] && why="${st#*$'\t'}"
+        case "${st%%$'\t'*}" in
+            in)      echo "high|Closing it stops ${FEATURE_NAME[$key]} from other devices (in use here: ${why}).|off"; return 0 ;;
+            unknown) echo "medium|It belongs to ${FEATURE_NAME[$key]}${why:+ (${why})}; other devices lose it if you use that.|off"; return 0 ;;
+        esac
+    fi
+    echo "low|A program you start on this port later is only reachable from this PC until you open it again.|on"
+}
+
 # fix_close_ports "ZONE|PORT/PROTO|WHAT"... — remove ports a firewall zone
 # opens by itself, now and permanently (the person unticks any to keep).
 # No reload: that would also drop other runtime-only changes.
 fix_close_ports() {
     local -a items=() pick=()
-    local a z e what
+    local a z e what risk warn on
     local -A by_tag=()
     for a in "$@"; do
         IFS='|' read -r z e what <<< "$a"
         [[ "$z" =~ ^[A-Za-z0-9_-]+$ ]] && _fw_port_entry "$e" || continue
-        items+=("${z}|${e}" "${e} in zone '${z}' (${what})" on)
+        IFS='|' read -r risk warn on <<< "$(_port_close_risk "$e")"
+        items+=("${z}|${e}" "$(ui_item "${e}" "zone '${z}' - ${what}$(t=$(_port_typical "$e"); [[ -n $t ]] && printf ' · %s' "$t")" "$risk" "$warn")" "$on")
         by_tag["${z}|${e}"]="$z"
     done
     [[ ${#items[@]} -gt 0 ]] || return 1

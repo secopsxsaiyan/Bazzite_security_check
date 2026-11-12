@@ -240,7 +240,7 @@ _hint() {
 # _wiz_usecases — page 1: how the PC is used, pre-selected from what is installed.
 _wiz_usecases() {
     local sel t
-    sel=$(ui_checklist "$(_wiz_page 1 "How do you use this PC?" "Selected from what is installed. Click a row to change it." \
+    sel=$(UI_CHOOSE_NOTE=0 UI_CHOOSE_LOWONLY=0 UI_CHOOSE_ALLOW_NONE=1 UI_CHOOSE_OK="Next" UI_CHOOSE_TITLE="How do you use this PC?" ui_checklist "$(_wiz_page 1 "How do you use this PC?" "Selected from what is installed. Click a row to change it." \
 "<p>The check adapts to your answers: a service you use is reviewed, one you don't use is offered to be turned off, and a PC that leaves the house gets stricter ratings.</p>")" \
         gaming    "Gaming — Steam, Lutris, Heroic$(_hint gaming)"                              "$(_onoff "$USE_GAMING")" \
         streaming "Streaming games to other devices — Sunshine, Steam Remote Play$(_hint streaming)" "$(_onoff "$USE_STREAMING")" \
@@ -261,7 +261,7 @@ _wiz_usecases() {
 # _wiz_options — page 2: fixes and depth.
 _wiz_options() {
     local sel t
-    sel=$(ui_checklist "$(_wiz_page 2 "Options" "Both can be changed next time." \
+    sel=$(UI_CHOOSE_NOTE=0 UI_CHOOSE_LOWONLY=0 UI_CHOOSE_ALLOW_NONE=1 UI_CHOOSE_OK="Next" UI_CHOOSE_TITLE="Options" ui_checklist "$(_wiz_page 2 "Options" "Both can be changed next time." \
 "<p><b>Offer fixes:</b> after the check you pick fixes from a list; each one is shown and confirmed before it runs. Deselect it for a report only.</p><p><b>Deep check:</b> also SUID files, autostart entries, /etc changes and a ClamAV scan of Downloads.</p>")" \
         fix  "Offer fixes (recommended)" \
              "$([[ $FIX_MODE == confirm ]] && echo on || echo off)" \

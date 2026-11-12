@@ -408,6 +408,14 @@ _user_env() {
         [[ -n "$x11" ]] && _UENV+=(DISPLAY="$x11")
         [[ -n "$xa" ]] && _UENV+=(XAUTHORITY="$xa")
         if [[ -n "$wl" ]]; then _UENV+=(XDG_SESSION_TYPE=wayland); else _UENV+=(XDG_SESSION_TYPE=x11); fi
+        # The desktop, and where Flatpak apps are: without them xdg-open
+        # finds no browser (the report did not open) and kdialog no theme.
+        case "${DESKTOP_ENV:-}" in
+            kde)   _UENV+=(XDG_CURRENT_DESKTOP=KDE KDE_FULL_SESSION=true KDE_SESSION_VERSION=6) ;;
+            gnome) _UENV+=(XDG_CURRENT_DESKTOP=GNOME) ;;
+        esac
+        _UENV+=(XDG_DATA_DIRS="${home}/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share")
+        _UENV[0]+=":/var/lib/flatpak/exports/bin"
     fi
 }
 

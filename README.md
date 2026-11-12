@@ -118,7 +118,7 @@ Fixes that touch a Bazzite feature say so, in the fix list, the Apply dialog, ea
 Each [release](https://github.com/secopsxsaiyan/Bazzite_security_check/releases) has the source archive, `SHA256SUMS` and an SSH signature of the checksums. To verify one by hand, with [`release-signers`](release-signers) from this repository:
 
 ```bash
-v=1.3.0
+v=1.4.0
 ssh-keygen -Y verify -f release-signers -I release@bazzite-sec-audit \
   -n bazzite-sec-audit-release -s SHA256SUMS.sig < SHA256SUMS
 sha256sum -c SHA256SUMS
