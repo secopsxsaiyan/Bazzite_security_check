@@ -133,9 +133,13 @@ otherwise warn you." \
                     if [[ "$line" == *NOPASSWD:* ]]; then
                         finding_change "${rel}:${no}: ${line}" "${rel}:${no}: ${line//NOPASSWD:/PASSWD:}" \
                             "asks for the password|Scripts and tools that run sudo without a password will start asking for it."
+                        finding_affects \
+                            "dev_tools|Scripts and tools that run sudo start asking for your password."
                     else
                         finding_change "${rel}:${no}: ${line}" "line ${no} commented out (sudo asks for the password)" \
                             "asks for the password|Scripts and tools that run sudo without a password will start asking for it."
+                        finding_affects \
+                            "dev_tools|Scripts and tools that run sudo start asking for your password."
                     fi
                 fi
             elif [[ "$line" == *NOPASSWD:* ]]; then

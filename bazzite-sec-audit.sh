@@ -13,7 +13,7 @@
 # Start it as your normal user (it asks for administrator rights itself):
 #   ./bazzite-sec-audit.sh
 # =============================================================================
-readonly SCRIPT_VERSION="1.2.0"
+readonly SCRIPT_VERSION="1.3.0"
 
 SCRIPT_PATH=$(readlink -f "${BASH_SOURCE[0]}")
 SCRIPT_DIR=$(dirname "$SCRIPT_PATH")
@@ -38,6 +38,8 @@ HAD_PREVIOUS_RUN=0
 source "${SCRIPT_DIR}/lib/common.sh"
 # shellcheck source=lib/ui.sh
 source "${SCRIPT_DIR}/lib/ui.sh"
+# shellcheck source=lib/features.sh
+source "${SCRIPT_DIR}/lib/features.sh"
 # shellcheck source=lib/wizard.sh
 source "${SCRIPT_DIR}/lib/wizard.sh"
 # shellcheck source=lib/runner.sh
@@ -397,6 +399,8 @@ Many checks will not apply. Continue anyway?" "Continue" "Quit" "n"; then
     FINDINGS_FILE="$STATE_DIR/history/findings-${RUN_ID}.jsonl"
     : > "$FINDINGS_FILE"
     run_all_checks
+    kept_load
+    kept_apply
     compute_score
     compute_delta
     write_reports

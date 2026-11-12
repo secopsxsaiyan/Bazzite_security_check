@@ -338,6 +338,8 @@ or accept the trade-off. To leave the group: sudo gpasswd -d ${u} docker" \
             finding_change "${u} is in the docker group" "${u} removed from the docker group" \
                 "next login|Takes effect at ${u}'s next login." \
                 "docker needs sudo|docker commands then need sudo (or switch to rootless Podman)."
+            finding_affects \
+                "docker|docker commands need sudo after the next login (or switch to rootless Podman)."
         done
     fi
 
@@ -353,6 +355,8 @@ certificates, anyone who can reach that port controls this PC as root." \
 the docker.service override) and restart Docker; use 'docker context' over SSH
 for remote access instead."
         finding_change "dockerd listens on TCP port ${api}" "Docker API on the local socket only (manual)"
+        finding_affects \
+            "docker!|Remote Docker contexts and tools that reach Docker over TCP stop working."
     fi
 
     # Containers that publish ports on every interface: Docker and rootful
@@ -406,6 +410,9 @@ often run with default passwords." \
 or close the port in the firewall (see the firewall finding)."
         finding_change "${#rootless[@]} rootless container(s) reachable through the firewall" \
             "published on 127.0.0.1 only, or blocked by the firewall (manual)"
+        finding_affects \
+            "containers!|Other devices can no longer reach these containers. A game server or media server in one stops working for other players and devices." \
+            "game_server!|A game server running in one of these containers can no longer be joined from other PCs."
     fi
     if [[ ${#pub[@]} -gt 0 ]]; then
         local daemon_ip="" want_ip=0
@@ -439,6 +446,9 @@ Make that the default for new Docker containers: set \"ip\": \"127.0.0.1\" in /e
         local now="${#pub[@]} container(s) published on all interfaces"
         [[ $want_ip -eq 1 ]] && now+="; daemon.json ip: ${daemon_ip:-not set (all interfaces)}"
         finding_change "$now" "$after" "${warns[@]}"
+        finding_affects \
+            "containers!|Other devices can no longer reach these containers. A game server or media server in one stops working for other players and devices." \
+            "game_server!|A game server running in one of these containers can no longer be joined from other PCs."
     fi
     return 0
 }
@@ -636,6 +646,8 @@ this desktop; if you don't use it, it is an unneeded way in." \
             fix_user_units_off "$u" "${units[@]}"
         finding_change "${units[*]} enabled for ${u}" "Sunshine disabled and stopped" \
             "ends streams|A running stream ends, and Moonlight can no longer connect until you turn Sunshine on again."
+        finding_affects \
+            "sunshine!|Sunshine no longer starts on its own; Moonlight cannot connect until you start it again."
         return 0
     fi
 
@@ -655,6 +667,8 @@ which can run commands as you, accepts visitors from any address." \
             fix_sunshine_setting "$u" "$conf" origin_web_ui_allowed lan "${units[0]}"
         finding_change "origin_web_ui_allowed = ${origin}" "origin_web_ui_allowed = lan" \
             "restarts Sunshine|Sunshine restarts; an active stream is interrupted."
+        finding_affects \
+            "sunshine|The admin page works only from your home network. Streaming itself is not affected."
     fi
     if [[ "${upnp,,}" =~ ^(on|enabled|true|1|yes)$ ]]; then
         finding medium "Sunshine opens ports on your router (UPnP)" \
@@ -666,6 +680,8 @@ VPN such as Tailscale (ujust enable-tailscale) is the safer way to do that." \
         finding_change "upnp = ${upnp}" "upnp = off (stream from outside through a VPN instead)" \
             "restarts Sunshine|Sunshine restarts; an active stream is interrupted." \
             "no streaming from outside|Streaming from outside your home stops working unless you use a VPN such as Tailscale."
+        finding_affects \
+            "sunshine!|Streaming from outside your home stops unless you use a VPN such as Tailscale. Streaming at home is not affected."
     fi
     if ! _user_cat "$u" "$state" | grep -q '"username"'; then
         finding medium "Sunshine has no admin login yet" \
@@ -673,6 +689,8 @@ VPN such as Tailscale (ujust enable-tailscale) is the safer way to do that." \
 first creates the login and can then pair devices and run commands." \
 "Open https://localhost:47990 on this PC now and create the admin user."
         finding_change "no admin user" "admin user created on this PC (manual)"
+        finding_affects \
+            "sunshine|Nothing changes for streaming; you set a login on Sunshine's admin page."
     fi
     if _reachable tcp "0.0.0.0" 47990; then
         finding low "Sunshine's admin page is reachable from your network" \
@@ -680,6 +698,8 @@ first creates the login and can then pair devices and run commands." \
 done on this PC itself; streaming does not need this port." \
 "Remove 47990/tcp from the firewall zone (Firewall app), or apply the firewall fix."
         finding_change "47990/tcp open to the network" "47990/tcp closed (pair and configure on this PC)"
+        finding_affects \
+            "sunshine|Pair devices and change settings on this PC only. Streaming is not affected."
     fi
     return 0
 }

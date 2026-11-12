@@ -120,6 +120,7 @@ apply_change() {
     html="<h3>$(_badge "$sev") &nbsp;$(_html "$title")</h3>"
     html+="$(_now_after_html "$now" "$after")"
     html+="<p>$(_rich "$detail")</p>"
+    html+="$(affects_html "$i")"
     html+="$(_warnings_html "${warns[@]}")"
     html+="<p><b>Commands</b> (run as administrator - this tool already has administrator rights, so you are not asked for your password again):</p>$(_pre "$script" 30)"
     if [[ -n "$undo" ]]; then
@@ -223,6 +224,8 @@ _fix_row() {
         [[ -n "$w" ]] && tags+="${tags:+, }$(_warn_tag "$w")"
     done < <(_fix_warnings "$i" "x" "")
     [[ -n "$tags" ]] && row+="  ⚠ ${tags}"
+    tags=$(affects_tags "$i")
+    [[ -n "$tags" ]] && row+="  ★ stops ${tags} (in use here)"
     case "${F_STATE[$i]}" in
         skipped) row+="  (skipped earlier)" ;;
         failed)  row+="  (failed earlier)" ;;
@@ -233,16 +236,18 @@ _fix_row() {
 # _choose_fixes — the fix list: print the findings the person ticks.
 _choose_fixes() {
     local -a cand=() items=()
-    local i on n_warn=0
+    local i on n_warn=0 n_use=0
     mapfile -t cand < <(_fix_candidates)
     [[ -n "${cand[0]:-}" ]] || return 1
     for i in "${cand[@]}"; do
         on=off
         [[ "${F_STATE[$i]}" == "open" && "${F_SEV[$i]}" =~ ^(high|medium)$ ]] && on=on
+        # A fix that changes a feature this PC uses is the person's call.
+        if _affects_in_use "$i"; then on=off; n_use=$((n_use + 1)); fi
         [[ -n "$(_fix_warnings "$i" "x" "")" ]] && n_warn=$((n_warn + 1))
         items+=("$i" "$(_fix_row "$i")" "$on")
     done
-    ui_checklist "<html><h3>Choose what to fix</h3><p>${#cand[@]} problem(s) can be fixed from here. The high and medium ones are ticked. Each line shows the setting now → after the fix.</p><p>Nothing runs yet: every ticked fix is shown again with its exact commands and side effects, and runs only when you press <b>Apply</b> there.$([[ $n_warn -gt 0 ]] && echo " <font color=\"${C_MEDIUM}\">⚠</font> marks ${n_warn} fix(es) with side effects (a reboot, a restarted service, no undo, ...).")</p></html>" \
+    ui_checklist "<html><h3>Choose what to fix</h3><p>${#cand[@]} problem(s) can be fixed from here. The high and medium ones are ticked$([[ $n_use -gt 0 ]] && echo ", except ${n_use} that would stop a feature this PC uses (marked ★)"). Each line shows the setting now → after the fix.</p><p>Nothing runs yet: every ticked fix is shown again with its exact commands and side effects, and runs only when you press <b>Apply</b> there.$([[ $n_warn -gt 0 ]] && echo " <font color=\"${C_MEDIUM}\">⚠</font> marks ${n_warn} fix(es) with side effects (a reboot, a restarted service, no undo, ...).")</p></html>" \
         "${items[@]}"
 }
 
@@ -325,7 +330,7 @@ _recheck() {
     (
         FINDINGS_FILE=""; VERBOSE=0; QUIET=1
         F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_MANUAL=(); F_FIX=(); F_STATE=()
-        F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=()
+        F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=(); F_AFFECT=(); F_KEYX=(); F_KEPT_SEV=(); F_KEPT_FROM=(); F_KEPT_DATE=(); F_KEPT_PORTS=()
         CHECK_NOTE=(); CHECK_NA=(); CHECK_SKIPPED=(); CHECK_FAILED=(); CHECK_ERRORS=()
         _FW_ZONE_ALL=(); _FW_ZONE_OPEN=(); _FW_SVC_PORTS=()
         CURRENT_CHECK="$id"

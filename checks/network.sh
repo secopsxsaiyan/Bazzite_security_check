@@ -221,6 +221,14 @@ Or use the Firewall settings app (firewall-config)." \
         fix_firewall_zone "$def" "${bad_zones[*]}" "${bad_ifaces[@]}"
     finding_change "$(_join '; ' "${desc[@]}")" "zone '${AUDIT_ZONE}' that allows only what you tick" \
         "blocks the rest|Anything you leave unticked can no longer be reached from other devices. This PC can still connect out, and games and browsing are not affected."
+    finding_affects \
+        "remote_play?|The fix lists it and keeps it reachable from other devices if you tick it there." \
+        "sunshine?|The fix lists it and keeps it reachable from other devices if you tick it there." \
+        "kdeconnect?|The fix lists it and keeps it reachable from other devices if you tick it there." \
+        "ssh?|The fix lists it and keeps it reachable from other devices if you tick it there." \
+        "sharing?|The fix lists it and keeps it reachable from other devices if you tick it there." \
+        "discovery?|The fix lists mDNS (ticked); leave it ticked to keep finding printers and other devices." \
+        "game_server?|Ports you opened yourself stay ticked in the fix's list; anything you untick can no longer be reached by other players."
     return 0
 }
 
@@ -286,7 +294,7 @@ fix_firewall_zone() {
     local kdc=0 steam=0 sun=0 sshd_on=0 smb=0 sync=0 lsend=0
 
     { _have kdeconnectd || [[ -x /usr/libexec/kdeconnectd ]] || pgrep -x kdeconnectd >/dev/null 2>&1; } && kdc=1
-    { _have steam || _have bazzite-steam; } && steam=1
+    _steam_installed && steam=1
     [[ -n "$DESKTOP_USER" ]] && _sunshine_installed "$DESKTOP_USER" && sun=1
     { _unit_active sshd.service || [[ "$(_unit_state sshd.service)" == "enabled" ]] || _unit_active sshd.socket; } && sshd_on=1
     _unit_active smb.service && smb=1
@@ -730,6 +738,16 @@ then firewall-cmd --reload (see also the firewall finding)." \
             after="listening on 127.0.0.1 only, or blocked by the firewall (manual)"
         fi
         finding_change "reachable: $(_join ', ' "${eports[@]}")" "$after" "$warn"
+        local -a aff=() cports=() c
+        for c in "${close[@]}"; do c="${c#*|}"; cports+=("${c%%|*}"); done
+        # Closed ports first: finding_affects keeps the first entry per
+        # feature, so "stops it" wins over a port left to manual steps.
+        mapfile -t aff < <(_ports_affects "!" "Other devices can no longer reach it once its port is closed. Programs on this PC still can." "${cports[@]}"
+                           _ports_affects "~" "The fix does not close this port; only the manual steps would." "${manual[@]}")
+        finding_affects "${aff[@]}"
+        # Kept on purpose covers these ports (a subset of kept ones): a new
+        # port counts again.
+        finding_keep_key "${eports[@]}"
     fi
     if [[ ${#blocked[@]} -gt 0 ]]; then
         check_note "Listening but blocked by the firewall: $(_join ', ' "${blocked[@]}")"
@@ -755,6 +773,11 @@ firewall-cmd --reload" \
             fix_close_ports "${stale[@]}"
         finding_change "open: $(_join ', ' "${stale_desc[@]}")" "closed (open them again in the Firewall app when you need them)" \
             "other devices lose access|A program you start on one of these ports later is only reachable from this PC until you open the port again."
+        local -a sports=() saff=()
+        for s in "${stale[@]}"; do s="${s#*|}"; sports+=("${s%%|*}"); done
+        mapfile -t saff < <(_ports_affects "!" "Nothing uses the port right now, but it may be closed only because the program is not running (Steam, a game server). After the fix, other devices cannot reach it until you open the port again." "${sports[@]}")
+        finding_affects "${saff[@]}"
+        finding_keep_key "${sports[@]}"
     fi
 
     if [[ $llmnr -eq 1 ]]; then
@@ -769,6 +792,8 @@ then: sudo systemctl restart systemd-resolved" \
             fix_llmnr
         finding_change "LLMNR on (systemd-resolved answers on 5355)" "LLMNR=no (mDNS .local names keep working)" \
             "DNS restarts|systemd-resolved restarts; name lookups pause for a moment."
+        finding_affects \
+            "local_names!|Windows PCs can no longer find this PC by its bare name through LLMNR. .local names (mDNS) and IP addresses keep working."
     fi
     return 0
 }
@@ -866,6 +891,8 @@ of an account on this PC could log in from the network." \
             "SSH server disabled and stopped" \
             "ends SSH logins|Logging in to this PC over SSH stops working. Sessions that are already open stay connected." \
             "$([[ "$sessions" -gt 0 ]] && echo "${sessions} open SSH connection(s)|${sessions} SSH connection(s) to this PC are open right now. They stay up, but cannot reconnect after this.")"
+        finding_affects \
+            "ssh!|Logging in and copying files (scp, sftp, rsync) to this PC over SSH stops until you turn the SSH server on again."
         return 0
     fi
 
@@ -889,6 +916,8 @@ of an account on this PC could log in from the network." \
             fix_ssh_dropin "PermitEmptyPasswords no"
         finding_change "PermitEmptyPasswords yes" "PermitEmptyPasswords no" \
             "SSH reloads|sshd reloads its settings; open sessions stay connected."
+        finding_affects \
+            "ssh|Accounts without a password can no longer log in over SSH. Logins with a password or an SSH key keep working."
     fi
     if [[ "$root" == "yes" ]]; then
         finding high "SSH allows root to log in with a password" \
@@ -897,6 +926,8 @@ of an account on this PC could log in from the network." \
             fix_ssh_dropin "PermitRootLogin no"
         finding_change "PermitRootLogin yes" "PermitRootLogin no (log in as yourself, then sudo)" \
             "SSH reloads|sshd reloads its settings; open sessions stay connected."
+        finding_affects \
+            "ssh|root can no longer log in over SSH with a password; log in as yourself and use sudo."
     fi
     if [[ "$pw" == "yes" || "$kbd" == "yes" ]]; then
         keyusers=$(_users_with_keys | paste -sd, - || true)
@@ -915,6 +946,8 @@ These accounts already have SSH keys set up: ${keyusers}.$([[ ${#nokey[@]} -gt 0
                 "both no: SSH keys only (keys set up for: ${keyusers})" \
                 "$([[ ${#nokey[@]} -gt 0 ]] && echo "locks out $(_join ', ' "${nokey[@]}")|$(_join ', ' "${nokey[@]}") have no SSH key yet and can no longer log in over SSH after this.")" \
                 "SSH reloads|sshd reloads its settings; open sessions stay connected."
+            finding_affects \
+                "ssh|Only logins with an SSH key keep working; logging in over SSH with a password stops."
         else
             finding medium "SSH accepts passwords" \
 "${detail}
@@ -923,6 +956,8 @@ avoid locking you out - set up a key first." \
 "On the computer you connect from:  ssh-keygen -t ed25519 && ssh-copy-id ${DESKTOP_USER:-YOUR_USER}@$(hostname 2>/dev/null)
 Then set 'PasswordAuthentication no' in ${_SSH_DROPIN} and run this check again."
             finding_change "PasswordAuthentication ${pw:-?}, no account has an SSH key" "keys only, once a key is set up (manual)"
+            finding_affects \
+                "ssh|Only logins with an SSH key keep working; logging in over SSH with a password stops."
         fi
     fi
     return 0

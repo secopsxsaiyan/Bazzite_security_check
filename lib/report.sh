@@ -21,6 +21,7 @@ _finding_state_label() {
                 reboot)   echo "Fixed during this run - takes effect after a reboot" ;;
                 *)        echo "Fixed during this run (not checked again)" ;;
             esac ;;
+        kept)    echo "Kept on purpose - does not lower the score" ;;
         skipped) echo "Fix offered, skipped" ;;
         failed)  echo "Fix attempted, failed" ;;
         *)
@@ -158,6 +159,13 @@ _write_markdown() {
         [[ -n "${F_AFTER[$i]}" ]] && printf -- '- **%s:** %s\n' "$([[ -n ${F_FIX[$i]} ]] && echo "After the fix" || echo "Goal")" "${F_AFTER[$i]}"
         [[ -n "${F_NOW[$i]}${F_AFTER[$i]}" ]] && printf '\n'
         printf '%s\n\n' "${F_DETAIL[$i]}"
+        if [[ -n "${F_AFFECT[$i]:-}" ]] && _still_open "$i"; then
+            printf '**What this affects on Bazzite:**\n\n'
+            while IFS= read -r w; do
+                [[ -n "$w" ]] && printf -- '- %s\n' "$w"
+            done < <(affects_text "$i")
+            printf '\n'
+        fi
         if [[ -n "${F_FIX[$i]}" && "${F_STATE[$i]}" != "fixed" && -n "${F_WARN[$i]}" ]]; then
             printf '**Before applying the fix:**\n\n'
             while IFS= read -r w; do
@@ -285,6 +293,13 @@ EOF
             printf '</table>'
         fi
         printf '<p>%s</p>' "$(_reflow_html "${F_DETAIL[$i]}")"
+        if [[ -n "${F_AFFECT[$i]:-}" ]] && _still_open "$i"; then
+            printf '<div class="meta">What this affects on Bazzite:</div><ul class="affects">'
+            while IFS= read -r w; do
+                [[ -n "$w" ]] && printf '<li>%s</li>' "$(_html "$w")"
+            done < <(affects_text "$i")
+            printf '</ul>'
+        fi
         if [[ -n "${F_FIX[$i]}" && "${F_STATE[$i]}" != "fixed" && -n "${F_WARN[$i]}" ]]; then
             printf '<div class="meta">Before applying the fix:</div><ul class="warn">'
             while IFS= read -r w; do

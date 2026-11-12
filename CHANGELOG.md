@@ -6,6 +6,25 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-12
+
+### Added
+
+- Every finding and fix names the Bazzite features it affects (Steam Remote
+  Play, Sunshine, KDE Connect, SSH, file sharing, game servers, Docker and
+  containers, anti-cheat, hibernation, game performance, Flatpak apps, ...),
+  how the fix touches each one (stops it, changes it, you choose in the
+  fix, or helps it) and whether this PC uses it ("in use here: Steam is
+  installed"). Shown in the fix list, the Apply dialog, each check's page,
+  the dashboard rows and the report. Suggested by a user who wanted that
+  context before touching a setting kept for Steam Remote Play.
+- A fix that would stop a feature this PC uses starts unticked in the fix
+  list.
+- Kept on purpose: the dashboard lists the problems whose fix would stop a
+  feature you use; a kept problem no longer lowers the score and is not
+  offered as a fix from the next check on. Untick it to count it again.
+  The list is in `/var/lib/bazzite-sec-audit/kept` (root only).
+
 ## [1.2.0] - 2026-11-12
 
 ### Changed
@@ -194,7 +213,8 @@ First release.
   a symlink in a user's folder. Changes to `sshd` and `sudoers` are
   validated and rolled back if they fail.
 
-[Unreleased]: https://github.com/secopsxsaiyan/Bazzite_security_check/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/secopsxsaiyan/Bazzite_security_check/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.3.0
 [1.2.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.2.0
 [1.1.0]: https://github.com/secopsxsaiyan/bazzite-sec-audit/releases/tag/v1.1.0
 [1.0.0]: https://github.com/secopsxsaiyan/bazzite-sec-audit/releases/tag/v1.0.0

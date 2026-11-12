@@ -960,7 +960,7 @@ $1"; }
     # a reboot instead of being offered again; the fix only adds its own two.
     (
         F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_MANUAL=(); F_FIX=(); F_STATE=()
-        F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=(); FINDINGS_FILE=""
+        F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=(); F_AFFECT=(); F_KEYX=(); FINDINGS_FILE=""
         CURRENT_CHECK=check_anticheat_ready
         USE_GAMING=0; check_anticheat_ready; [[ ${#F_TITLE[@]} -eq 0 ]] && na=1
         USE_GAMING=1; _configured_kargs() { echo "rhgb lockdown=integrity sysctl.kernel.kexec_load_disabled=1"; }
@@ -971,6 +971,10 @@ $1"; }
         F_TITLE=(); _configured_kargs() { echo "rhgb"; }; _secure_boot_state() { echo enabled; }
         check_anticheat_ready
         [[ "${F_FIX[0]}" == *"fix_anticheat_kargs lockdown=integrity sysctl.kernel.kexec_load_disabled=1"* ]] && echo "anticheat-lockdown-with-secure-boot"
+        # Lockdown is named as stopping hibernation only when the fix adds it.
+        [[ "${F_AFFECT[0]}" == *"lockdown!|"* ]] && _configured_kargs() { echo "rhgb lockdown=integrity"; } \
+            && check_anticheat_ready && i=$(( ${#F_SEV[@]} - 1 )) && [[ "${F_FIX[$i]}" == *"kexec_load_disabled=1" \
+            && "${F_AFFECT[$i]}" == *"anticheat+|"* && "${F_AFFECT[$i]}" != *"lockdown"* ]] && echo "anticheat-lockdown-mark-only-when-added"
         fix_anticheat_kargs lockdown=integrity "evil;rm" sysctl.kernel.kexec_load_disabled=1
         grep -qx 'rpm-ostree kargs --append-if-missing=lockdown=integrity --append-if-missing=sysctl.kernel.kexec_load_disabled=1' "$W/eac.txt" \
             && grep -qx 'rpm-ostree kargs --delete-if-present=lockdown=integrity --delete-if-present=sysctl.kernel.kexec_load_disabled=1' "$W/eac.txt" \
@@ -1066,6 +1070,154 @@ PY
         _undo_available() { return 1; }
         FIX_MODE=report; ! _dashboard_offered fix 5 && FIX_MODE=confirm && ! _dashboard_offered fix 0 && _dashboard_offered fix 2 \
             && ! _dashboard_offered undo && _dashboard_offered settings && echo "dashboard-actions-offered-only"
+    )
+
+    # What a fix affects: each finding names the Bazzite features it
+    # touches; those this PC uses come first, are marked in use, and their
+    # fixes start unticked. Unknown keys and repeats are dropped.
+    (
+        _feature_detect() {
+            case "$1" in remote_play) echo "Steam is installed"; return 0 ;; game_server) return 2 ;; *) return 1 ;; esac
+        }
+        USE_GAMING=0; USE_STREAMING=0; USE_SSH=0; USE_SHARING=0; USE_DEV=0; _FEATURE_SEEN=()
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_MANUAL=(); F_FIX=(); F_STATE=(); F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=(); F_AFFECT=()
+        FINDINGS_FILE=""; CURRENT_CHECK=check_firewall
+        finding high "Open <b>ports</b>" "d" "m" true
+        finding_affects "sshx|unknown key" "ssh!|SSH stops" "remote_play!|Remote Play stops <i>here</i>" "ssh|again" "game_server?|maybe" "noseparator"
+        mapfile -t L < <(affects_list 0)
+        [[ ${#L[@]} -eq 3 && "${L[0]}" == remote_play$'\t'*$'\t'in$'\t'"Steam is installed"$'\t!\t'* \
+           && "${L[1]}" == game_server$'\t'*$'\t'unknown$'\t-\t?\t'* && "${L[2]}" == ssh$'\t'*$'\t'out$'\t-\t!\t'* ]] && echo "affects-in-use-first"
+        h=$(affects_html 0)
+        [[ "$h" == *"Steam Remote Play and LAN game transfers</b> - stops it"*"in use here: Steam is installed"* && "$h" == *"&lt;i&gt;here&lt;/i&gt;"* \
+           && "$h" == *"not set up on this PC: SSH logins to this PC"* && "$h" != *"<i>here"* ]] && echo "affects-html-escaped"
+        [[ "$(affects_tags 0)" == "Steam Remote Play and LAN game transfers" ]] && _affects_in_use 0 && echo "affects-tags"
+        finding high "Other problem" "d" "m" true
+        _affects_in_use 1 || echo "affects-none-not-in-use"
+        # High findings start ticked, except one whose fix stops a feature in
+        # use. (An earlier test stubbed _choose_fixes; take the real one.)
+        eval "$(sed -n '/^_choose_fixes() {/,/^}/p' "$HERE/../lib/fixes.sh")"
+        ui_checklist() { shift; while [[ $# -ge 3 ]]; do echo "$1=$3"; shift 3; done; }
+        true() { :; }
+        [[ "$(_choose_fixes | sort | tr '\n' ' ')" == "0=off 1=on " ]] && echo "fix-in-use-unticked"
+        mapfile -t P < <(_ports_affects "!" "s" "27036/tcp" "27031-27036/udp" "47984/tcp  sunshine" "8080/tcp" "22/tcp" "25565/tcp")
+        [[ "${P[*]}" == "remote_play!|s sunshine!|s ssh!|s game_server!|s" ]] && echo "ports-to-features"
+        # "Changes" and "you choose" alone do not untick a fix.
+        F_AFFECT[0]=$'remote_play|changes\nremote_play?|choose'
+        _affects_in_use 0 || echo "affects-change-not-unticked"
+    )
+
+    # The real detection rules: Steam alone does not mean Remote Play is
+    # used, the default gaming answer does not mean a game server is
+    # hosted, and Sunshine's admin port is not a streaming port.
+    (
+        _have() { [[ "$1" == steam ]]; }; _flatpak_installed() { return 1; }
+        USE_GAMING=1; USE_STREAMING=0; USE_SSH=0; USE_SHARING=0; USE_DEV=0; DETECTED=(); _FEATURE_SEEN=()
+        [[ "$(feature_status remote_play)" == unknown$'\t'"Steam is installed" && "$(feature_status game_server)" == unknown$'\t' \
+           && "$(feature_status anticheat)" == in$'\t'"Steam is installed" ]] \
+            && USE_STREAMING=1 && [[ "$(feature_status remote_play)" == in$'\t'* ]] && echo "detect-honest-steam-and-servers"
+        [[ -z "$(_ports_affects "!" s 47990/tcp)" && "$(_ports_affects "!" s 47990/tcp 47989/tcp)" == "sunshine!|s" ]] && echo "sunshine-admin-port-not-streaming"
+    )
+
+    # Kept on purpose: a kept finding becomes a note that does not lower the
+    # score and offers no fix; counts in titles do not matter; the file is
+    # root's and a symlink is refused; unticking counts it again.
+    (
+        _feature_detect() { [[ "$1" == remote_play ]] && { echo "Steam is installed"; return 0; }; return 1; }
+        USE_GAMING=0; USE_STREAMING=0; USE_SSH=0; USE_SHARING=0; USE_DEV=0; _FEATURE_SEEN=()
+        KS="$W/kept-state"; rm -rf "$KS"; mkdir -p "$KS"; STATE_DIR="$KS"
+        printf 'check_firewall\tThe firewall opens # port(s) that nothing uses\t2026-11-12\tSteam Remote Play\nbad line\ncheck_other\tSomething\t2026-11-01\t\n' > "$KS/kept"
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_MANUAL=(); F_FIX=(); F_STATE=(); F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=(); F_AFFECT=(); F_KEPT_SEV=()
+        CHECK_FAILED=(); CHECK_STATUS=(); CHECK_ORDER=(check_firewall check_ssh_server); CHECK_WEIGHT=([check_firewall]=10 [check_ssh_server]=10)
+        FINDINGS_FILE=""; CURRENT_CHECK=check_firewall
+        finding low "The firewall opens 3 port(s) that nothing uses" "d" "m" true
+        finding_affects "remote_play!|closes Remote Play ports"
+        CHECK_STATUS[check_firewall]=fail
+        CURRENT_CHECK=check_ssh_server
+        finding medium "SSH accepts passwords" "d" "m" true
+        finding_affects "remote_play!|x"
+        CHECK_STATUS[check_ssh_server]=fail
+        kept_load; kept_apply
+        [[ "${F_STATE[0]}" == kept && "${F_SEV[0]}" == info && -z "${F_FIX[0]}" && "${F_KEPT_SEV[0]}" == low \
+           && "${F_DETAIL[0]}" == "Kept on purpose since 2026-11-12 (for Steam Remote Play)"* \
+           && "${CHECK_STATUS[check_firewall]}" == pass && -z "${CHECK_FAILED[check_firewall]:-}" \
+           && "${F_STATE[1]}" == open && "${CHECK_STATUS[check_ssh_server]}" == fail ]] && echo "kept-becomes-note"
+        # Two checks of weight 10: the kept low finding costs nothing, the
+        # open medium one 5 points: 100 * 15 / 20 = 75.
+        [[ "$(_score found)" == 75 ]] && echo "kept-not-scored"
+        [[ "$(_finding_state_label 0)" == "Kept on purpose"* && "$(kept_count)" == 1 ]] && kept_offered && echo "kept-labelled"
+        # The dialog: the kept one is ticked, the SSH one offered; keep both,
+        # and the entry of a check that did not run stays.
+        ui_checklist() { shift; while [[ $# -ge 3 ]]; do echo "$1"; shift 3; done; }
+        ui_msg() { :; }; log() { :; }; write_reports() { :; }
+        manage_kept
+        grep -q $'^check_other\tSomething\t2026-11-01' "$KS/kept" && grep -q $'^check_firewall\tThe firewall opens # port(s) that nothing uses\t2026-11-12' "$KS/kept" \
+           && grep -q $'^check_ssh_server\tSSH accepts passwords\t' "$KS/kept" && ! grep -q 'bad line' "$KS/kept" \
+           && [[ "$(stat -c %a "$KS/kept")" == 600 ]] && echo "kept-saved"
+        # Untick everything: only the entry of the check that did not run is left.
+        ui_checklist() { return 0; }
+        manage_kept
+        [[ "$(grep -c . "$KS/kept")" == 1 ]] && grep -q '^check_other' "$KS/kept" && echo "kept-untick-counts-again"
+        # Reopened in the same session, the unticked problems stay unticked.
+        [[ "${F_STATE[0]}" == kept && -z "$(_keep_candidates | grep $'\ton$')" && "$(_keep_candidates | grep -c $'\toff$')" == 2 ]] && echo "kept-untick-holds-in-session"
+        # Kept ports cover exactly those ports: a new port counts again; a
+        # kept problem that got worse counts again too.
+        printf 'check_listening_services\t# service(s) can be reached from your network [22/tcp,27036/tcp]\t2026-11-12\tSSH\tmedium\ncheck_sudo\tsudo works without a password\t2026-11-12\t\tlow\n' > "$KS/kept"; kept_load
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_FIX=(); F_STATE=(); F_VERIFY=(); F_AFFECT=(); F_KEYX=(); F_KEPT_SEV=()
+        CURRENT_CHECK=check_listening_services
+        finding medium "1 service(s) can be reached from your network" d m true; finding_keep_key "22/tcp"
+        finding medium "2 service(s) can be reached from your network" d m true; finding_keep_key "4444/tcp" "22/tcp"
+        CURRENT_CHECK=check_sudo
+        finding medium "sudo works without a password" d m true
+        kept_apply
+        # 22 alone is covered by the kept 22+27036 (27036 is closed now, Steam
+        # not running); 22+4444 is not (4444 is new).
+        [[ "${F_STATE[0]}" == kept && "${F_STATE[1]}" == open && "${F_SEV[1]}" == medium && "${F_STATE[2]}" == open ]] && echo "kept-exact-ports-and-severity"
+        # Saving again keeps the entry that covered it (22+27036), not just 22.
+        _feature_detect() { [[ "$1" == ssh ]] && { echo x; return 0; }; return 1; }; _FEATURE_SEEN=()
+        F_AFFECT[0]="ssh!|x"; F_AFFECT[1]="ssh!|x"
+        ui_checklist() { echo 0; }
+        manage_kept
+        grep -q '\[22/tcp,27036/tcp\]' "$KS/kept" && ! grep -q '\[22/tcp\]' "$KS/kept" && ! grep -q '4444' "$KS/kept" && echo "kept-subset-entry-kept"
+        # Ticking a kept problem that got worse keeps it at its new severity.
+        F_AFFECT[2]="ssh!|x"; ui_checklist() { echo 0; echo 2; }
+        manage_kept
+        grep -q $'^check_sudo\tsudo works without a password\t.*\tmedium$' "$KS/kept" && [[ "${F_STATE[2]}" == kept ]] && echo "kept-worse-reticked"
+        # Overlapping entries: a narrower one kept at medium and a broader one
+        # at high. The high problem is kept (the broader entry allows it);
+        # saving it ticked merges them into one entry (all ports, high, the
+        # earliest date); unticking removes every entry that kept it.
+        printf 'check_listening_services\t# service(s) can be reached from your network [22/tcp]\t2026-11-01\tSSH\tmedium\ncheck_listening_services\t# service(s) can be reached from your network [22/tcp,27036/tcp]\t2026-11-05\tSSH\thigh\n' > "$KS/kept"; kept_load
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_FIX=(); F_STATE=(); F_VERIFY=(); F_AFFECT=(); F_KEYX=(); F_KEPT_SEV=(); F_KEPT_FROM=()
+        CURRENT_CHECK=check_listening_services
+        finding high "1 service(s) can be reached from your network" d m true; finding_keep_key "22/tcp"; finding_affects "ssh!|x"
+        kept_apply
+        ui_checklist() { echo 0; }; manage_kept
+        [[ "${F_STATE[0]}" == kept && "$(grep -c . "$KS/kept")" == 1 ]] \
+            && grep -q $'^check_listening_services\t# service(s) can be reached from your network \\[22/tcp,27036/tcp\\]\t2026-11-01\t[^\t]*\thigh$' "$KS/kept" && echo "kept-overlap-merged"
+        printf 'check_listening_services\t# service(s) can be reached from your network [22/tcp]\t2026-11-01\tSSH\tmedium\ncheck_listening_services\t# service(s) can be reached from your network [22/tcp,27036/tcp]\t2026-11-05\tSSH\thigh\n' > "$KS/kept"; kept_load
+        ui_checklist() { return 0; }; manage_kept
+        [[ ! -s "$KS/kept" && -z "$(_keep_candidates | grep $'\ton$')" ]] && echo "kept-overlap-untick-all"
+        # The session remembers the widest keep: [1] medium + [1,22] high keep
+        # a low finding; untick, then tick again: high, both ports, the
+        # earliest date come back.
+        printf 'check_listening_services\t# service(s) can be reached from your network [1/tcp]\t2026-10-01\tSSH\tmedium\ncheck_listening_services\t# service(s) can be reached from your network [1/tcp,22/tcp]\t2026-10-05\tSSH\thigh\n' > "$KS/kept"; kept_load
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_FIX=(); F_STATE=(); F_VERIFY=(); F_AFFECT=(); F_KEYX=(); F_KEPT_SEV=(); F_KEPT_FROM=(); F_KEPT_DATE=(); F_KEPT_PORTS=()
+        finding low "1 service(s) can be reached from your network" d m true; finding_keep_key "1/tcp"; finding_affects "ssh!|x"
+        kept_apply
+        ui_checklist() { return 0; }; manage_kept
+        ui_checklist() { echo 0; }; manage_kept
+        grep -qx $'check_listening_services\t# service(s) can be reached from your network \\[1/tcp,22/tcp\\]\t2026-10-01\t[^\t]*\thigh' "$KS/kept" \
+            && [[ "$(grep -c . "$KS/kept")" == 1 && "${F_STATE[0]}" == kept ]] && echo "kept-retick-restores-widest"
+        # An entry without a level keeps any level; saving it again does not
+        # narrow it to the finding's level.
+        printf 'check_sudo\tsudo works without a password\t2026-10-01\t\t\n' > "$KS/kept"; kept_load
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_FIX=(); F_STATE=(); F_VERIFY=(); F_AFFECT=(); F_KEYX=(); F_KEPT_SEV=(); F_KEPT_FROM=(); F_KEPT_DATE=(); F_KEPT_PORTS=()
+        CURRENT_CHECK=check_sudo; finding low "sudo works without a password" d m true; finding_affects "ssh!|x"
+        kept_apply; manage_kept
+        grep -q $'^check_sudo\tsudo works without a password\t2026-10-01\t.*\thigh$' "$KS/kept" && echo "kept-any-level-stays-any"
+        rm -f "$KS/kept"; ln -s "$W/elsewhere" "$KS/kept"; kept_load
+        ! _kept_save "x" && [[ ! -e "$W/elsewhere" ]] && echo "kept-symlink-refused"
+        [[ "$(_dashboard_answer '{"action":"keep"}')" == keep ]] && echo "dashboard-keep-action"
     )
 
     # Progress: the bar shows finished checks scaled to 90%, so it never
@@ -1278,7 +1430,9 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          choice3-tty-default dashboard-answer-checked dashboard-input-json dashboard-input-one-line dashboard-actions-offered-only progress-90-until-done busy-no-percent update-verified update-tamper-rejected settings-answer-checked settings-saved-and-loaded wizard-answer-checked wizard-input-json front-end-not-without-kde anticheat-lockdown-with-secure-boot anticheat-pending-and-gaming-only anticheat-fix-and-undo ctr-unsafe-cases-manual ctr-run-kept-old ctr-compose-all-files ctr-compose-manual-forms ctr-rollback-touches-nothing ctr-docker-undo-gated ctr-compose-shared-file flatpak-host-forms flatpak-risk-graded flatpak-low-preset exposed-port-fix-offered service-port-not-closable close-ports-fix-and-undo app-installed app-removed-copy-kept copy-removed-when-unused runtime-only-port-and-bad-zone firewall-extras-blank-lines sysctl-mask-honoured sysctl-conf-in-place \
          avc-count-sources rootless-by-protocol-no-docker-fix pkexec-error-shown \
          undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
-         fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read; do
+         fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
+         affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any; do
     expect "$W/t6.out" "$m" "$m"
 done
 
