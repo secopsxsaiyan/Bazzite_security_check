@@ -960,7 +960,7 @@ $1"; }
     # a reboot instead of being offered again; the fix only adds its own two.
     (
         F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_MANUAL=(); F_FIX=(); F_STATE=()
-        F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=(); FINDINGS_FILE=""
+        F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=(); F_AFFECT=(); F_KEYX=(); FINDINGS_FILE=""
         CURRENT_CHECK=check_anticheat_ready
         USE_GAMING=0; check_anticheat_ready; [[ ${#F_TITLE[@]} -eq 0 ]] && na=1
         USE_GAMING=1; _configured_kargs() { echo "rhgb lockdown=integrity sysctl.kernel.kexec_load_disabled=1"; }
@@ -971,6 +971,10 @@ $1"; }
         F_TITLE=(); _configured_kargs() { echo "rhgb"; }; _secure_boot_state() { echo enabled; }
         check_anticheat_ready
         [[ "${F_FIX[0]}" == *"fix_anticheat_kargs lockdown=integrity sysctl.kernel.kexec_load_disabled=1"* ]] && echo "anticheat-lockdown-with-secure-boot"
+        # Lockdown is named as stopping hibernation only when the fix adds it.
+        [[ "${F_AFFECT[0]}" == *"lockdown!|"* ]] && _configured_kargs() { echo "rhgb lockdown=integrity"; } \
+            && check_anticheat_ready && i=$(( ${#F_SEV[@]} - 1 )) && [[ "${F_FIX[$i]}" == *"kexec_load_disabled=1" \
+            && "${F_AFFECT[$i]}" == *"anticheat+|"* && "${F_AFFECT[$i]}" != *"lockdown"* ]] && echo "anticheat-lockdown-mark-only-when-added"
         fix_anticheat_kargs lockdown=integrity "evil;rm" sysctl.kernel.kexec_load_disabled=1
         grep -qx 'rpm-ostree kargs --append-if-missing=lockdown=integrity --append-if-missing=sysctl.kernel.kexec_load_disabled=1' "$W/eac.txt" \
             && grep -qx 'rpm-ostree kargs --delete-if-present=lockdown=integrity --delete-if-present=sysctl.kernel.kexec_load_disabled=1' "$W/eac.txt" \
@@ -1082,7 +1086,7 @@ PY
         finding_affects "sshx|unknown key" "ssh!|SSH stops" "remote_play!|Remote Play stops <i>here</i>" "ssh|again" "game_server?|maybe" "noseparator"
         mapfile -t L < <(affects_list 0)
         [[ ${#L[@]} -eq 3 && "${L[0]}" == remote_play$'\t'*$'\t'in$'\t'"Steam is installed"$'\t!\t'* \
-           && "${L[1]}" == game_server$'\t'*$'\t'unknown$'\t\t?\t'* && "${L[2]}" == ssh$'\t'*$'\t'out$'\t\t!\t'* ]] && echo "affects-in-use-first"
+           && "${L[1]}" == game_server$'\t'*$'\t'unknown$'\t-\t?\t'* && "${L[2]}" == ssh$'\t'*$'\t'out$'\t-\t!\t'* ]] && echo "affects-in-use-first"
         h=$(affects_html 0)
         [[ "$h" == *"Steam Remote Play and LAN game transfers</b> - stops it"*"in use here: Steam is installed"* && "$h" == *"&lt;i&gt;here&lt;/i&gt;"* \
            && "$h" == *"not set up on this PC: SSH logins to this PC"* && "$h" != *"<i>here"* ]] && echo "affects-html-escaped"
@@ -1132,7 +1136,7 @@ PY
         # The dialog: the kept one is ticked, the SSH one offered; keep both,
         # and the entry of a check that did not run stays.
         ui_checklist() { shift; while [[ $# -ge 3 ]]; do echo "$1"; shift 3; done; }
-        ui_msg() { :; }; log() { :; }
+        ui_msg() { :; }; log() { :; }; write_reports() { :; }
         manage_kept
         grep -q $'^check_other\tSomething\t2026-11-01' "$KS/kept" && grep -q $'^check_firewall\tThe firewall opens # port(s) that nothing uses\t2026-11-12' "$KS/kept" \
            && grep -q $'^check_ssh_server\tSSH accepts passwords\t' "$KS/kept" && ! grep -q 'bad line' "$KS/kept" \
@@ -1141,6 +1145,17 @@ PY
         ui_checklist() { return 0; }
         manage_kept
         [[ "$(grep -c . "$KS/kept")" == 1 ]] && grep -q '^check_other' "$KS/kept" && echo "kept-untick-counts-again"
+        # Kept ports cover exactly those ports: a new port counts again; a
+        # kept problem that got worse counts again too.
+        printf 'check_listening_services\t# service(s) can be reached from your network [22/tcp]\t2026-11-12\tSSH\tmedium\ncheck_sudo\tsudo works without a password\t2026-11-12\t\tlow\n' > "$KS/kept"; kept_load
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_FIX=(); F_STATE=(); F_VERIFY=(); F_AFFECT=(); F_KEYX=(); F_KEPT_SEV=()
+        CURRENT_CHECK=check_listening_services
+        finding medium "1 service(s) can be reached from your network" d m true; finding_keep_key "22/tcp"
+        finding medium "2 service(s) can be reached from your network" d m true; finding_keep_key "4444/tcp" "22/tcp"
+        CURRENT_CHECK=check_sudo
+        finding medium "sudo works without a password" d m true
+        kept_apply
+        [[ "${F_STATE[0]}" == kept && "${F_STATE[1]}" == open && "${F_SEV[1]}" == medium && "${F_STATE[2]}" == open ]] && echo "kept-exact-ports-and-severity"
         rm -f "$KS/kept"; ln -s "$W/elsewhere" "$KS/kept"; kept_load
         ! _kept_save "x" && [[ ! -e "$W/elsewhere" ]] && echo "kept-symlink-refused"
         [[ "$(_dashboard_answer '{"action":"keep"}')" == keep ]] && echo "dashboard-keep-action"
@@ -1358,7 +1373,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
-         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked; do
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added; do
     expect "$W/t6.out" "$m" "$m"
 done
 

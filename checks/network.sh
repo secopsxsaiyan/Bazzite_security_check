@@ -293,7 +293,7 @@ fix_firewall_zone() {
     local kdc=0 steam=0 sun=0 sshd_on=0 smb=0 sync=0 lsend=0
 
     { _have kdeconnectd || [[ -x /usr/libexec/kdeconnectd ]] || pgrep -x kdeconnectd >/dev/null 2>&1; } && kdc=1
-    { _have steam || _have bazzite-steam; } && steam=1
+    _steam_installed && steam=1
     [[ -n "$DESKTOP_USER" ]] && _sunshine_installed "$DESKTOP_USER" && sun=1
     { _unit_active sshd.service || [[ "$(_unit_state sshd.service)" == "enabled" ]] || _unit_active sshd.socket; } && sshd_on=1
     _unit_active smb.service && smb=1
@@ -737,9 +737,13 @@ then firewall-cmd --reload (see also the firewall finding)." \
             after="listening on 127.0.0.1 only, or blocked by the firewall (manual)"
         fi
         finding_change "reachable: $(_join ', ' "${eports[@]}")" "$after" "$warn"
-        local -a aff=()
-        mapfile -t aff < <(_ports_affects "!" "Other devices can no longer reach it once its port is closed. Programs on this PC still can." "${eports[@]}")
+        local -a aff=() cports=() c
+        for c in "${close[@]}"; do c="${c#*|}"; cports+=("${c%%|*}"); done
+        mapfile -t aff < <(_ports_affects "!" "Other devices can no longer reach it once its port is closed. Programs on this PC still can." "${cports[@]}"
+                           _ports_affects "" "The fix does not close this port (manual steps); it stays reachable until you change it." "${manual[@]}")
         finding_affects "${aff[@]}"
+        # Kept on purpose covers exactly these ports: a new one counts again.
+        finding_keep_key "${eports[@]}"
     fi
     if [[ ${#blocked[@]} -gt 0 ]]; then
         check_note "Listening but blocked by the firewall: $(_join ', ' "${blocked[@]}")"
@@ -769,6 +773,7 @@ firewall-cmd --reload" \
         for s in "${stale[@]}"; do s="${s#*|}"; sports+=("${s%%|*}"); done
         mapfile -t saff < <(_ports_affects "!" "Nothing uses the port right now, but it may be closed only because the program is not running (Steam, a game server). After the fix, other devices cannot reach it until you open the port again." "${sports[@]}")
         finding_affects "${saff[@]}"
+        finding_keep_key "${sports[@]}"
     fi
 
     if [[ $llmnr -eq 1 ]]; then

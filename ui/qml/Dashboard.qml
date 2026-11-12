@@ -287,6 +287,8 @@ Kirigami.ApplicationWindow {
                                                 font: Kirigami.Theme.smallFont
                                                 opacity: 0.75
                                                 Layout.fillWidth: true
+                                                wrapMode: Text.Wrap
+                                                maximumLineCount: 2
                                                 elide: Text.ElideRight
                                             }
                                         }

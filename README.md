@@ -90,11 +90,11 @@ For a background check once a week (report only, with a notification), add
 
 ## What a fix can affect
 
-Every fix and finding lists the features it touches, in the fix list, the Apply dialog, each check's page and the report. For each one it says how the fix touches it (**stops it**, **changes it**, **you choose** in the fix, or **helps it**) and whether this PC uses it, for example *"in use here: Steam is installed"*.
+Fixes that touch a Bazzite feature say so, in the fix list, the Apply dialog, each check's page and the report. For each one it says how the fix touches it (**stops it**, **changes it**, **you choose** in the fix, or **helps it**) and whether this PC uses it, for example *"in use here: Steam is installed"*.
 
 | Feature | Checks that can touch it | How "in use" is detected |
 | --- | --- | --- |
-| Steam Remote Play and LAN game transfers | firewall zone, open and unused firewall ports | Steam is installed, or you chose game streaming |
+| Steam Remote Play and LAN game transfers | firewall zone, open and unused firewall ports | you chose game streaming (Steam being installed alone is shown as "may be in use") |
 | Sunshine game streaming (Moonlight) | firewall, Sunshine autostart, admin page, UPnP | Sunshine is installed, or you chose game streaming |
 | KDE Connect | firewall zone, firewall ports | KDE Connect is installed |
 | SSH logins to this PC | SSH server and its settings, firewall | an account has `authorized_keys`, or you chose SSH |
@@ -105,11 +105,11 @@ Every fix and finding lists the features it touches, in the fix list, the Apply 
 | Hibernation and unsigned kernel modules | anti-cheat readiness (kernel lockdown) | hibernation is set up, or DKMS/akmods build modules |
 | Game performance | CPU vulnerability protections | Steam is installed, or you chose gaming |
 | Controller-only play and videos | screen locking | Steam is installed, or you chose gaming |
-| Developer tools and scripts | sudo without a password, SSH keys without a passphrase | development tools were detected |
+| Developer tools and scripts | sudo without a password, SSH keys without a passphrase | development tools were detected, or you chose development |
 | Flatpak apps | Flatpak app permissions | the apps listed |
 | Finding this PC by name from Windows PCs | LLMNR | cannot be told; you decide |
 
-**Kept on purpose.** On the dashboard, *Kept on purpose…* lists the problems whose fix would stop a feature you use. Tick the ones you accept: from the next check on they are listed as kept, do not lower the score and are not offered as fixes. Untick one to count it again. The choices are stored in `/var/lib/bazzite-sec-audit/kept`, which only root can change.
+**Kept on purpose.** On the dashboard, *Kept on purpose…* lists the problems whose fix would stop a feature you use. Tick the ones you accept: they are listed as kept, do not lower the score and are not offered as fixes, now and in later checks. A kept problem counts again if it gets more severe, and for open ports only the exact ports you kept are covered - a new one counts again. Untick one to count it again from the next check. The choices are stored in `/var/lib/bazzite-sec-audit/kept`, which only root can change.
 
 ## Install from a release
 

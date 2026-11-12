@@ -218,14 +218,19 @@ check_anticheat_ready() {
 $(printf -- '- %s\n' "${what[@]}")
 ${why}" \
 "$manual" "${fixargs[@]}"
-    [[ ${#need[@]} -gt 0 ]] || { finding_change "$(_join '; ' "${what[@]}")" "Secure Boot on, then lockdown=integrity (manual)"; return 0; }
+    if [[ ${#need[@]} -eq 0 ]]; then
+        finding_change "$(_join '; ' "${what[@]}")" "Secure Boot on, then lockdown=integrity (manual)"
+        finding_affects "anticheat+|This is what the steps are for: games whose Easy Anti-Cheat checks these settings can start."
+        return 0
+    fi
     finding_change "$(_join '; ' "${what[@]}")" "kernel started with: ${need[*]}$([[ $no_sb -eq 1 ]] && echo "; lockdown after Secure Boot is on (manual)")" \
         "$W_REBOOT" \
         "$([[ " ${need[*]} " == *" ${_EAC_LOCKDOWN_KARG} "* ]] && echo "lockdown limits|With lockdown, kernel modules not signed with an enrolled key no longer load, hibernation (suspend to disk) is turned off, and tools that write CPU registers or raw memory (undervolting and some overclocking or RGB tools) stop working. Sleep (suspend to RAM) keeps working.")" \
         "$([[ " ${need[*]} " == *" ${_EAC_KEXEC_KARG} "* ]] && echo "no kexec|kdump crash dumps and fast reboots with 'systemctl kexec' stop working.")"
-    finding_affects \
-        "anticheat+|This is what the fix is for: games whose Easy Anti-Cheat checks these kernel settings can start." \
-        "lockdown!|Kernel lockdown turns hibernation off and stops kernel modules that are not signed with an enrolled key from loading."
+    finding_affects "anticheat+|This is what the fix is for: games whose Easy Anti-Cheat checks these kernel settings can start."
+    # Only the lockdown argument stops hibernation and unsigned modules.
+    [[ " ${need[*]} " == *" ${_EAC_LOCKDOWN_KARG} "* ]] \
+        && finding_affects "lockdown!|Kernel lockdown turns hibernation off and stops kernel modules that are not signed with an enrolled key from loading."
     return 0
 }
 

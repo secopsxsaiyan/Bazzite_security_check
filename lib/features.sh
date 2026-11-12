@@ -8,7 +8,8 @@
 #         this PC uses the feature, and the finding can be kept on purpose)
 #   KEY?  the fix asks what to keep for it
 #   KEY+  the fix is what the feature needs
-#   KEY   the fix changes how the feature works Every place that shows
+#   KEY   the fix changes how the feature works
+# Every place that shows
 # a finding - the fix list, the Apply dialog, a check's page, the report -
 # then says which features are affected and whether this PC uses them
 # ("in use here: Steam is installed"), so the person can decide whether to
@@ -17,9 +18,12 @@
 # A finding can be kept on purpose ("I use this"): from the next check on it
 # is listed as kept, does not lower the score and offers no fix. The choices
 # are in KEPT_FILE (root only), one finding per line:
-#   CHECK_ID<TAB>KEY<TAB>DATE<TAB>FEATURES
-# KEY is the finding's title with numbers replaced by "#", so "3 port(s)"
-# and "4 port(s)" are the same finding.
+#   CHECK_ID<TAB>KEY<TAB>DATE<TAB>FEATURES<TAB>SEVERITY
+# KEY is the finding's title with numbers replaced by "#", so "3 day(s)"
+# and "4 day(s)" are the same finding, followed by the evidence a check
+# gave with finding_keep_key (the exact ports): keeping "port 22 can be
+# reached" does not cover a port that opens later. A kept finding counts
+# again when it gets more severe than when it was kept.
 
 # Feature names, for the person.
 declare -grA FEATURE_NAME=(
@@ -44,6 +48,7 @@ declare -grA FEATURE_NAME=(
 KEPT_FILE=""                    # set once STATE_DIR is ready (see kept_load)
 declare -gA KEPT=()             # "CHECK<TAB>KEY" -> "DATE<TAB>FEATURES"
 declare -ga F_AFFECT=()         # per finding: "KEY|sentence" lines
+declare -ga F_KEYX=()           # per finding: evidence that is part of its kept key
 declare -gA _FEATURE_SEEN=()    # cache: KEY -> "1<TAB>evidence" or "0" or "?"
 
 # finding_affects KEY|SENTENCE... — for the finding just added: the features
@@ -61,6 +66,15 @@ finding_affects() {
     return 0
 }
 
+# finding_keep_key EVIDENCE... — for the finding just added: what it is
+# about (ports, ...). Kept on purpose then covers exactly this evidence.
+finding_keep_key() {
+    local i=$(( ${#F_SEV[@]} - 1 ))
+    (( i >= 0 )) || return 0
+    F_KEYX[i]=$(printf '%s\n' "$@" | tr -d '\t\r' | sed 's/  .*//' | grep -v '^$' | sort -u | paste -sd, -)
+    return 0
+}
+
 # _steam_installed — Steam (native, Bazzite's, or the Flatpak) is installed.
 _steam_installed() {
     _have steam || _have bazzite-steam || _flatpak_installed com.valvesoftware.Steam
@@ -71,7 +85,11 @@ _steam_installed() {
 # told from here.
 _feature_detect() {
     case "$1" in
-        remote_play|anticheat)
+        remote_play)
+            # Steam is on every Bazzite image; that alone does not mean
+            # Remote Play is used (the setup's game streaming answer does).
+            _steam_installed && { echo "Steam is installed"; return 2; } ;;
+        anticheat)
             _steam_installed && { echo "Steam is installed"; return 0; } ;;
         performance|couch)
             _steam_installed && { echo "Steam is installed"; return 0; }
@@ -130,7 +148,7 @@ _feature_use() {
 }
 
 # feature_status KEY — "in<TAB>why" (this PC uses it), "out" (not set up
-# here) or "unknown" (cannot be told). Cached for the run.
+# here) or "unknown<TAB>hint" (cannot be told). Cached for the run.
 feature_status() {
     local key="$1" why rc use
     if [[ -z "${_FEATURE_SEEN[$key]:-}" ]]; then
@@ -141,7 +159,7 @@ feature_status() {
         elif [[ -n "$use" ]]; then
             _FEATURE_SEEN["$key"]="in"$'\t'"you chose ${use} in the setup"
         elif [[ $rc -eq 2 ]]; then
-            _FEATURE_SEEN["$key"]="unknown"
+            _FEATURE_SEEN["$key"]="unknown"$'\t'"${why}"
         else
             _FEATURE_SEEN["$key"]="out"
         fi
@@ -166,17 +184,18 @@ _affects_in_use() {
 
 # affects_list I — finding I's affected features, those in use first, one
 # per line: "KEY<TAB>NAME<TAB>STATUS<TAB>WHY<TAB>MARK<TAB>SENTENCE" (STATUS
-# in, out or unknown; MARK "!", "?", "+" or "-").
+# in, out or unknown; WHY "-" when there is none; MARK "!", "?", "+" or
+# "-"). No field is empty: "read" with a tab IFS would merge empty ones.
 affects_list() {
     local a key st why mark
     while IFS= read -r a; do
         [[ -n "$a" ]] || continue
         key=$(_affect_key "$a"); mark=$(_affect_mark "$a")
         st=$(feature_status "$key")
-        why=""; [[ "$st" == in$'\t'* ]] && why="${st#*$'\t'}"
+        why=""; [[ "$st" == *$'\t'* ]] && why="${st#*$'\t'}"; why="${why//$'\t'/ }"
         st="${st%%$'\t'*}"
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$([[ $st == in ]] && echo 0 || { [[ $st == unknown ]] && echo 1 || echo 2; })" \
-            "$key" "${FEATURE_NAME[$key]}" "$st" "${why//$'\t'/ }" "${mark:--}" "${a#*|}"
+            "$key" "${FEATURE_NAME[$key]}" "$st" "${why:--}" "${mark:--}" "${a#*|}"
     done <<< "${F_AFFECT[$1]:-}" | sort -n -k1,1 -s | cut -f2-
 }
 
@@ -191,7 +210,8 @@ _mark_text() {
 _affect_status_text() {
     case "$1" in
         in) echo "in use here: $2" ;;
-        unknown) echo "can't be told from here - you know best" ;;
+        unknown) if [[ -n "$2" && "$2" != "-" ]]; then echo "$2 - whether you use it can't be told; you know best"
+                 else echo "can't be told from here - you know best"; fi ;;
         *) echo "not set up on this PC" ;;
     esac
 }
@@ -268,26 +288,38 @@ kept_load() {
     KEPT=()
     KEPT_FILE="${STATE_DIR}/kept"
     [[ -f "$KEPT_FILE" && ! -L "$KEPT_FILE" ]] || return 0
-    local c k d f
-    while IFS=$'\t' read -r c k d f; do
+    local c k d f v line
+    # Fields may be empty; tab is whitespace to "read", which would merge
+    # them, so split on a non-whitespace separator.
+    while IFS= read -r line; do
+        IFS=$'\x1f' read -r c k d f v <<< "${line//$'\t'/$'\x1f'}"
         [[ "$c" =~ ^check_[a-z0-9_]+$ && -n "$k" ]] || continue
-        KEPT["${c}"$'\t'"${k}"]="${d}"$'\t'"${f}"
+        [[ "$v" =~ ^(high|medium|low)$ ]] || v=""
+        KEPT["${c}"$'\t'"${k}"]="${d}"$'\t'"${f}"$'\t'"${v}"
     done < "$KEPT_FILE"
     return 0
 }
 
-# _kept_entry CHECK TITLE — "DATE<TAB>FEATURES" when the finding is kept.
+# _kept_key I — finding I's key in the kept file (without the check id).
+_kept_key() {
+    local k
+    k=$(_finding_key "${F_TITLE[$1]}")
+    [[ -n "${F_KEYX[$1]:-}" ]] && k+=" [${F_KEYX[$1]}]"
+    printf '%s' "$k"
+}
+
+# _kept_entry I — "DATE<TAB>FEATURES<TAB>SEVERITY" when finding I is kept.
 _kept_entry() {
     [[ ${#KEPT[@]} -gt 0 ]] || return 1
     local k
-    k=$(_finding_key "$2")
-    [[ -n "${KEPT["$1"$'\t'"$k"]:-}" ]] || return 1
-    printf '%s' "${KEPT["$1"$'\t'"$k"]}"
+    k="${F_CHECK[$1]}"$'\t'"$(_kept_key "$1")"
+    [[ -n "${KEPT[$k]:-}" ]] || return 1
+    printf '%s' "${KEPT[$k]}"
 }
 
 # kept_apply — turn the findings kept on purpose into notes: they no longer
 # lower the score, offer no fix and say since when they are kept. Run after
-# the checks.
+# the checks (and again after the kept list changes).
 kept_apply() {
     local i e d f a
     # Detect the features the findings affect once, in this shell, so the
@@ -297,10 +329,13 @@ kept_apply() {
             [[ -n "$a" ]] && feature_status "$(_affect_key "$a")" >/dev/null
         done <<< "${F_AFFECT[$i]}"
     done
+    local v
     for i in "${!F_SEV[@]}"; do
         [[ "${F_STATE[$i]}" == "open" && "${F_SEV[$i]}" != "info" ]] || continue
-        e=$(_kept_entry "${F_CHECK[$i]}" "${F_TITLE[$i]}") || continue
-        d="${e%%$'\t'*}"; f="${e#*$'\t'}"
+        e=$(_kept_entry "$i") || continue
+        d="${e%%$'\t'*}"; e="${e#*$'\t'}"; f="${e%%$'\t'*}"; v="${e#*$'\t'}"
+        # Worse than when it was kept: it counts again.
+        [[ -n "$v" ]] && (( $(_sev_rank "${F_SEV[$i]}") < $(_sev_rank "$v") )) && continue
         F_KEPT_SEV[i]="${F_SEV[$i]}"
         F_SEV[i]="info"
         F_FIX[i]=""
@@ -399,13 +434,20 @@ manage_kept() {
         rows+=("${k}"$'\t'"${v}")
     done
     for i in "${!want[@]}"; do
-        k="${F_CHECK[$i]}"$'\t'"$(_finding_key "${F_TITLE[$i]}")"
-        v="${KEPT[$k]:-${today}$'\t'$(_kept_features "$i")}"
+        k="${F_CHECK[$i]}"$'\t'"$(_kept_key "$i")"
+        v="${KEPT[$k]:-${today}$'\t'$(_kept_features "$i")$'\t'${F_KEPT_SEV[$i]:-${F_SEV[$i]}}}"
         rows+=("${k}"$'\t'"${v}")
     done
     _kept_save "${rows[@]}" || { ui_error "Could not save the kept problems in ${KEPT_FILE}."; return 0; }
+    # Keeping takes effect now: the dashboard, score and reports update.
+    # A problem unticked here counts again from the next check.
     kept_load
-    ui_msg "Saved. ${#want[@]} problem(s) kept on purpose. This takes effect from the next check."
+    kept_apply
+    compute_score
+    update_score_now
+    _CF_READY=0
+    write_reports
+    ui_msg "Saved: ${#want[@]} problem(s) kept on purpose. The score and the report are updated. A problem you unticked counts again from the next check."
     log "kept on purpose: ${#want[@]} finding(s)"
 }
 

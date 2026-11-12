@@ -130,12 +130,12 @@ _check_row() {
 }
 
 # _check_affects CHECK — the features in use that the fixes of CHECK's open
-# findings (kept ones included) would stop, for the dashboard row.
+# findings would stop, for the dashboard row (kept findings have no fix).
 _check_affects() {
     local i key name st why mark x out=""
     local -A seen=()
     while IFS= read -r i; do
-        [[ -n "$i" ]] && _still_open "$i" || continue
+        [[ -n "$i" && "${F_STATE[$i]}" != "kept" ]] && _still_open "$i" || continue
         while IFS=$'\t' read -r key name st why mark x; do
             [[ "$st" == in && "$mark" == "!" && -z "${seen[$key]:-}" ]] || continue
             seen["$key"]=1
