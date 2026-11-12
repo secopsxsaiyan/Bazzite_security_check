@@ -1197,6 +1197,24 @@ PY
         printf 'check_listening_services\t# service(s) can be reached from your network [22/tcp]\t2026-11-01\tSSH\tmedium\ncheck_listening_services\t# service(s) can be reached from your network [22/tcp,27036/tcp]\t2026-11-05\tSSH\thigh\n' > "$KS/kept"; kept_load
         ui_checklist() { return 0; }; manage_kept
         [[ ! -s "$KS/kept" && -z "$(_keep_candidates | grep $'\ton$')" ]] && echo "kept-overlap-untick-all"
+        # The session remembers the widest keep: [1] medium + [1,22] high keep
+        # a low finding; untick, then tick again: high, both ports, the
+        # earliest date come back.
+        printf 'check_listening_services\t# service(s) can be reached from your network [1/tcp]\t2026-10-01\tSSH\tmedium\ncheck_listening_services\t# service(s) can be reached from your network [1/tcp,22/tcp]\t2026-10-05\tSSH\thigh\n' > "$KS/kept"; kept_load
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_FIX=(); F_STATE=(); F_VERIFY=(); F_AFFECT=(); F_KEYX=(); F_KEPT_SEV=(); F_KEPT_FROM=(); F_KEPT_DATE=(); F_KEPT_PORTS=()
+        finding low "1 service(s) can be reached from your network" d m true; finding_keep_key "1/tcp"; finding_affects "ssh!|x"
+        kept_apply
+        ui_checklist() { return 0; }; manage_kept
+        ui_checklist() { echo 0; }; manage_kept
+        grep -qx $'check_listening_services\t# service(s) can be reached from your network \\[1/tcp,22/tcp\\]\t2026-10-01\t[^\t]*\thigh' "$KS/kept" \
+            && [[ "$(grep -c . "$KS/kept")" == 1 && "${F_STATE[0]}" == kept ]] && echo "kept-retick-restores-widest"
+        # An entry without a level keeps any level; saving it again does not
+        # narrow it to the finding's level.
+        printf 'check_sudo\tsudo works without a password\t2026-10-01\t\t\n' > "$KS/kept"; kept_load
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_FIX=(); F_STATE=(); F_VERIFY=(); F_AFFECT=(); F_KEYX=(); F_KEPT_SEV=(); F_KEPT_FROM=(); F_KEPT_DATE=(); F_KEPT_PORTS=()
+        CURRENT_CHECK=check_sudo; finding low "sudo works without a password" d m true; finding_affects "ssh!|x"
+        kept_apply; manage_kept
+        grep -q $'^check_sudo\tsudo works without a password\t2026-10-01\t.*\thigh$' "$KS/kept" && echo "kept-any-level-stays-any"
         rm -f "$KS/kept"; ln -s "$W/elsewhere" "$KS/kept"; kept_load
         ! _kept_save "x" && [[ ! -e "$W/elsewhere" ]] && echo "kept-symlink-refused"
         [[ "$(_dashboard_answer '{"action":"keep"}')" == keep ]] && echo "dashboard-keep-action"
@@ -1414,7 +1432,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
-         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all; do
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any; do
     expect "$W/t6.out" "$m" "$m"
 done
 

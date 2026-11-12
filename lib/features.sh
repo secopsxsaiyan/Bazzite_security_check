@@ -70,7 +70,8 @@ finding_affects() {
 }
 
 # finding_keep_key EVIDENCE... — for the finding just added: what it is
-# about (ports, ...). Kept on purpose then covers exactly this evidence.
+# about (ports, ...). A kept entry then covers the finding when its kept
+# ports include all of these.
 finding_keep_key() {
     local i=$(( ${#F_SEV[@]} - 1 ))
     (( i >= 0 )) || return 0
@@ -369,6 +370,29 @@ _kept_related() {
     return 0
 }
 
+# _kept_view I — what the kept entries about finding I add up to, as
+# "SEV<TAB>DATE<TAB>PORTS<TAB>FEATURES" ("-" for none): the most severe
+# level a covering entry accepted (one without a level accepts any, written
+# as "high"), the earliest date of a covering entry, and every port of all
+# of them (covering or narrower). A check gives each finding with evidence
+# its own title, so entries of one title are about one problem.
+_kept_view() {
+    local kind k ed ef ev sev="" date="" ports="" feats=""
+    while IFS=$'\t' read -r kind k; do
+        [[ -n "$k" ]] || continue
+        IFS=$'\x1f' read -r ed ef ev <<< "${KEPT[$k]//$'\t'/$'\x1f'}"
+        if [[ "$k" == *" ["*"]" ]]; then k="${k##* [}"; ports+="${ports:+,}${k%]}"; fi
+        # A narrower entry adds only its ports: its date and level were for
+        # fewer ports.
+        [[ "$kind" == cover ]] || continue
+        [[ -n "$ed" && ( -z "$date" || "$ed" < "$date" ) ]] && date="$ed"
+        [[ -z "$feats" ]] && feats="$ef"
+        [[ -n "$ev" ]] || ev=high
+        [[ -z "$sev" ]] || (( $(_sev_rank "$ev") < $(_sev_rank "$sev") )) && sev="$ev"
+    done < <(_kept_related "$1")
+    printf '%s\t%s\t%s\t%s' "${sev:--}" "${date:--}" "${ports:--}" "${feats:--}"
+}
+
 # _kept_match I — a kept entry that covers finding I at its severity now
 # (any of them: one that allows it is enough).
 _kept_match() {
@@ -387,7 +411,7 @@ _kept_match() {
 # lower the score, offer no fix and say since when they are kept. Run after
 # the checks (and again after the kept list changes).
 kept_apply() {
-    local i e d f a
+    local i d f a p
     # Detect the features the findings affect once, in this shell, so the
     # lists drawn later (often in subshells) reuse the result.
     for i in "${!F_AFFECT[@]}"; do
@@ -400,10 +424,13 @@ kept_apply() {
         [[ "${F_STATE[$i]}" == "open" && "${F_SEV[$i]}" != "info" ]] || continue
         # Kept by an entry that allows its severity now (one kept at a
         # milder severity does not count; it is worse now).
-        e=$(_kept_entry "$i") || continue
-        d="${e%%$'\t'*}"; e="${e#*$'\t'}"; f="${e%%$'\t'*}"; v="${e#*$'\t'}"
+        _kept_match "$i" >/dev/null || continue
+        # Remember what all its entries add up to, so an untick and a
+        # re-tick in this session restore the same keep.
+        IFS=$'\t' read -r v d p f <<< "$(_kept_view "$i")"
+        [[ "$f" == - ]] && f=""
         F_KEPT_SEV[i]="${F_SEV[$i]}"
-        F_KEPT_FROM[i]="$v"
+        F_KEPT_FROM[i]="${v#-}"; F_KEPT_DATE[i]="${d#-}"; F_KEPT_PORTS[i]="${p#-}"
         F_SEV[i]="info"
         F_FIX[i]=""
         F_STATE[i]="kept"
@@ -430,7 +457,9 @@ _kept_recount() {
 }
 
 declare -ga F_KEPT_SEV=()       # the severity a kept finding had
-declare -ga F_KEPT_FROM=()      # the severity it was kept at (from the file)
+declare -ga F_KEPT_FROM=()      # the most severe level its kept entries accepted
+declare -ga F_KEPT_DATE=()      # the earliest date of its kept entries
+declare -ga F_KEPT_PORTS=()     # every port of its kept entries
 
 # _keep_candidates — findings that can be kept: open problems whose fix
 # affects a feature this PC uses, and the findings kept already. Prints
@@ -481,11 +510,8 @@ manage_kept() {
         [[ -n "$feats" ]] && row+="  —  for: ${feats}"
         # Kept before at a milder level: say why it is unticked now.
         if [[ "$on" == off && "${F_STATE[$i]}" == open ]]; then
-            while IFS=$'\t' read -r kind k; do
-                [[ "$kind" == cover && -n "$k" ]] || continue
-                was="${KEPT[$k]##*$'\t'}"
-                [[ -n "$was" ]] && { row+="  (kept before at $(_sev_label "$was"), worse now - tick to keep it again)"; break; }
-            done < <(_kept_related "$i")
+            was=$(_kept_view "$i"); was="${was%%$'\t'*}"
+            [[ "$was" != - ]] && row+="  (kept before at $(_sev_label "$was"), worse now - tick to keep it again)"
         fi
         items+=("$i" "$row" "$on")
         offered+=("$i")
@@ -519,18 +545,19 @@ manage_kept() {
     # A ticked problem gets one entry: every port of the entries it
     # replaces and its own, the most severe level any of them accepted (or
     # its own), the earliest date.
-    local ports sev date feats ek ed ef ev
+    local ports sev date feats vs vd vp vf
     for i in "${!want[@]}"; do
-        ports="${F_KEYX[$i]:-}"; sev=$(_orig_sev "$i"); date="$today"; feats=$(_kept_features "$i")
-        [[ -n "${F_KEPT_FROM[$i]:-}" ]] && (( $(_sev_rank "${F_KEPT_FROM[$i]}") < $(_sev_rank "$sev") )) && sev="${F_KEPT_FROM[$i]}"
-        while IFS=$'\t' read -r kind k; do
-            [[ -n "$k" ]] || continue
-            IFS=$'\x1f' read -r ed ef ev <<< "${KEPT[$k]//$'\t'/$'\x1f'}"
-            [[ -n "$ed" && "$ed" < "$date" ]] && date="$ed"
-            [[ -z "$feats" ]] && feats="$ef"
-            [[ -n "$ev" ]] && (( $(_sev_rank "$ev") < $(_sev_rank "$sev") )) && sev="$ev"
-            if [[ "$k" == *" ["*"]" ]]; then ek="${k##* [}"; ports+="${ports:+,}${ek%]}"; fi
-        done < <(_kept_related "$i")
+        # Its own level and ports, what this session remembered from the
+        # entries it had, and what the file holds now - the widest of them.
+        ports="${F_KEYX[$i]:-},${F_KEPT_PORTS[$i]:-}"; sev=$(_orig_sev "$i"); date="${F_KEPT_DATE[$i]:-$today}"
+        feats=$(_kept_features "$i")
+        IFS=$'\t' read -r vs vd vp vf <<< "$(_kept_view "$i")"
+        for vs in "${F_KEPT_FROM[$i]:-}" "${vs#-}"; do
+            [[ -n "$vs" ]] && (( $(_sev_rank "$vs") < $(_sev_rank "$sev") )) && sev="$vs"
+        done
+        [[ "$vd" != - && "$vd" < "$date" ]] && date="$vd"
+        [[ "$vp" != - ]] && ports+=",${vp}"
+        [[ -z "$feats" && "$vf" != - ]] && feats="$vf"
         k="${F_CHECK[$i]}"$'\t'"$(_finding_key "${F_TITLE[$i]}")"
         if [[ -n "${F_KEYX[$i]:-}" ]]; then
             ports=$(tr ',' '\n' <<< "$ports" | grep -v '^$' | sort -u | paste -sd, -)

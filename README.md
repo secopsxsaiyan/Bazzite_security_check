@@ -90,7 +90,7 @@ For a background check once a week (report only, with a notification), add
 
 ## What a fix can affect
 
-Fixes that touch a Bazzite feature say so, in the fix list, the Apply dialog, each check's page and the report. For each one it says how the fix touches it (**stops it**, **changes it**, **you choose** in the fix, or **helps it**) and whether this PC uses it, for example *"in use here: Steam is installed"*.
+Fixes that touch a Bazzite feature say so, in the fix list, the Apply dialog, each check's page and the report. For each one it says how the fix touches it (**stops it**, **changes it**, **you choose** in the fix, **helps it**, or **left as it is** when only the manual steps would change it) and whether this PC uses it, for example *"in use here: Steam is installed"*.
 
 | Feature | Checks that can touch it | How "in use" is detected |
 | --- | --- | --- |
