@@ -442,7 +442,8 @@ kept_apply() {
         F_SEV[i]="info"
         F_FIX[i]=""
         F_STATE[i]="kept"
-        F_DETAIL[i]="Kept on purpose${d:+ since ${d#-}}${f:+ (for ${f})}: this does not lower the score. Change it under \"Kept on purpose\" on the dashboard."$'\n'"${F_DETAIL[$i]}"
+        d="${d#-}"
+        F_DETAIL[i]="Kept on purpose${d:+ since ${d}}${f:+ (for ${f})}: this does not lower the score. Change it under \"Kept on purpose\" on the dashboard."$'\n'"${F_DETAIL[$i]}"
     done
     _kept_recount
 }

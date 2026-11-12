@@ -1213,6 +1213,11 @@ assert f[1]["fixable"] is False' "$(_check_input check_firewall)" && echo "check
         # open medium one 5 points: 100 * 15 / 20 = 75.
         [[ "$(_score found)" == 75 ]] && echo "kept-not-scored"
         [[ "$(_finding_state_label 0)" == "Kept on purpose"* && "$(kept_count)" == 1 ]] && kept_offered && echo "kept-labelled"
+        # A kept entry without a date says no "since".
+        printf 'check_sudo\tsudo works without a password\t\t\thigh\n' > "$KS/kept.nodate"
+        ( KEPT_FILE=""; STATE_DIR="$KS"; cp "$KS/kept.nodate" "$KS/kept"; kept_load
+          F_SEV=(medium); F_CHECK=(check_sudo); F_TITLE=("sudo works without a password"); F_DETAIL=(d); F_FIX=(x); F_STATE=(open); F_VERIFY=(""); F_AFFECT=(""); F_KEYX=("")
+          kept_apply; [[ "${F_STATE[0]}" == kept && "${F_DETAIL[0]}" == "Kept on purpose: this does not lower"* ]] ) && echo "kept-no-date-no-since"
         # The dialog: the kept one is ticked, the SSH one offered; keep both,
         # and the entry of a check that did not run stays.
         ui_checklist() { shift; while [[ $# -ge 3 ]]; do echo "$1"; shift 3; done; }
@@ -1500,7 +1505,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
-         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked; do
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked kept-no-date-no-since; do
     expect "$W/t6.out" "$m" "$m"
 done
 

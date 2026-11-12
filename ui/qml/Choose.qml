@@ -93,7 +93,7 @@ Kirigami.ApplicationWindow {
                 QQC2.Button {
                     // Not where a tick keeps something (the firewall list):
                     // there, unticking is the risky part.
-                    visible: root.graded && root.d.low_only !== false
+                    visible: root.graded && root.d.low_only !== false && root.items.some(function (i) { return i.risk === "low" })
                     text: "Low risk only"; icon.name: "security-high"
                     onClicked: root.setAll(function (i) { return i.risk === "low" })
                 }

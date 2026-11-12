@@ -328,7 +328,14 @@ fix_flatpak_restrict() {
         IFS='|' read -r inst app flags <<< "$e"
         risk="${risk_of[$e]}"
         case "$risk" in
-            low)    w="Keeps your home folder; files elsewhere open through the file chooser." ;;
+            low)
+                if [[ ",$flags," == *,host,* || ",$flags," == *,hostro,* ]]; then
+                    w="Keeps your home folder; files elsewhere open through the file chooser."
+                elif [[ ",$flags," == *,hostos,* ]]; then
+                    w="Loses only system folders (/usr, /etc); its access to your files does not change."
+                else
+                    w="Loses only host commands and system services it should not need."
+                fi ;;
             medium) w="May lose folders or host commands it uses (${why_of[$e]}). Undo it or allow them again in Flatseal if it does." ;;
             *)      w="Its job needs the host (${why_of[$e]}): it will probably stop working after this." ;;
         esac

@@ -838,7 +838,7 @@ _port_close_risk() {
         [[ "$st" == *$'\t'* ]] && why="${st#*$'\t'}"
         case "${st%%$'\t'*}" in
             in)      echo "high|Closing it stops ${FEATURE_NAME[$key]} from other devices (in use here: ${why}).|off"; return 0 ;;
-            unknown) echo "medium|It belongs to ${FEATURE_NAME[$key]}${why:+ (${why})}; other devices lose it if you use that.|on"; return 0 ;;
+            unknown) echo "medium|It belongs to ${FEATURE_NAME[$key]}${why:+ (${why})}; other devices lose it if you use that.|off"; return 0 ;;
         esac
     fi
     echo "low|A program you start on this port later is only reachable from this PC until you open it again.|on"
