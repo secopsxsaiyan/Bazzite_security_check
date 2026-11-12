@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" width="22" height="22">
+  <style type="text/css" id="current-color-scheme">.ColorScheme-Text { color:#232629; }</style>
+  <!-- gamepad with a pointed shield crest; cut out: the check and one button per wing -->
+  <path class="ColorScheme-Text" fill="currentColor" fill-rule="evenodd" d="M5.5 7 H6 V4 L11 1.5 L16 4 V7 H16.5 C19 7 21 10 21 13.6 C21 17.8 19.7 20.5 17.6 20.5 C16 20.5 15.2 18.8 14.4 17 H7.6 C6.8 18.8 6 20.5 4.4 20.5 C2.3 20.5 1 17.8 1 13.6 C1 10 3 7 5.5 7 Z M5.11 11.75 L9.43 16.20 L15.41 9.72 A1.65 1.65 0 0 0 12.99 7.48 L9.37 11.40 L7.49 9.45 A1.65 1.65 0 0 0 5.11 11.75 Z M5.35 14 A1.45 1.45 0 1 0 2.45 14 A1.45 1.45 0 1 0 5.35 14 Z M19.55 14 A1.45 1.45 0 1 0 16.65 14 A1.45 1.45 0 1 0 19.55 14 Z"/>
+</svg>

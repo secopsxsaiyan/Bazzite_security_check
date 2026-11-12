@@ -1,0 +1,4 @@
+# Modules are sourced by bazzite-sec-audit.sh; follow them.
+external-sources=true
+# Markdown backticks inside single-quoted printf formats are intended.
+disable=SC2016

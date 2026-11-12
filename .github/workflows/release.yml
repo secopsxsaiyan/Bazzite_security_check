@@ -1,0 +1,81 @@
+name: Release
+
+# A tag vX.Y.Z publishes Security Check X.Y.Z: the source archive, its
+# SHA256SUMS, and SHA256SUMS.sig, an SSH signature made with the release
+# key (secret RELEASE_SIGNING_KEY). The tool's updater installs a release
+# only when that signature verifies against release-signers and the
+# archive matches its checksum.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Publish release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Protect this environment (Settings → Environments → release: required
+    # reviewers, and move RELEASE_SIGNING_KEY into it) so no tag is signed
+    # without approval.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: The tagged commit is on main
+        # fetch-depth: 0 already fetched every branch (origin/main); no
+        # fetch here, as the checkout keeps no credentials.
+        run: |
+          git rev-parse --verify --quiet origin/main > /dev/null \
+            || { echo "origin/main was not fetched"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "the tag does not point at a commit on main"; exit 1; }
+      - name: The tag matches the version in the tool
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          [[ "$v" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || { echo "bad tag $GITHUB_REF_NAME"; exit 1; }
+          grep -qx "readonly SCRIPT_VERSION=\"${v}\"" bazzite-sec-audit.sh \
+            || { echo "SCRIPT_VERSION is not ${v}"; exit 1; }
+          grep -q "^## \[${v}\]" CHANGELOG.md || { echo "CHANGELOG has no [${v}] section"; exit 1; }
+      - name: Lint and smoke test before signing
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          make lint
+          make test
+      - name: Archive and checksums
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          mkdir dist
+          git archive --format=tar.gz --prefix="bazzite-sec-audit-${v}/" \
+            -o "dist/bazzite-sec-audit-${v}.tar.gz" "$GITHUB_SHA"
+          (cd dist && sha256sum "bazzite-sec-audit-${v}.tar.gz" > SHA256SUMS)
+      - name: Sign the checksums
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          [[ -n "$RELEASE_SIGNING_KEY" ]] || { echo "secret RELEASE_SIGNING_KEY is not set"; exit 1; }
+          umask 077
+          key="$RUNNER_TEMP/release-key"
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+          ssh-keygen -q -Y sign -f "$key" -n bazzite-sec-audit-release dist/SHA256SUMS
+          rm -f "$key"
+          # The same check the tool makes before installing.
+          ssh-keygen -Y verify -f release-signers -I release@bazzite-sec-audit \
+            -n bazzite-sec-audit-release -s dist/SHA256SUMS.sig < dist/SHA256SUMS
+      - name: Release notes
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v h="## [${v}]" 'index($0, h) == 1 { p = 1; next } /^## \[/ { if (p) exit } p' CHANGELOG.md > notes.md
+          test -s notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "Security Check ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag

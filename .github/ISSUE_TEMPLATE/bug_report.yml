@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a malfunction, incorrect finding, or regression.
+title: ""
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please include enough detail for us to reproduce it.
+        Remove or redact anything sensitive before sharing logs or reports.
+  - type: input
+    id: image
+    attributes:
+      label: Bazzite image / OS version
+      placeholder: e.g. Bazzite KDE, stable, 2026-xx
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Interface mode
+      options:
+        - KDE GUI
+        - terminal / --no-gui
+        - both
+        - not sure
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command used
+      placeholder: ./bazzite-sec-audit.sh --no-gui
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or redacted report excerpt
+      placeholder: Paste the smallest useful excerpt. Redact hostnames, usernames, keys, and network details.
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      placeholder: Relevant system details, last known good version, screenshots, etc.

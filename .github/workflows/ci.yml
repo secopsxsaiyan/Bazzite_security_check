@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: ShellCheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install ShellCheck
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+      - name: make lint
+        run: |
+          shellcheck --version
+          make lint
+
+  smoke:
+    name: Smoke test
+    # tests/smoke.sh needs root and creates a test user, so it only runs on
+    # a throwaway machine: a hosted runner is one.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: make test
+        run: make test

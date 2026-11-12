@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest an enhancement or new check.
+title: ""
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please explain the problem the feature would solve and how it would be used.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      placeholder: What workflow or risk does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      placeholder: Describe the change or behavior you want.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and scope
+      placeholder: What systems, images, or user profiles does it affect?
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      placeholder: Related checks, examples, references, or concerns.
