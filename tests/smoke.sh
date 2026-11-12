@@ -409,7 +409,7 @@ expect "$W/run2.out" "✖  System image signature  —  1 high · fix available"
 expect "$W/run2.out" "Choose what to fix" "fix list shown"
 expect "$W/run2.out" "[x] 1. HIGH · System updates are installed without checking their signature" "high fix ticked in the list"
 expect "$W/run2.out" "→ same image and updates, signature checked" "fix list shows now → after"
-expect "$W/run2.out" "[medium risk]  ⚠ downloads: Downloads data while the fix runs; this can take several minutes.; needs a reboot: " "fix list shows side effects and risk"
+expect "$W/run2.out" "[medium risk]  ⚠ Downloads: Downloads data while the fix runs; this can take several minutes. · Needs a reboot: " "fix list shows side effects and risk"
 expect "$W/run2.out" "Now  image pulled without a signature check (ostree-unverified-registry)" "fix dialog shows the current setting"
 expect "$W/run2.out" "Before you apply:" "fix dialog lists the side effects"
 expect "$W/run2.out" "Fixes: 1 applied · 2 skipped · 0 failed" "session summary"
@@ -1148,6 +1148,30 @@ assert f[1]["fixable"] is False' "$(_check_input check_firewall)" && echo "check
         feature_status() { [[ "$1" == remote_play ]] && printf 'in\tSteam is installed' || printf 'out'; }
         [[ "$(_port_close_risk 27036/tcp)" == "high|"*"in use here: Steam is installed"*"|off" && "$(_port_close_risk 8000/tcp)" == low\|*\|on ]] \
             && echo "port-close-risk"
+        # Where a tick keeps something (the firewall list) there is no "Low
+        # risk only"; the fix list rates a fix that may stop an undetectable
+        # feature medium, with a warning.
+        python3 -I -c 'import json,sys; assert json.loads(sys.argv[1])["low_only"] is False and json.loads(sys.argv[2])["low_only"] is True' \
+            "$(UI_CHOOSE_LOWONLY=0 _choose_input t a A on)" "$(_choose_input t a A on)" \
+            && grep -q 'UI_CHOOSE_LOWONLY=0 UI_CHOOSE_NOTE=0 ui_checklist "Choose what other devices' "$HERE/../checks/network.sh" && echo "firewall-list-no-low-only"
+        feature_status() { [[ "$1" == remote_play ]] && printf 'unknown\tSteam is installed' || printf 'out'; }
+        F_AFFECT[0]="remote_play!|x"; F_WARN[0]=""
+        [[ "$(_ui_item_part "$(_fix_item 0)" 2)" == medium && "$(_ui_item_part "$(_fix_item 0)" 3)" == "May stop Steam Remote Play"* ]] && echo "fix-item-maybe-medium"
+        # The Apply window: a bad answer falls back to the plain dialog;
+        # closing it skips the fix.
+        eval "$(sed -n '/^apply_change() {/,/^}/p' "$HERE/../lib/fixes.sh")"   # earlier tests stubbed it
+        ui_choice3() { echo choice3 > "$W/c3"; return 1; }
+        CURRENT_FINDING=0; : > "$W/c3"; APP_OUT='{"choice":"rm"}'; APP_RC=0
+        apply_change "true" "" >/dev/null 2>&1; r1=$?
+        APP_RC=1; : > "$W/c3-none"; apply_change "true" "" >/dev/null 2>&1; r2=$?
+        [[ $r1 -eq 1 && "$(cat "$W/c3")" == choice3 && $r2 -eq 1 ]] && echo "confirm-fallback-and-close-skips"
+        APP_RC=0
+        # The themed dialog: only a button that was there and a tag offered.
+        APP_OUT='{"button":1}'; ui_yesno "q" && APP_OUT='{"button":0}' && ! ui_yesno "q" \
+            && APP_OUT='{"button":7}' && UI_MODE=none && ! ui_yesno "q" && UI_MODE=kde \
+            && APP_OUT='{"button":1,"tag":"b"}' && [[ "$(ui_radiolist "t" a A on b B off)" == b ]] \
+            && APP_OUT='{"button":1,"tag":"zz"}' && UI_MODE=none && [[ "$(ui_radiolist "t" a A on b B off)" == a ]] && echo "dialog-answer-checked"
+        UI_MODE=kde
     )
 
     # The real detection rules: Steam alone does not mean Remote Play is
@@ -1476,7 +1500,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
-         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk; do
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked; do
     expect "$W/t6.out" "$m" "$m"
 done
 

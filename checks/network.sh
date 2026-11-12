@@ -376,7 +376,7 @@ fix_firewall_zone() {
         esac
     done
     local chosen
-    chosen=$(UI_CHOOSE_TITLE="What may other devices reach on this PC?" UI_CHOOSE_ALLOW_NONE=1 ui_checklist "Choose what other devices on your network may reach on this PC.
+    chosen=$(UI_CHOOSE_TITLE="What may other devices reach on this PC?" UI_CHOOSE_ALLOW_NONE=1 UI_CHOOSE_LOWONLY=0 UI_CHOOSE_NOTE=0 ui_checklist "Choose what other devices on your network may reach on this PC.
 Everything not ticked is blocked for incoming connections (this PC can still
 connect out to anything, and games and browsing are not affected).
 Pre-selected from what is installed and how you said you use the PC." "${items[@]}") || return 1
@@ -814,6 +814,19 @@ then: sudo systemctl restart systemd-resolved" \
     return 0
 }
 
+# _port_typical PORT/PROTO — what a port is usually used for ("" if unknown).
+_port_typical() {
+    local n="${1%%/*}"
+    case "$n" in
+        3000|3001|4200|5000|5173|8000|8001|8080|8081|8888|9000) echo "usually a development web server" ;;
+        5432|5433) echo "usually PostgreSQL" ;; 3306) echo "usually MySQL / MariaDB" ;; 6379) echo "usually Redis" ;;
+        27017) echo "usually MongoDB" ;; 11434) echo "usually Ollama" ;; 25565) echo "usually a Minecraft server" ;;
+        19132) echo "usually Minecraft Bedrock" ;; 7777) echo "usually a game server (Terraria, ARK, ...)" ;;
+        2456|2457) echo "usually a Valheim server" ;; 27015|27016) echo "usually a Steam game server" ;;
+        8096) echo "usually Jellyfin" ;; 32400) echo "usually Plex" ;; 22) echo "SSH" ;;
+    esac
+}
+
 # _port_close_risk PORT/PROTO — "RISK|WARNING|on|off" for closing a port:
 # high (and unticked) when it belongs to a feature this PC uses, medium when
 # that cannot be told, low otherwise.
@@ -842,7 +855,7 @@ fix_close_ports() {
         IFS='|' read -r z e what <<< "$a"
         [[ "$z" =~ ^[A-Za-z0-9_-]+$ ]] && _fw_port_entry "$e" || continue
         IFS='|' read -r risk warn on <<< "$(_port_close_risk "$e")"
-        items+=("${z}|${e}" "$(ui_item "${e}" "zone '${z}' - ${what}" "$risk" "$warn")" "$on")
+        items+=("${z}|${e}" "$(ui_item "${e}" "zone '${z}' - ${what}$(t=$(_port_typical "$e"); [[ -n $t ]] && printf ' · %s' "$t")" "$risk" "$warn")" "$on")
         by_tag["${z}|${e}"]="$z"
     done
     [[ ${#items[@]} -gt 0 ]] || return 1

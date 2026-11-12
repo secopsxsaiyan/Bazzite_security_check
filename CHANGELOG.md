@@ -23,8 +23,32 @@ All notable changes to this project are listed here. The format follows
   unticked; unticking a service the PC uses in the firewall list warns.
 - Confirming a fix is a Kirigami window too: now and after, what it
   affects, side effects, the exact commands and whether it can be undone.
+- Every other dialog (messages, questions, errors, the fix summary, the
+  undo and preset lists) is a Kirigami window in the same style; kdialog and
+  the terminal stay as fallbacks.
+- Layered packages show what each package is and are high risk when one of
+  its services runs now (or for drivers, ClamAV, LACT, ...); firewall ports
+  say what they are usually for (a dev web server, PostgreSQL, a game
+  server, ...).
+- Closing the confirm window skips that fix (it no longer ends the review).
+- The fix list only offers "Low risk only" where a tick means a change; the
+  firewall list (where a tick keeps something open) has no such button.
 - The kdialog and terminal versions show each item's risk and warning in
   its line.
+
+### Fixed
+
+- "Open the full report" did nothing: the browser was started without the
+  desktop session's variables (and without Flatpak apps on its path), so no
+  browser was found. It now opens, and says where the report is if it
+  cannot.
+
+### Changed (report)
+
+- The HTML report starts with "What to do next" (each open problem with the
+  one thing to do: fix it in the app, or the first manual step), then the
+  findings grouped as Needs attention, Worth a look, Notes and Fixed. Long
+  lists fold, manual steps fold, and a bar links to each part.
 - Dashboard: a cut-off "In use here" line shows in full as a tooltip; a
   check with only medium problems reads orange, not red.
 - Kept list: names every feature of the kept entries, says when a problem

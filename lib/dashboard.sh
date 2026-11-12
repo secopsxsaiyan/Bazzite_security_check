@@ -305,7 +305,7 @@ _check_input() {
         out+="${out:+,}{\"id\":\"$i\",\"sev\":$(_json_str "${F_SEV[$i]}"),\"title\":$(_json_str "${F_TITLE[$i]}")"
         out+=",\"status\":$(_json_str "$(_finding_state_label "$i")"),\"now\":$(_json_str "${F_NOW[$i]}"),\"after\":$(_json_str "${F_AFTER[$i]}")"
         out+=",\"after_label\":$(_json_str "$([[ -n ${F_FIX[$i]} ]] && echo "After the fix" || echo "Goal")"),\"detail\":$(_json_str "${F_DETAIL[$i]}")"
-        out+=",\"affects\":$(_still_open "$i" && affects_json "$i" || echo '[]'),\"warnings\":$(_warnings_json "${warns[@]}")"
+        out+=",\"affects\":$(if _still_open "$i"; then affects_json "$i"; else echo '[]'; fi),\"warnings\":$(_warnings_json "${warns[@]}")"
         out+=",\"manual\":$(_json_str "$(_still_open "$i" && printf '%s' "${F_MANUAL[$i]}")"),\"fixable\":${fixable},\"on\":${on}}"
     done < <(_check_findings "$id")
     printf '{"id":%s,"title":%s,"area":%s,"state":%s,"summary":%s,"notes":[%s],"findings":[%s]}\n' \
@@ -398,7 +398,12 @@ _open_report() {
         ui_msg "The report is in ${REPORT_HTML}, which only root can read."
         return 0
     fi
-    _as_desktop_user setsid -f xdg-open "$REPORT_HTML" >/dev/null 2>&1 || true
+    # xdg-open hands the file to the browser and returns; say where the
+    # report is when nothing could open it.
+    if ! _as_desktop_user timeout 30 xdg-open "$REPORT_HTML" >/dev/null 2>&1; then
+        log "report: xdg-open failed for ${REPORT_HTML}"
+        ui_msg "The report could not be opened in a browser. Open it yourself: ${REPORT_HTML}"
+    fi
 }
 
 # run_dashboard — show the dashboard until Finish.

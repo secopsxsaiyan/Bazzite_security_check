@@ -284,12 +284,22 @@ rpm-ostree override reset PACKAGE    (or --all), then reboot"
 fix_layered_remove() {
     local -a items=() pick=()
     local p
+    local sum risk warn running u
     for p in "$@"; do
-        if [[ "$p" =~ (akmod|kmod|nvidia|mesa|gamescope|steam|sunshine|tailscale|virt|qemu|libvirt|docker|podman|firmware|driver) ]]; then
-            items+=("$p" "$(ui_item "$p" "layered on the system image" high "A driver or system component: removing it can break graphics, gaming, VMs or a service that needs it.")" off)
-        else
-            items+=("$p" "$(ui_item "$p" "layered on the system image" medium "Its programs are gone after the reboot; install them as a Flatpak, with Homebrew or in a Distrobox if you still need them.")" off)
-        fi
+        # What it is (from the package), and whether a service of it runs now.
+        sum=$(rpm -q --qf '%{SUMMARY}' "$p" 2>/dev/null | head -n1) || sum=""
+        running=$(rpm -ql "$p" 2>/dev/null | grep -E '/systemd/system/[^/]+\.service$' | while read -r u; do
+            _unit_active "${u##*/}" && printf '%s ' "${u##*/}"; done)
+        risk=medium
+        warn="Its programs are gone after the reboot; install them as a Flatpak, with Homebrew or in a Distrobox if you still need them."
+        case "$p" in
+            clamav*|clamd*) risk=high; warn="The deep check's ClamAV malware scan (and any scan you run) stops working after the reboot." ;;
+            lact*) risk=high; warn="LACT controls your GPU's clocks, power limits and fan curve; what it applies stops after the reboot." ;;
+            *akmod*|*kmod*|*nvidia*|mesa*|gamescope*|*firmware*|*driver*) risk=high; warn="A driver or graphics component: removing it can break graphics or gaming." ;;
+            steam*|sunshine*|tailscale*|*virt*|qemu*|docker*|podman*) risk=high; warn="Removing it stops the service or app it provides (games, streaming, VPN, VMs or containers)." ;;
+        esac
+        [[ -n "$running" ]] && { risk=high; warn="Running now: ${running% }. ${warn}"; }
+        items+=("$p" "$(ui_item "$p" "${sum:-layered on the system image}" "$risk" "$warn")" off)
     done
     mapfile -t pick < <(ui_checklist "Which layered packages do you want to remove?
 Leave a package unticked to keep it. Removal takes effect after a reboot." "${items[@]}") || return 1

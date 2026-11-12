@@ -25,6 +25,20 @@ Kirigami.ApplicationWindow {
     }
     function answer(c) { bridge.finish({ "choice": c }) }
 
+    // Descriptions are wrapped at about 78 columns in the checks: join
+    // those lines again (list lines and blank lines stay).
+    function reflow(s) {
+        var out = [], lines = String(s === undefined ? "" : s).split("\n")
+        for (var n = 0; n < lines.length; n++) {
+            var l = lines[n], prev = out.length ? out[out.length - 1] : ""
+            if (out.length && l.trim() !== "" && prev.trim() !== "" && !/^\s*[-•*]\s/.test(l) && !/^\s*[-•*]\s/.test(prev))
+                out[out.length - 1] = prev + " " + l.trim()
+            else
+                out.push(l)
+        }
+        return out.join("\n")
+    }
+
     onClosing: bridge.cancel()
 
     pageStack.initialPage: Kirigami.Page {
@@ -64,7 +78,7 @@ Kirigami.ApplicationWindow {
                                 implicitWidth: sev.implicitWidth + Kirigami.Units.largeSpacing * 2
                                 color: Qt.rgba(root.sevColor(root.d.sev).r, root.sevColor(root.d.sev).g, root.sevColor(root.d.sev).b, 0.15)
                                 border.color: root.sevColor(root.d.sev)
-                                QQC2.Label { id: sev; anchors.centerIn: parent; text: (root.d.sev || "info").toUpperCase(); font: Kirigami.Theme.smallFont; color: root.sevColor(root.d.sev) }
+                                QQC2.Label { id: sev; anchors.centerIn: parent; text: (root.d.sev || "info").toUpperCase() + " SEVERITY"; font: Kirigami.Theme.smallFont; color: root.sevColor(root.d.sev) }
                             }
                             Kirigami.Heading { Layout.fillWidth: true; level: 2; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: root.d.title || "" }
                         }
@@ -98,7 +112,7 @@ Kirigami.ApplicationWindow {
 
                     QQC2.Label {
                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                        text: root.d.detail || ""
+                        text: root.reflow(root.d.detail)
                         maximumLineCount: root.more ? 100000 : 6
                         elide: Text.ElideRight
                     }
@@ -148,7 +162,7 @@ Kirigami.ApplicationWindow {
                         readOnly: true
                         wrapMode: TextEdit.Wrap
                         textFormat: TextEdit.PlainText
-                        font.family: "monospace"
+                        font: Kirigami.Theme.fixedWidthFont
                         text: root.d.commands || ""
                     }
 

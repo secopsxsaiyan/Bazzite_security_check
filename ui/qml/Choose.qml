@@ -91,7 +91,9 @@ Kirigami.ApplicationWindow {
                 QQC2.Button { text: "Select all"; icon.name: "edit-select-all"; onClicked: root.setAll(function () { return true }) }
                 QQC2.Button { text: "Select none"; icon.name: "edit-select-none"; onClicked: root.setAll(function () { return false }) }
                 QQC2.Button {
-                    visible: root.graded
+                    // Not where a tick keeps something (the firewall list):
+                    // there, unticking is the risky part.
+                    visible: root.graded && root.d.low_only !== false
                     text: "Low risk only"; icon.name: "security-high"
                     onClicked: root.setAll(function (i) { return i.risk === "low" })
                 }

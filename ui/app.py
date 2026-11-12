@@ -13,6 +13,7 @@
 #   app.py check     < {"title": ..., "notes": [...], "findings": [...]}
 #   app.py choose    < {"title": ..., "intro": ..., "items": [{tag, label, ...}]}
 #   app.py confirm   < {"title": ..., "now": ..., "commands": ..., ...}
+#   app.py dialog    < {"kind": ..., "title": ..., "html": ..., "buttons": [...]}
 #   app.py progress  < {"heading": ...}, then progress lines until EOF:
 #                      "PERCENT<TAB>SLOW<TAB>LABEL<TAB>DETAIL" (PERCENT "-"
 #                      for no steps, SLOW 1 for a long step); a window and a
@@ -26,7 +27,7 @@ import sys
 HERE = os.path.dirname(os.path.realpath(__file__))
 SCHEMES = {"light": "BreezeLight", "dark": "BreezeDark"}
 QML = {"wizard": "Wizard.qml", "settings": "Settings.qml", "dashboard": "Dashboard.qml", "progress": "Progress.qml",
-       "check": "Check.qml", "choose": "Choose.qml", "confirm": "Confirm.qml"}
+       "check": "Check.qml", "choose": "Choose.qml", "confirm": "Confirm.qml", "dialog": "Dialog.qml"}
 
 
 def _scheme_path(theme):

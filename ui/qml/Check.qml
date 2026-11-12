@@ -49,6 +49,20 @@ Kirigami.ApplicationWindow {
              : a.mark === "+" ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.textColor
     }
 
+    // Descriptions are wrapped at about 78 columns in the checks: join
+    // those lines again (list lines and blank lines stay).
+    function reflow(s) {
+        var out = [], lines = String(s === undefined ? "" : s).split("\n")
+        for (var n = 0; n < lines.length; n++) {
+            var l = lines[n], prev = out.length ? out[out.length - 1] : ""
+            if (out.length && l.trim() !== "" && prev.trim() !== "" && !/^\s*[-•*]\s/.test(l) && !/^\s*[-•*]\s/.test(prev))
+                out[out.length - 1] = prev + " " + l.trim()
+            else
+                out.push(l)
+        }
+        return out.join("\n")
+    }
+
     onClosing: bridge.cancel()
 
     pageStack.initialPage: Kirigami.Page {
@@ -179,7 +193,7 @@ Kirigami.ApplicationWindow {
                                         QQC2.Label {
                                             id: sevLabel
                                             anchors.centerIn: parent
-                                            text: (card.f.sev || "info").toUpperCase()
+                                            text: (card.f.sev || "info").toUpperCase() + " SEVERITY"
                                             font: Kirigami.Theme.smallFont
                                             color: root.sevColor(card.f.sev)
                                         }
@@ -210,7 +224,7 @@ Kirigami.ApplicationWindow {
                                 // Detail: the first lines, the rest on request.
                                 QQC2.Label {
                                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                    text: card.f.detail || ""
+                                    text: root.reflow(card.f.detail)
                                     maximumLineCount: card.more ? 100000 : 6
                                     elide: Text.ElideRight
                                 }
@@ -277,7 +291,7 @@ Kirigami.ApplicationWindow {
                                     readOnly: true
                                     wrapMode: TextEdit.Wrap
                                     textFormat: TextEdit.PlainText
-                                    font.family: "monospace"
+                                    font: Kirigami.Theme.fixedWidthFont
                                     text: card.f.manual || ""
                                 }
                             }

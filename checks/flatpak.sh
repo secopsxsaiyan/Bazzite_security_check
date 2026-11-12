@@ -340,7 +340,7 @@ fix_flatpak_restrict() {
         esac
     done
     mapfile -t pick < <(UI_CHOOSE_TITLE="Which apps should lose these permissions?" ui_checklist "<html><p>Which apps should lose these permissions?</p>
-<p><b>all files</b> becomes your home folder; <b>host commands</b> are removed.<br>
+<p><b>All files</b> becomes your home folder; <b>host commands</b> are removed.<br>
 Selected apps are restricted. Undo later, or change single apps in Flatseal.</p></html>" "${list[@]}") || return 1
     [[ ${#pick[@]} -gt 0 && -n "${pick[0]}" ]] || return 1
     local -a high=()

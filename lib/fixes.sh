@@ -165,7 +165,7 @@ apply_change() {
         out=$(ui_app confirm "$json")
         case $? in
             0) rc=$(_confirm_answer "$out") || { log "confirm: front-end answer rejected"; rc=255; } ;;
-            1) rc=2 ;;
+            1) rc=1 ;;   # closing the window skips this fix
         esac
     fi
     if [[ "$rc" == 255 ]]; then
@@ -278,13 +278,20 @@ _fix_row() {
 # a feature this PC uses, medium with side effects (a reboot, a restart,
 # no undo), low otherwise.
 _fix_item() {
-    local i="$1" tags="" w risk=low warn="" stops
+    local i="$1" tags="" w t risk=low warn="" stops
     while IFS= read -r w; do
-        [[ -n "$w" ]] && tags+="${tags:+; }$(_warn_tag "$w"): $(_warn_text "$w")"
+        [[ -n "$w" ]] || continue
+        t=$(_warn_tag "$w")
+        tags+="${tags:+ · }${t^}: $(_warn_text "$w")"
     done < <(_fix_warnings "$i" "x" "")
     [[ -n "$tags" ]] && { risk=medium; warn="$tags"; }
     stops=$(affects_tags "$i")
-    if [[ -n "$stops" ]]; then risk=high; warn="Stops ${stops} (in use here).${warn:+ $warn}"; fi
+    if [[ -n "$stops" ]]; then
+        risk=high; warn="Stops ${stops} (in use here).${warn:+ $warn}"
+    elif _affects_maybe_in_use "$i"; then
+        # A feature whose use cannot be told (Remote Play): not low risk.
+        risk=medium; warn="May stop $(_kept_features "$i") if you use it.${warn:+ $warn}"
+    fi
     ui_item "$(_sev_label "${F_SEV[$i]}") · ${F_TITLE[$i]//$'\n'/ }$(case "${F_STATE[$i]}" in skipped) echo " (skipped earlier)" ;; failed) echo " (failed earlier)" ;; esac)" \
         "$([[ -n "${F_NOW[$i]}${F_AFTER[$i]}" ]] && printf '%s → %s' "${F_NOW[$i]:-?}" "${F_AFTER[$i]:-?}")" "$risk" "$warn"
 }
@@ -488,18 +495,18 @@ _session_summary() {
                     still)    icon="⚠"; col="$C_MEDIUM" ;;
                     *)        icon="↻"; col="$C_LOW" ;;
                 esac
-                html+="<li><font color=\"${col}\">${icon}</font> $(_html "${F_TITLE[$i]}") - <i>$(_html "$(_verify_label "$i")")</i></li>" ;;
+                html+="<p><font color=\"${col}\">${icon}</font> $(_html "${F_TITLE[$i]}") - <i>$(_html "$(_verify_label "$i")")</i></p>" ;;
             failed)
                 failed=$((failed + 1))
-                html+="<li><font color=\"${C_HIGH}\">✖</font> $(_html "${F_TITLE[$i]}") - <i>failed (see the run log)</i></li>" ;;
+                html+="<p><font color=\"${C_HIGH}\">✖</font> $(_html "${F_TITLE[$i]}") - <i>failed (see the run log)</i></p>" ;;
             *)
                 skipped=$((skipped + 1))
-                html+="<li><font color=\"${C_INFO}\">–</font> $(_html "${F_TITLE[$i]}") - <i>skipped</i></li>" ;;
+                html+="<p><font color=\"${C_INFO}\">–</font> $(_html "${F_TITLE[$i]}") - <i>skipped</i></p>" ;;
         esac
     done
     local score="Score: ${SCORE_NOW}/100 (grade ${GRADE_NOW})"
     [[ "$SCORE_NOW" != "$SCORE" ]] && score="Score: ${SCORE} → <b>${SCORE_NOW}</b>/100 (grade ${GRADE_NOW}), counting fixes that were checked again"
-    ui_page "<html><h3>Fixes: ${applied} applied · ${skipped} skipped · ${failed} failed</h3><ul>${html}</ul><p>${score}</p>$([[ $NEEDS_REBOOT -eq 1 ]] && echo "<p><font color=\"${C_MEDIUM}\"><b>Reboot to finish:</b></font> $(_html "$(_join '; ' "${REBOOT_REASONS[@]}")")</p>")<p>Changed your mind? Use <b>Undo</b> on the dashboard.</p></html>"
+    ui_page "<html><h3>Fixes: ${applied} applied · ${skipped} skipped · ${failed} failed</h3>${html}<p>${score}</p>$([[ $NEEDS_REBOOT -eq 1 ]] && echo "<p><font color=\"${C_MEDIUM}\"><b>Reboot to finish:</b></font> $(_html "$(_join '; ' "${REBOOT_REASONS[@]}")")</p>")<p>Changed your mind? Use <b>Undo</b> on the dashboard.</p></html>"
 }
 
 # ====================== UNDO ======================
