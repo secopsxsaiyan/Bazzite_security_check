@@ -330,7 +330,7 @@ _recheck() {
     (
         FINDINGS_FILE=""; VERBOSE=0; QUIET=1
         F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_MANUAL=(); F_FIX=(); F_STATE=()
-        F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=()
+        F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=(); F_AFFECT=(); F_KEYX=(); F_KEPT_SEV=()
         CHECK_NOTE=(); CHECK_NA=(); CHECK_SKIPPED=(); CHECK_FAILED=(); CHECK_ERRORS=()
         _FW_ZONE_ALL=(); _FW_ZONE_OPEN=(); _FW_SVC_PORTS=()
         CURRENT_CHECK="$id"

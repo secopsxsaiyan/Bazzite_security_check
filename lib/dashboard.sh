@@ -134,17 +134,22 @@ _check_row() {
 # have no fix).
 _check_affects() {
     local i key name st why mark x stop="" ask="" out=""
-    local -A seen=()
+    local -A seen=() names=()
     while IFS= read -r i; do
         [[ -n "$i" && "${F_STATE[$i]}" != "kept" ]] && _still_open "$i" || continue
         while IFS=$'\t' read -r key name st why mark x; do
-            [[ "$st" == in && -z "${seen[$key]:-}" ]] || continue
+            [[ "$st" == in ]] || continue
             case "$mark" in
-                "!") seen["$key"]=1; stop+="${stop:+, }${name}" ;;
-                "?") seen["$key"]=1; ask+="${ask:+, }${name}" ;;
+                "!") seen["$key"]='!' ;;
+                "?") [[ -n "${seen[$key]:-}" ]] || seen["$key"]='?' ;;
             esac
+            names["$key"]="$name"
         done < <(affects_list "$i")
     done < <(_check_findings "$1")
+    # "Stops" wins over "asks" for a feature two findings touch.
+    for key in "${!seen[@]}"; do
+        if [[ "${seen[$key]}" == '!' ]]; then stop+="${stop:+, }${names[$key]}"; else ask+="${ask:+, }${names[$key]}"; fi
+    done
     [[ -n "$stop" ]] && out="fix would stop ${stop}"
     [[ -n "$ask" ]] && out+="${out:+; }fix asks what to keep for ${ask}"
     [[ -n "$out" ]] && printf 'In use here: %s' "$out"

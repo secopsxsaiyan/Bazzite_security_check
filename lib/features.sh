@@ -23,7 +23,8 @@
 # and "4 day(s)" are the same finding, followed by the evidence a check
 # gave with finding_keep_key (the exact ports): keeping "port 22 can be
 # reached" does not cover a port that opens later. A kept finding counts
-# again when it gets more severe than when it was kept.
+# again when it gets more severe than when it was kept. Lines without a
+# severity (written before it was stored) never count again that way.
 
 # Feature names, for the person.
 declare -grA FEATURE_NAME=(
@@ -49,7 +50,7 @@ KEPT_FILE=""                    # set once STATE_DIR is ready (see kept_load)
 declare -gA KEPT=()             # "CHECK<TAB>KEY" -> "DATE<TAB>FEATURES"
 declare -ga F_AFFECT=()         # per finding: "KEY|sentence" lines
 declare -ga F_KEYX=()           # per finding: evidence that is part of its kept key
-declare -gA _FEATURE_SEEN=()    # cache: KEY -> "1<TAB>evidence" or "0" or "?"
+declare -gA _FEATURE_SEEN=()    # cache: KEY -> "in<TAB>why", "out" or "unknown<TAB>hint"
 
 # finding_affects KEY|SENTENCE... — for the finding just added: the features
 # its fix (or the manual steps) affect, and what changes for each. Unknown
@@ -184,6 +185,19 @@ _affects_in_use() {
     return 1
 }
 
+# _affects_maybe_in_use I — finding I's fix stops a feature this PC uses or
+# may use (it cannot be told, as with Steam's Remote Play): such a problem
+# can be kept on purpose, though its fix is not unticked.
+_affects_maybe_in_use() {
+    local a st
+    while IFS= read -r a; do
+        [[ -n "$a" && "$(_affect_mark "$a")" == "!" ]] || continue
+        st=$(feature_status "$(_affect_key "$a")")
+        [[ "$st" == in* || "$st" == unknown* ]] && return 0
+    done <<< "${F_AFFECT[$1]:-}"
+    return 1
+}
+
 # affects_list I — finding I's affected features, those in use first, one
 # per line: "KEY<TAB>NAME<TAB>STATUS<TAB>WHY<TAB>MARK<TAB>SENTENCE" (STATUS
 # in, out or unknown; WHY "-" when there is none; MARK "!", "?", "+" or
@@ -312,11 +326,34 @@ _kept_key() {
 
 # _kept_entry I — "DATE<TAB>FEATURES<TAB>SEVERITY" when finding I is kept.
 _kept_entry() {
-    [[ ${#KEPT[@]} -gt 0 ]] || return 1
     local k
-    k="${F_CHECK[$1]}"$'\t'"$(_kept_key "$1")"
-    [[ -n "${KEPT[$k]:-}" ]] || return 1
+    k=$(_kept_match "$1") || return 1
     printf '%s' "${KEPT[$k]}"
+}
+
+# _kept_match I — the KEPT key that covers finding I. For a finding with
+# evidence (ports), a kept entry covers it when every current port is among
+# the kept ones: a port that is closed now (Steam not running) is still
+# covered, a new port is not.
+_kept_match() {
+    [[ ${#KEPT[@]} -gt 0 ]] || return 1
+    local base k list p ok
+    base="${F_CHECK[$1]}"$'\t'"$(_finding_key "${F_TITLE[$1]}")"
+    if [[ -z "${F_KEYX[$1]:-}" ]]; then
+        [[ -n "${KEPT[$base]:-}" ]] || return 1
+        printf '%s' "$base"
+        return 0
+    fi
+    for k in "${!KEPT[@]}"; do
+        [[ "$k" == "$base ["*"]" ]] || continue
+        list="${k#"$base ["}"; list=",${list%]},"
+        ok=1
+        for p in ${F_KEYX[$1]//,/ }; do
+            [[ "$list" == *",${p},"* ]] || { ok=0; break; }
+        done
+        (( ok )) && { printf '%s' "$k"; return 0; }
+    done
+    return 1
 }
 
 # kept_apply — turn the findings kept on purpose into notes: they no longer
@@ -373,9 +410,11 @@ _keep_candidates() {
     local i
     for i in "${!F_SEV[@]}"; do
         if [[ "${F_STATE[$i]}" == "kept" ]]; then
-            printf '%s\ton\n' "$i"
+            # Ticked from the file, not the run: a problem unticked earlier
+            # in this session stays unticked.
+            if _kept_match "$i" >/dev/null; then printf '%s\ton\n' "$i"; else printf '%s\toff\n' "$i"; fi
         elif [[ "${F_STATE[$i]}" == "open" && "${F_SEV[$i]}" != "info" && "${F_VERIFY[$i]}" != "gone" ]] \
-             && _affects_in_use "$i"; then
+             && _affects_maybe_in_use "$i"; then
             printf '%s\toff\n' "$i"
         fi
     done
@@ -391,7 +430,7 @@ kept_count() {
     echo "$n"
 }
 
-# _kept_features I — the in-use features finding I affects, for the file.
+# _kept_features I — the in-use features finding I's fix stops, for the file.
 _kept_features() {
     local key name st why mark s out=""
     while IFS=$'\t' read -r key name st why mark s; do
@@ -404,40 +443,47 @@ _kept_features() {
 # again. Saved for the next check. Kept entries of checks that did not run
 # this time stay as they are.
 manage_kept() {
-    local -a items=() picked=() rows=()
+    local -a items=() picked=() rows=() offered=()
     local i on row
     while IFS=$'\t' read -r i on; do
         [[ -n "$i" ]] || continue
         row="$(_sev_label "${F_KEPT_SEV[$i]:-${F_SEV[$i]}}") · ${F_TITLE[$i]//$'\n'/ }"
         [[ -n "$(_kept_features "$i")" ]] && row+="  —  for: $(_kept_features "$i")"
         items+=("$i" "$row" "$on")
+        offered+=("$i")
     done < <(_keep_candidates)
     if [[ ${#items[@]} -eq 0 ]]; then
-        ui_msg "Nothing to keep: no open problem here affects a feature this PC uses."
+        ui_msg "Nothing to keep: no open problem here has a fix that would stop a feature this PC uses (or may use)."
         return 0
     fi
     local out
     out=$(ui_checklist "<html><h3>Kept on purpose</h3><p>Tick the problems you accept because you use the feature they are there for (Steam Remote Play, Sunshine, SSH, ...). From the next check on, a kept problem is listed as kept, does not lower the score and is not offered as a fix.</p><p>Untick one to count it again.</p></html>" "${items[@]}") || return 0
     mapfile -t picked <<< "$out"
     local -A want=()
-    for i in "${picked[@]}"; do [[ "$i" =~ ^[0-9]+$ ]] && want["$i"]=1; done
+    local -A is_offered=()
+    for i in "${offered[@]}"; do is_offered["$i"]=1; done
+    for i in "${picked[@]}"; do [[ "$i" =~ ^[0-9]+$ && -n "${is_offered[$i]:-}" ]] && want["$i"]=1; done
 
-    # Keep what this run did not look at; replace what it did.
-    local -A ran=()
-    local c
-    for c in "${CHECK_ORDER[@]}"; do
-        [[ "${CHECK_STATUS[$c]:-}" == "pass" || "${CHECK_STATUS[$c]:-}" == "fail" ]] && ran["$c"]=1
-    done
+    # Every kept entry no offered problem matched stays (a check that did
+    # not run, ports not open right now); the offered ones are replaced by
+    # what was ticked, under the entry that already covered them.
+    local -A drop=()
     local k v today
+    for i in "${offered[@]}"; do
+        k=$(_kept_match "$i") && drop["$k"]=1
+    done
     today=$(date +%Y-%m-%d)
     for k in "${!KEPT[@]}"; do
-        [[ -n "${ran[${k%%$'\t'*}]:-}" ]] && continue
-        v="${KEPT[$k]}"
-        rows+=("${k}"$'\t'"${v}")
+        [[ -n "${drop[$k]:-}" ]] && continue
+        rows+=("${k}"$'\t'"${KEPT[$k]}")
     done
     for i in "${!want[@]}"; do
-        k="${F_CHECK[$i]}"$'\t'"$(_kept_key "$i")"
-        v="${KEPT[$k]:-${today}$'\t'$(_kept_features "$i")$'\t'${F_KEPT_SEV[$i]:-${F_SEV[$i]}}}"
+        if k=$(_kept_match "$i"); then
+            v="${KEPT[$k]}"
+        else
+            k="${F_CHECK[$i]}"$'\t'"$(_kept_key "$i")"
+            v="${today}"$'\t'"$(_kept_features "$i")"$'\t'"${F_KEPT_SEV[$i]:-${F_SEV[$i]}}"
+        fi
         rows+=("${k}"$'\t'"${v}")
     done
     _kept_save "${rows[@]}" || { ui_error "Could not save the kept problems in ${KEPT_FILE}."; return 0; }

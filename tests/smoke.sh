@@ -1157,9 +1157,11 @@ PY
         ui_checklist() { return 0; }
         manage_kept
         [[ "$(grep -c . "$KS/kept")" == 1 ]] && grep -q '^check_other' "$KS/kept" && echo "kept-untick-counts-again"
+        # Reopened in the same session, the unticked problems stay unticked.
+        [[ "${F_STATE[0]}" == kept && -z "$(_keep_candidates | grep $'\ton$')" && "$(_keep_candidates | grep -c $'\toff$')" == 2 ]] && echo "kept-untick-holds-in-session"
         # Kept ports cover exactly those ports: a new port counts again; a
         # kept problem that got worse counts again too.
-        printf 'check_listening_services\t# service(s) can be reached from your network [22/tcp]\t2026-11-12\tSSH\tmedium\ncheck_sudo\tsudo works without a password\t2026-11-12\t\tlow\n' > "$KS/kept"; kept_load
+        printf 'check_listening_services\t# service(s) can be reached from your network [22/tcp,27036/tcp]\t2026-11-12\tSSH\tmedium\ncheck_sudo\tsudo works without a password\t2026-11-12\t\tlow\n' > "$KS/kept"; kept_load
         F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_FIX=(); F_STATE=(); F_VERIFY=(); F_AFFECT=(); F_KEYX=(); F_KEPT_SEV=()
         CURRENT_CHECK=check_listening_services
         finding medium "1 service(s) can be reached from your network" d m true; finding_keep_key "22/tcp"
@@ -1167,7 +1169,15 @@ PY
         CURRENT_CHECK=check_sudo
         finding medium "sudo works without a password" d m true
         kept_apply
+        # 22 alone is covered by the kept 22+27036 (27036 is closed now, Steam
+        # not running); 22+4444 is not (4444 is new).
         [[ "${F_STATE[0]}" == kept && "${F_STATE[1]}" == open && "${F_SEV[1]}" == medium && "${F_STATE[2]}" == open ]] && echo "kept-exact-ports-and-severity"
+        # Saving again keeps the entry that covered it (22+27036), not just 22.
+        _feature_detect() { [[ "$1" == ssh ]] && { echo x; return 0; }; return 1; }; _FEATURE_SEEN=()
+        F_AFFECT[0]="ssh!|x"; F_AFFECT[1]="ssh!|x"
+        ui_checklist() { echo 0; }
+        manage_kept
+        grep -q '\[22/tcp,27036/tcp\]' "$KS/kept" && ! grep -q '\[22/tcp\]' "$KS/kept" && ! grep -q '4444' "$KS/kept" && echo "kept-subset-entry-kept"
         rm -f "$KS/kept"; ln -s "$W/elsewhere" "$KS/kept"; kept_load
         ! _kept_save "x" && [[ ! -e "$W/elsewhere" ]] && echo "kept-symlink-refused"
         [[ "$(_dashboard_answer '{"action":"keep"}')" == keep ]] && echo "dashboard-keep-action"
@@ -1385,7 +1395,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
-         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming; do
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept; do
     expect "$W/t6.out" "$m" "$m"
 done
 

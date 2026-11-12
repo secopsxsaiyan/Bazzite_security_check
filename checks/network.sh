@@ -740,6 +740,8 @@ then firewall-cmd --reload (see also the firewall finding)." \
         finding_change "reachable: $(_join ', ' "${eports[@]}")" "$after" "$warn"
         local -a aff=() cports=() c
         for c in "${close[@]}"; do c="${c#*|}"; cports+=("${c%%|*}"); done
+        # Closed ports first: finding_affects keeps the first entry per
+        # feature, so "stops it" wins over a manual-only port of the same one.
         mapfile -t aff < <(_ports_affects "!" "Other devices can no longer reach it once its port is closed. Programs on this PC still can." "${cports[@]}"
                            _ports_affects "" "The fix does not close this port (manual steps); it stays reachable until you change it." "${manual[@]}")
         finding_affects "${aff[@]}"
