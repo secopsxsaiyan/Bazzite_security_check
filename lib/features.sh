@@ -430,11 +430,12 @@ kept_count() {
     echo "$n"
 }
 
-# _kept_features I — the in-use features finding I's fix stops, for the file.
+# _kept_features I — the features in use (or maybe in use) that finding I's
+# fix stops, for the list and the file.
 _kept_features() {
     local key name st why mark s out=""
     while IFS=$'\t' read -r key name st why mark s; do
-        [[ "$st" == in && "$mark" == "!" ]] && out+="${out:+, }${name}"
+        [[ ( "$st" == in || "$st" == unknown ) && "$mark" == "!" ]] && out+="${out:+, }${name}"
     done < <(affects_list "$1")
     printf '%s' "${out//$'\t'/ }"
 }
@@ -457,7 +458,7 @@ manage_kept() {
         return 0
     fi
     local out
-    out=$(ui_checklist "<html><h3>Kept on purpose</h3><p>Tick the problems you accept because you use the feature they are there for (Steam Remote Play, Sunshine, SSH, ...). From the next check on, a kept problem is listed as kept, does not lower the score and is not offered as a fix.</p><p>Untick one to count it again.</p></html>" "${items[@]}") || return 0
+    out=$(ui_checklist "<html><h3>Kept on purpose</h3><p>Tick the problems you accept because you use the feature they are there for (Steam Remote Play, Sunshine, SSH, ...). A kept problem is listed as kept, does not lower the score and is not offered as a fix - in this run's dashboard and report right away, and in later checks.</p><p>Untick one to count it again from the next check.</p></html>" "${items[@]}") || return 0
     mapfile -t picked <<< "$out"
     local -A want=()
     local -A is_offered=()
@@ -478,8 +479,12 @@ manage_kept() {
         rows+=("${k}"$'\t'"${KEPT[$k]}")
     done
     for i in "${!want[@]}"; do
-        if k=$(_kept_match "$i"); then
+        if k=$(_kept_match "$i") && [[ "${F_STATE[$i]}" == "kept" ]]; then
             v="${KEPT[$k]}"
+        elif [[ -n "$k" ]]; then
+            # Kept before but worse now: ticking it again keeps it at the
+            # severity it has now.
+            v="${today}"$'\t'"$(_kept_features "$i")"$'\t'"${F_SEV[$i]}"
         else
             k="${F_CHECK[$i]}"$'\t'"$(_kept_key "$i")"
             v="${today}"$'\t'"$(_kept_features "$i")"$'\t'"${F_KEPT_SEV[$i]:-${F_SEV[$i]}}"

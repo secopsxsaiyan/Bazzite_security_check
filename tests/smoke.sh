@@ -1178,6 +1178,10 @@ PY
         ui_checklist() { echo 0; }
         manage_kept
         grep -q '\[22/tcp,27036/tcp\]' "$KS/kept" && ! grep -q '\[22/tcp\]' "$KS/kept" && ! grep -q '4444' "$KS/kept" && echo "kept-subset-entry-kept"
+        # Ticking a kept problem that got worse keeps it at its new severity.
+        F_AFFECT[2]="ssh!|x"; ui_checklist() { echo 0; echo 2; }
+        manage_kept
+        grep -q $'^check_sudo\tsudo works without a password\t.*\tmedium$' "$KS/kept" && [[ "${F_STATE[2]}" == kept ]] && echo "kept-worse-reticked"
         rm -f "$KS/kept"; ln -s "$W/elsewhere" "$KS/kept"; kept_load
         ! _kept_save "x" && [[ ! -e "$W/elsewhere" ]] && echo "kept-symlink-refused"
         [[ "$(_dashboard_answer '{"action":"keep"}')" == keep ]] && echo "dashboard-keep-action"
@@ -1395,7 +1399,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
-         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept; do
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked; do
     expect "$W/t6.out" "$m" "$m"
 done
 

@@ -681,7 +681,7 @@ VPN such as Tailscale (ujust enable-tailscale) is the safer way to do that." \
             "restarts Sunshine|Sunshine restarts; an active stream is interrupted." \
             "no streaming from outside|Streaming from outside your home stops working unless you use a VPN such as Tailscale."
         finding_affects \
-            "sunshine|Streaming from outside your home stops unless you use a VPN such as Tailscale. Streaming at home is not affected."
+            "sunshine!|Streaming from outside your home stops unless you use a VPN such as Tailscale. Streaming at home is not affected."
     fi
     if ! _user_cat "$u" "$state" | grep -q '"username"'; then
         finding medium "Sunshine has no admin login yet" \
