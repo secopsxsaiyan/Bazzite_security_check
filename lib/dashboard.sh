@@ -94,12 +94,13 @@ _state_color() {
 
 # _check_row CHECK — the dashboard row: icon, title and what stands now.
 _check_row() {
-    local id="$1" st i sum="" fixable=0 still=0
+    local id="$1" st i sum="" fixable=0 still=0 kept=0
     local -A n=()
     st="${_CSTATE[$id]:-$(_check_state "$id")}"
     while IFS= read -r i; do
         [[ -n "$i" ]] || continue
         [[ "${F_VERIFY[$i]}" == "gone" ]] && continue
+        [[ "${F_STATE[$i]}" == "kept" ]] && kept=$((kept + 1))
         if [[ "${F_STATE[$i]}" == "fixed" ]]; then
             [[ "${F_VERIFY[$i]}" == "still" ]] || continue
             still=1
@@ -118,13 +119,30 @@ _check_row() {
             [[ $still -eq 1 ]] && sum+=" · fix applied, still found" ;;
         reboot)  sum="fixed - active after a reboot" ;;
         fixed)   sum="fixed in this run" ;;
-        note)    sum="${n[info]:-1} note(s)" ;;
+        note)    sum="${n[info]:-1} note(s)"
+                 [[ $kept -gt 0 ]] && sum="${kept} kept on purpose$([[ ${n[info]:-0} -gt $kept ]] && echo ", $(( ${n[info]} - kept )) note(s)")" ;;
         ok)      sum="OK" ;;
         na)      sum="not applicable: $(_clip "${CHECK_NA[$id]:-}" 60)" ;;
         skipped) sum="not checked: $(_clip "${CHECK_SKIPPED[$id]:-}" 60)" ;;
         error)   sum="did not complete (see the run log)" ;;
     esac
     printf '%s  %s  —  %s' "$(_state_icon "$st")" "${CHECK_TITLE[$id]}" "$sum"
+}
+
+# _check_affects CHECK — the features in use that the fixes of CHECK's open
+# findings (kept ones included) would stop, for the dashboard row.
+_check_affects() {
+    local i key name st why mark x out=""
+    local -A seen=()
+    while IFS= read -r i; do
+        [[ -n "$i" ]] && _still_open "$i" || continue
+        while IFS=$'\t' read -r key name st why mark x; do
+            [[ "$st" == in && "$mark" == "!" && -z "${seen[$key]:-}" ]] || continue
+            seen["$key"]=1
+            out+="${out:+, }${name}"
+        done < <(affects_list "$i")
+    done < <(_check_findings "$1")
+    printf '%s' "$out"
 }
 
 # _state_rank STATE — how bad a check state is (for an area's summary).
@@ -226,6 +244,7 @@ _finding_html() {
     h+="<br><i>$(_html "$state")</i></p>"
     h+="$(_now_after_html "${F_NOW[$i]}" "${F_AFTER[$i]}" "$([[ -n ${F_FIX[$i]} ]] && echo "After the fix" || echo "Goal")")"
     h+="<p>$(_rich "${F_DETAIL[$i]}")</p>"
+    _still_open "$i" && h+="$(affects_html "$i")"
     if _still_open "$i"; then
         if [[ -n "${F_FIX[$i]}" ]]; then
             mapfile -t warns < <(_fix_warnings "$i" "x" "")
@@ -312,38 +331,39 @@ _dashboard_input() {
         [[ "$FIX_MODE" != "confirm" ]] && printf 'report_only\t1\n'
         [[ "$REPORT_FALLBACK" -eq 1 ]] && printf 'report_note\t%s\n' "$(_one_line "The report could not be saved in ${REPORT_DIR} (${DESKTOP_USER} cannot write there); it is in ${STATE_DIR}/reports.")"
         printf 'nfix\t%s\nundo\t%s\n' "$nfix" "$(_undo_available && echo 1 || echo 0)"
+        printf 'keep\t%s\nkept\t%s\n' "$(kept_offered && echo 1 || echo 0)" "$(kept_count)"
         while IFS=$'\t' read -r s st; do [[ -n "$s" ]] && printf 'area\t%s\t%s\n' "$(_one_line "$s")" "$st"; done < <(_area_states)
         for id in "${CHECK_ORDER[@]}"; do
             st="${_CSTATE[$id]:-$(_check_state "$id")}"
             row=$(_check_row "$id")
-            printf 'check\t%s\t%s\t%s\t%s\t%s\n' "$id" "$(_one_line "${CHECK_TITLE[$id]}")" "$(_one_line "$(_check_area "$id")")" "$st" "$(_one_line "${row#*  —  }")"
+            printf 'check\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$(_one_line "${CHECK_TITLE[$id]}")" "$(_one_line "$(_check_area "$id")")" "$st" "$(_one_line "$(_check_affects "$id")")" "$(_one_line "${row#*  —  }")"
         done
     } | python3 -I -c '
 import json, sys
 d = {"areas": [], "checks": [], "open": {}}
-ints = {"score", "score_was", "fixed", "verified", "fixed_reboot", "gone", "new", "nfix"}
+ints = {"score", "score_was", "fixed", "verified", "fixed_reboot", "gone", "new", "nfix", "kept"}
 for line in sys.stdin.read().split("\n"):
     f = line.split("\t")
     if not f[0]:
         continue
     if f[0] == "area" and len(f) >= 3:
         d["areas"].append({"name": f[1], "state": f[2]})
-    elif f[0] == "check" and len(f) >= 6:
-        d["checks"].append({"id": f[1], "title": f[2], "area": f[3], "state": f[4], "summary": "\t".join(f[5:])})
+    elif f[0] == "check" and len(f) >= 7:
+        d["checks"].append({"id": f[1], "title": f[2], "area": f[3], "state": f[4], "affects": f[5], "summary": "\t".join(f[6:])})
     elif f[0].startswith("open_") and len(f) >= 2:
         d["open"][f[0][5:]] = int(f[1]) if f[1].isdigit() else 0
     elif len(f) >= 2:
         v = "\t".join(f[1:])
         if f[0] in ints:
             v = int(v) if v.isdigit() else 0
-        elif f[0] in ("prev", "report_only", "undo"):
+        elif f[0] in ("prev", "report_only", "undo", "keep"):
             v = v == "1"
         d[f[0]] = v
 print(json.dumps(d))'
 }
 
 # _dashboard_answer JSON — the dashboard's answer, checked: prints the
-# action ("fix", "report", "undo", "settings", "finish" or "check:ID" for a
+# action ("fix", "report", "undo", "settings", "finish", "keep" or "check:ID" for a
 # known check); status 1 for anything else.
 _dashboard_answer() {
     local a
@@ -354,7 +374,7 @@ try:
 except ValueError:
     sys.exit(1)
 a = d.get("action") if isinstance(d, dict) else None
-if a in ("fix", "report", "undo", "settings", "finish"):
+if a in ("fix", "report", "undo", "settings", "finish", "keep"):
     print(a)
 elif a == "check" and isinstance(d.get("check"), str) and re.fullmatch(r"check_[a-z0-9_]+", d["check"]):
     print("check:" + d["check"])
@@ -371,6 +391,7 @@ _dashboard_offered() {
     case "$1" in
         fix)  [[ "$FIX_MODE" == "confirm" && "${2:-0}" -gt 0 ]] ;;
         undo) _undo_available ;;
+        keep) kept_offered ;;
         report) [[ "$UI_MODE" == "kde" ]] ;;
         *) return 0 ;;
     esac
@@ -410,6 +431,7 @@ run_dashboard() {
         fi
         [[ "$UI_MODE" == "kde" ]] && items+=(report "≡  Open the full report")
         _undo_available && items+=(undo "↺  Undo changes made by this tool…")
+        kept_offered && items+=(keep "★  Kept on purpose (features you use)…  —  $(kept_count) kept")
         items+=(settings "⚙  Settings: theme and updates…")
         for id in "${CHECK_ORDER[@]}"; do
             items+=("check:${id}" "$(_check_row "$id")")
@@ -429,6 +451,7 @@ run_dashboard() {
             report)  _dashboard_offered report && _open_report ;;
             undo)    _dashboard_offered undo && { run_undo; _sync_undone; write_reports; } ;;
             settings) run_settings ;;
+            keep)    _dashboard_offered keep && manage_kept ;;
             check:*) _known_check "${choice#check:}" && show_check "${choice#check:}" ;;
         esac
     done

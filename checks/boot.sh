@@ -121,6 +121,8 @@ systemctl reboot" \
             "$W_REBOOT" \
             "slightly slower|Some games may run a few percent slower. You can undo this if one does." \
             "$([[ -n $img ]] && echo "may come back|These arguments come from the system image, so an update may add them again.")"
+        finding_affects \
+            "performance|Some games may run a few percent slower with the protections on. You can undo this if one does."
     fi
 
     local f v
@@ -221,6 +223,9 @@ ${why}" \
         "$W_REBOOT" \
         "$([[ " ${need[*]} " == *" ${_EAC_LOCKDOWN_KARG} "* ]] && echo "lockdown limits|With lockdown, kernel modules not signed with an enrolled key no longer load, hibernation (suspend to disk) is turned off, and tools that write CPU registers or raw memory (undervolting and some overclocking or RGB tools) stop working. Sleep (suspend to RAM) keeps working.")" \
         "$([[ " ${need[*]} " == *" ${_EAC_KEXEC_KARG} "* ]] && echo "no kexec|kdump crash dumps and fast reboots with 'systemctl kexec' stop working.")"
+    finding_affects \
+        "anticheat+|This is what the fix is for: games whose Easy Anti-Cheat checks these kernel settings can start." \
+        "lockdown!|Kernel lockdown turns hibernation off and stops kernel modules that are not signed with an enrolled key from loading."
     return 0
 }
 

@@ -167,7 +167,7 @@ finding() {
     F_MANUAL+=("$manual")
     F_FIX+=("$fix")
     F_STATE+=("open")
-    F_NOW+=(""); F_AFTER+=(""); F_WARN+=(""); F_VERIFY+=(""); F_RECHECK+=("")
+    F_NOW+=(""); F_AFTER+=(""); F_WARN+=(""); F_VERIFY+=(""); F_RECHECK+=(""); F_AFFECT+=("")
     [[ "$sev" != "info" ]] && CHECK_FAILED["$id"]=1
     record_finding "$id" "$title" "$sev" "$detail"
     if [[ "${VERBOSE:-0}" -eq 1 ]]; then

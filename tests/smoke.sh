@@ -1068,6 +1068,84 @@ PY
             && ! _dashboard_offered undo && _dashboard_offered settings && echo "dashboard-actions-offered-only"
     )
 
+    # What a fix affects: each finding names the Bazzite features it
+    # touches; those this PC uses come first, are marked in use, and their
+    # fixes start unticked. Unknown keys and repeats are dropped.
+    (
+        _feature_detect() {
+            case "$1" in remote_play) echo "Steam is installed"; return 0 ;; game_server) return 2 ;; *) return 1 ;; esac
+        }
+        USE_GAMING=0; USE_STREAMING=0; USE_SSH=0; USE_SHARING=0; USE_DEV=0; _FEATURE_SEEN=()
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_MANUAL=(); F_FIX=(); F_STATE=(); F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=(); F_AFFECT=()
+        FINDINGS_FILE=""; CURRENT_CHECK=check_firewall
+        finding high "Open <b>ports</b>" "d" "m" true
+        finding_affects "sshx|unknown key" "ssh!|SSH stops" "remote_play!|Remote Play stops <i>here</i>" "ssh|again" "game_server?|maybe" "noseparator"
+        mapfile -t L < <(affects_list 0)
+        [[ ${#L[@]} -eq 3 && "${L[0]}" == remote_play$'\t'*$'\t'in$'\t'"Steam is installed"$'\t!\t'* \
+           && "${L[1]}" == game_server$'\t'*$'\t'unknown$'\t\t?\t'* && "${L[2]}" == ssh$'\t'*$'\t'out$'\t\t!\t'* ]] && echo "affects-in-use-first"
+        h=$(affects_html 0)
+        [[ "$h" == *"Steam Remote Play and LAN game transfers</b> - stops it"*"in use here: Steam is installed"* && "$h" == *"&lt;i&gt;here&lt;/i&gt;"* \
+           && "$h" == *"not set up on this PC: SSH logins to this PC"* && "$h" != *"<i>here"* ]] && echo "affects-html-escaped"
+        [[ "$(affects_tags 0)" == "Steam Remote Play and LAN game transfers" ]] && _affects_in_use 0 && echo "affects-tags"
+        finding high "Other problem" "d" "m" true
+        _affects_in_use 1 || echo "affects-none-not-in-use"
+        # High findings start ticked, except one whose fix stops a feature in
+        # use. (An earlier test stubbed _choose_fixes; take the real one.)
+        eval "$(sed -n '/^_choose_fixes() {/,/^}/p' "$HERE/../lib/fixes.sh")"
+        ui_checklist() { shift; while [[ $# -ge 3 ]]; do echo "$1=$3"; shift 3; done; }
+        true() { :; }
+        [[ "$(_choose_fixes | sort | tr '\n' ' ')" == "0=off 1=on " ]] && echo "fix-in-use-unticked"
+        mapfile -t P < <(_ports_affects "!" "s" "27036/tcp" "27031-27036/udp" "47984/tcp  sunshine" "8080/tcp" "22/tcp" "25565/tcp")
+        [[ "${P[*]}" == "remote_play!|s sunshine!|s ssh!|s game_server!|s" ]] && echo "ports-to-features"
+        # "Changes" and "you choose" alone do not untick a fix.
+        F_AFFECT[0]=$'remote_play|changes\nremote_play?|choose'
+        _affects_in_use 0 || echo "affects-change-not-unticked"
+    )
+
+    # Kept on purpose: a kept finding becomes a note that does not lower the
+    # score and offers no fix; counts in titles do not matter; the file is
+    # root's and a symlink is refused; unticking counts it again.
+    (
+        _feature_detect() { [[ "$1" == remote_play ]] && { echo "Steam is installed"; return 0; }; return 1; }
+        USE_GAMING=0; USE_STREAMING=0; USE_SSH=0; USE_SHARING=0; USE_DEV=0; _FEATURE_SEEN=()
+        KS="$W/kept-state"; rm -rf "$KS"; mkdir -p "$KS"; STATE_DIR="$KS"
+        printf 'check_firewall\tThe firewall opens # port(s) that nothing uses\t2026-11-12\tSteam Remote Play\nbad line\ncheck_other\tSomething\t2026-11-01\t\n' > "$KS/kept"
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_MANUAL=(); F_FIX=(); F_STATE=(); F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=(); F_AFFECT=(); F_KEPT_SEV=()
+        CHECK_FAILED=(); CHECK_STATUS=(); CHECK_ORDER=(check_firewall check_ssh_server); CHECK_WEIGHT=([check_firewall]=10 [check_ssh_server]=10)
+        FINDINGS_FILE=""; CURRENT_CHECK=check_firewall
+        finding low "The firewall opens 3 port(s) that nothing uses" "d" "m" true
+        finding_affects "remote_play!|closes Remote Play ports"
+        CHECK_STATUS[check_firewall]=fail
+        CURRENT_CHECK=check_ssh_server
+        finding medium "SSH accepts passwords" "d" "m" true
+        finding_affects "remote_play!|x"
+        CHECK_STATUS[check_ssh_server]=fail
+        kept_load; kept_apply
+        [[ "${F_STATE[0]}" == kept && "${F_SEV[0]}" == info && -z "${F_FIX[0]}" && "${F_KEPT_SEV[0]}" == low \
+           && "${F_DETAIL[0]}" == "Kept on purpose since 2026-11-12 (for Steam Remote Play)"* \
+           && "${CHECK_STATUS[check_firewall]}" == pass && -z "${CHECK_FAILED[check_firewall]:-}" \
+           && "${F_STATE[1]}" == open && "${CHECK_STATUS[check_ssh_server]}" == fail ]] && echo "kept-becomes-note"
+        # Two checks of weight 10: the kept low finding costs nothing, the
+        # open medium one 5 points: 100 * 15 / 20 = 75.
+        [[ "$(_score found)" == 75 ]] && echo "kept-not-scored"
+        [[ "$(_finding_state_label 0)" == "Kept on purpose"* && "$(kept_count)" == 1 ]] && kept_offered && echo "kept-labelled"
+        # The dialog: the kept one is ticked, the SSH one offered; keep both,
+        # and the entry of a check that did not run stays.
+        ui_checklist() { shift; while [[ $# -ge 3 ]]; do echo "$1"; shift 3; done; }
+        ui_msg() { :; }; log() { :; }
+        manage_kept
+        grep -q $'^check_other\tSomething\t2026-11-01' "$KS/kept" && grep -q $'^check_firewall\tThe firewall opens # port(s) that nothing uses\t2026-11-12' "$KS/kept" \
+           && grep -q $'^check_ssh_server\tSSH accepts passwords\t' "$KS/kept" && ! grep -q 'bad line' "$KS/kept" \
+           && [[ "$(stat -c %a "$KS/kept")" == 600 ]] && echo "kept-saved"
+        # Untick everything: only the entry of the check that did not run is left.
+        ui_checklist() { return 0; }
+        manage_kept
+        [[ "$(grep -c . "$KS/kept")" == 1 ]] && grep -q '^check_other' "$KS/kept" && echo "kept-untick-counts-again"
+        rm -f "$KS/kept"; ln -s "$W/elsewhere" "$KS/kept"; kept_load
+        ! _kept_save "x" && [[ ! -e "$W/elsewhere" ]] && echo "kept-symlink-refused"
+        [[ "$(_dashboard_answer '{"action":"keep"}')" == keep ]] && echo "dashboard-keep-action"
+    )
+
     # Progress: the bar shows finished checks scaled to 90%, so it never
     # reads 100% while a check still runs; the slow malware scan holds at
     # 90% with a note; 100% comes only when everything is done.
@@ -1278,7 +1356,9 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          choice3-tty-default dashboard-answer-checked dashboard-input-json dashboard-input-one-line dashboard-actions-offered-only progress-90-until-done busy-no-percent update-verified update-tamper-rejected settings-answer-checked settings-saved-and-loaded wizard-answer-checked wizard-input-json front-end-not-without-kde anticheat-lockdown-with-secure-boot anticheat-pending-and-gaming-only anticheat-fix-and-undo ctr-unsafe-cases-manual ctr-run-kept-old ctr-compose-all-files ctr-compose-manual-forms ctr-rollback-touches-nothing ctr-docker-undo-gated ctr-compose-shared-file flatpak-host-forms flatpak-risk-graded flatpak-low-preset exposed-port-fix-offered service-port-not-closable close-ports-fix-and-undo app-installed app-removed-copy-kept copy-removed-when-unused runtime-only-port-and-bad-zone firewall-extras-blank-lines sysctl-mask-honoured sysctl-conf-in-place \
          avc-count-sources rootless-by-protocol-no-docker-fix pkexec-error-shown \
          undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
-         fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read; do
+         fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
+         affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked; do
     expect "$W/t6.out" "$m" "$m"
 done
 

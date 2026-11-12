@@ -57,6 +57,8 @@ auto-lock does not interrupt them." \
 lock automatically after 10 minutes, and after waking from sleep" \
             fix_screen_lock "$u" "${sets[@]}"
         finding_change "${u}: $(_join ', ' "${now[@]}")" "${u}: $(_join ', ' "${after[@]}")"
+        finding_affects \
+            "couch|The screen can lock while you play with only a controller or watch a video, if that app does not keep the screen awake."
     done
     [[ $checked -gt 0 ]] || mark_na "no user has a Plasma configuration yet"
     return 0
@@ -205,6 +207,8 @@ drive - can use the key (GitHub pushes, servers, ...)." \
 "ssh-keygen -p -f KEY   (adds a passphrase; KDE Wallet can remember it via ksshaskpass,
 so you only type it once per login)"
         finding_change "${#nopass[@]} key(s) without a passphrase" "passphrase set (ssh-keygen -p - manual)"
+        finding_affects \
+            "dev_tools|git, backup scripts and other tools using these keys ask for the passphrase (an SSH agent or KDE Wallet can remember it)."
     fi
     if [[ ${#plain[@]} -gt 0 ]]; then
         finding info "Developer tools store tokens in plain text" \

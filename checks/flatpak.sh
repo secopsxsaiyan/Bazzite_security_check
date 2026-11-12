@@ -289,6 +289,8 @@ flatpak override --nofilesystem=host --filesystem=home --no-talk-name=org.freede
             fix_flatpak_restrict "${items[@]}"
         finding_change "${#items[@]} app(s) can leave the sandbox" "the apps you pick keep your home folder but lose system folders and host commands" \
             "apps may break|An app that really needs the permission (an IDE terminal that must reach the host, a launcher that starts host programs) stops working until you undo the change or allow it again in Flatseal."
+        finding_affects \
+            "flatpak_apps?|The apps you pick lose access to system folders and host commands. A launcher, emulator or IDE that needs them may stop working until you undo the change or allow it in Flatseal."
     fi
     return 0
 }

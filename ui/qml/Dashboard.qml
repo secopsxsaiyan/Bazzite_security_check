@@ -228,6 +228,15 @@ Kirigami.ApplicationWindow {
                         }
                         QQC2.Button { text: "Open the full report"; icon.name: "document-preview"; onClicked: root.act("report") }
                         QQC2.Button { visible: root.d.undo === true; text: "Undo changes…"; icon.name: "edit-undo"; onClicked: root.act("undo") }
+                        QQC2.Button {
+                            visible: root.d.keep === true
+                            text: "Kept on purpose…" + ((root.d.kept || 0) > 0 ? " (" + root.d.kept + ")" : "")
+                            icon.name: "starred-symbolic"
+                            onClicked: root.act("keep")
+                            QQC2.ToolTip.visible: hovered
+                            QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
+                            QQC2.ToolTip.text: "Keep problems you accept because you use the feature they are there for (Steam Remote Play, Sunshine, SSH, ...)."
+                        }
                         QQC2.Button { text: "Settings"; icon.name: "configure"; onClicked: root.act("settings") }
                     }
 
@@ -260,14 +269,27 @@ Kirigami.ApplicationWindow {
                                 delegate: QQC2.ItemDelegate {
                                     Layout.fillWidth: true
                                     onClicked: root.act("check", modelData.id)
-                                    Accessible.name: modelData.title + ", " + modelData.summary
+                                    Accessible.name: modelData.title + ", " + modelData.summary + ((modelData.affects || "") !== "" ? ", fix would stop " + modelData.affects : "")
                                     contentItem: RowLayout {
                                         spacing: Kirigami.Units.largeSpacing
                                         Kirigami.Icon {
                                             source: root.stateIcon(modelData.state)
                                             implicitWidth: Kirigami.Units.iconSizes.smallMedium; implicitHeight: implicitWidth
                                         }
-                                        QQC2.Label { text: modelData.title; textFormat: Text.PlainText; Layout.fillWidth: true; elide: Text.ElideRight }
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 0
+                                            QQC2.Label { text: modelData.title; textFormat: Text.PlainText; Layout.fillWidth: true; elide: Text.ElideRight }
+                                            QQC2.Label {
+                                                visible: (modelData.affects || "") !== ""
+                                                text: "Fix would stop " + (modelData.affects || "") + " (in use here)"
+                                                textFormat: Text.PlainText
+                                                font: Kirigami.Theme.smallFont
+                                                opacity: 0.75
+                                                Layout.fillWidth: true
+                                                elide: Text.ElideRight
+                                            }
+                                        }
                                         QQC2.Label {
                                             text: modelData.summary
                                             textFormat: Text.PlainText
