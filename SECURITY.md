@@ -2,6 +2,8 @@
 
 ## Supported versions
 
+Security fixes go into the latest release only. Update from Settings → Updates (or `--update`) to get them.
+
 The project currently supports Bazzite and related Fedora Atomic desktop images, and the tool is intended for personal desktop use rather than server hardening.
 
 We do not provide security support guarantees for unpublished or unsupported snapshots, or for modifications outside the repository's documented Bazzite-compatible workflows.
@@ -10,10 +12,10 @@ We do not provide security support guarantees for unpublished or unsupported sna
 
 Please do not open a public GitHub issue for security-sensitive problems. Instead, report them privately.
 
-Use one of these routes:
-
-- Create a private security advisory in the GitHub repository security tab, if available for the repository.
-- Or email the maintainer directly using the email address attached to the GitHub account for this repository.
+Use GitHub's private vulnerability reporting: open the repository's
+**Security** tab and choose **Report a vulnerability**, or go straight to
+<https://github.com/secopsxsaiyan/Bazzite_security_check/security/advisories/new>.
+Only the maintainer can see the report.
 
 Include:
 

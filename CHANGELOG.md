@@ -6,8 +6,16 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-12
+
 ### Changed
 
+- The project moved to
+  [secopsxsaiyan/Bazzite_security_check](https://github.com/secopsxsaiyan/Bazzite_security_check).
+  Releases are published there and signed with a new release key
+  (`release-signers`). Copies of 1.1.0 trust the earlier key and look for
+  updates in the old repository, so install 1.2.0 once by hand (see the
+  README); later updates then come through Settings → Updates.
 - The dashboard after the checks is a Kirigami window in the wizard's
   style: a score ring with the grade, the PC and open findings by
   severity, a coloured pill per area, notices (reboot needed, fixed in this
@@ -186,4 +194,7 @@ First release.
   a symlink in a user's folder. Changes to `sshd` and `sudoers` are
   validated and rolled back if they fail.
 
+[Unreleased]: https://github.com/secopsxsaiyan/Bazzite_security_check/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.2.0
+[1.1.0]: https://github.com/secopsxsaiyan/bazzite-sec-audit/releases/tag/v1.1.0
 [1.0.0]: https://github.com/secopsxsaiyan/bazzite-sec-audit/releases/tag/v1.0.0

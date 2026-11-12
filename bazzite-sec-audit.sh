@@ -13,7 +13,7 @@
 # Start it as your normal user (it asks for administrator rights itself):
 #   ./bazzite-sec-audit.sh
 # =============================================================================
-readonly SCRIPT_VERSION="1.1.0"
+readonly SCRIPT_VERSION="1.2.0"
 
 SCRIPT_PATH=$(readlink -f "${BASH_SOURCE[0]}")
 SCRIPT_DIR=$(dirname "$SCRIPT_PATH")
