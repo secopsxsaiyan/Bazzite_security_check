@@ -4,7 +4,9 @@
 // with: required property var input, property string iconSource, a title,
 // signals finished(answer) and cancelled(), and functions primary() (Enter)
 // and dismiss() (Esc). A page may also have initialFocus(), which returns
-// the item that gets the keyboard focus when the page is shown. Between two
+// the item that gets the keyboard focus when the page is shown, and a
+// property scrollArea: the Flickable that PageUp, PageDown, Home, End and
+// the arrow keys scroll (see scrollKey()). Between two
 // requests the last page stays (dimmed, under a spinner, when the next one
 // takes a while), so the window never goes away while the tool works.
 // "dialog" requests (Dialog.qml, sized by its content) are shown over the
@@ -36,13 +38,16 @@ Kirigami.ApplicationWindow {
     // A page or dialog that has just appeared takes no keys and no clicks
     // for this long (ms): an Enter or a double click meant for the page
     // before it must not answer it too (the next page may be "Apply").
-    // The time starts again with every key event and while a mouse button
-    // is down, so a key or button that is still held, or repeating, when
-    // the page appears cannot answer it either: see hold().
+    // The time starts again with every key event and with every press and
+    // release of a mouse button, so a key that is still held, or repeating,
+    // when the page appears cannot answer it either: see hold(). (A mouse
+    // button held since the page before needs no such care: letting go of
+    // it clicks nothing, because the new page never saw it go down.)
     readonly property int settleTime: 350
     // True until the page shown can be operated (tests wait for false).
     readonly property bool settling: settle.running
-    property bool mouseDown: false      // a mouse button is down in the window
+    // The window was hidden and has not drawn the page since: see below.
+    property bool unseen: false
     property Item resume: null          // had the focus when hold() took it
     property bool resumeRing: false     // ... with a focus ring
 
@@ -88,10 +93,19 @@ Kirigami.ApplicationWindow {
             wanted = false
     }
 
-    // A button released while the window was hidden or not the active one
-    // is not seen here: do not wait for it.
-    onActiveChanged: if (!active) mouseDown = false
-    onVisibleChanged: if (!visible) mouseDown = false
+    // The settle pause is for the person: it counts from the first picture
+    // of the page on the screen. A window that was hidden can take longer
+    // than the pause to come up, so the pause starts again with the first
+    // frame drawn after it was shown.
+    onVisibleChanged: unseen = visible
+    Connections {
+        target: root
+        enabled: root.unseen
+        function onFrameSwapped() {
+            root.unseen = false
+            root.hold()
+        }
+    }
 
     Connections {
         target: root.host
@@ -218,9 +232,12 @@ Kirigami.ApplicationWindow {
         if (host) host.reply(id, status, answer)
     }
 
+    // A label that comes while a page waits for its answer is dropped: it
+    // is not about the work that follows that answer.
     function showBusy(label) {
+        if (pendingId !== "") return
         busyLabel = label
-        if (label === "" || pendingId !== "") return
+        if (label === "") return
         grace.stop()
         busyShown = true
         const hidden = !visible
@@ -236,16 +253,18 @@ Kirigami.ApplicationWindow {
         id: settle
         interval: root.settleTime
         onTriggered: {
-            if (root.mouseDown) { restart(); return }
             const slot = root.dialogSlot || root.pageSlot
             const back = root.resume, ring = root.resumeRing
             root.resume = null
             if (!slot || root.pendingId === "") return
-            slot.forceActiveFocus()
             if (root.usable(back) && root.inside(back, slot)) {
+                // Straight to the control, not to its page first: inside
+                // the page it still has the focus, and would get the
+                // keyboard focus back without its ring.
                 back.forceActiveFocus(ring ? Qt.TabFocusReason : Qt.OtherFocusReason)
                 return
             }
+            slot.forceActiveFocus()
             const first = root.current && root.current.initialFocus ? root.current.initialFocus() : null
             if (root.usable(first)) first.forceActiveFocus()
         }
@@ -263,12 +282,14 @@ Kirigami.ApplicationWindow {
             if (p === ancestor) return true
         return false
     }
-    // hold - a key that can answer a page is held down (it repeats) while
-    // a page waits for its answer. A button would take each repeat of
-    // Space as a new click, so the page stops taking input, as when it
-    // appeared, until the key has been up for settleTime. This is what
-    // keeps a key held since the page before from answering this one: its
-    // first repeat can come later than settleTime after the page appeared.
+    // hold - the settle pause starts (again) for the page that waits for
+    // its answer: the page stops taking input, as when it appeared, and
+    // gets the keyboard focus back when the pause is over. Called when a
+    // key that can answer a page is held down (it repeats): a button would
+    // take each repeat of Space as a new click, and each repeat of
+    // Alt+letter is a button's shortcut again. This is what keeps a key
+    // held since the page before from answering this one: its first repeat
+    // can come later than settleTime after the page appeared.
     function hold() {
         if (pendingId === "") return
         if (!settling) {
@@ -279,9 +300,13 @@ Kirigami.ApplicationWindow {
         }
         settle.restart()
     }
-    function answers(key) {
+    // A key event that can answer a page: Space, Enter and Esc, and
+    // anything with Alt (every button has an Alt+letter shortcut).
+    function answers(event) {
+        const key = event.key
         return key === Qt.Key_Space || key === Qt.Key_Return || key === Qt.Key_Enter
             || key === Qt.Key_Escape || key === Qt.Key_Select
+            || (event.modifiers & Qt.AltModifier) !== 0
     }
 
     Timer {
@@ -300,9 +325,11 @@ Kirigami.ApplicationWindow {
     // a switch, a radio row, a row of the Choose page, an option card of
     // the wizard: "checkable") is not a button in that sense: Space ticks
     // it, and Enter is primary(), as in any dialog.
-    // A key that is held down (auto-repeat) never answers anything, and a
-    // page that has just appeared takes no keys at all: see settleTime and
-    // hold().
+    // A page that has just appeared takes no keys at all, and a key that
+    // is held down (auto-repeat) answers nothing, with one exception: Space
+    // held on a button with the keyboard focus presses that button once,
+    // on the page it was pressed on (the button takes the release half of
+    // the first repeat as the end of the press). See settleTime and hold().
     function usable(item) {
         // A control hidden or switched off after it got the focus (a button
         // of another wizard step) keeps it, but is not there for the user.
@@ -313,8 +340,10 @@ Kirigami.ApplicationWindow {
         // starts the wait again: the page is for a person who has let go.
         if (settling) { settle.restart(); event.accepted = true; return }
         if (pendingId === "" || !current) return
-        if (event.isAutoRepeat && answers(event.key)) { hold(); event.accepted = true; return }
+        if (event.isAutoRepeat && answers(event)) { hold(); event.accepted = true; return }
+        // With Ctrl, Shift, Alt or Meta a key means something else.
         if (event.modifiers & ~Qt.KeypadModifier) return
+        if (scrollKey(event.key)) { event.accepted = true; return }
         const esc = event.key === Qt.Key_Escape
         const enter = event.key === Qt.Key_Return || event.key === Qt.Key_Enter
         if (!esc && !enter) return
@@ -331,18 +360,58 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    // PageUp, PageDown, Home, End and the arrow keys scroll the page (or
+    // the dialog over it) when the control with the keyboard focus did not
+    // use them: text without a control in it is reached with the keyboard
+    // too. The page names what scrolls (scrollArea, a Flickable); a page
+    // without one has nothing to scroll. Returns true for a scroll key
+    // that was used.
+    function scrollKey(key) {
+        const area = current ? current.scrollArea : null
+        if (!area || typeof area.contentY !== "number") return false
+        const top = area.originY - area.topMargin
+        const bottom = Math.max(top, area.originY + area.contentHeight + area.bottomMargin - area.height)
+        const page = area.height * 0.9, line = Kirigami.Units.gridUnit * 3
+        let to
+        switch (key) {
+        case Qt.Key_PageDown: to = area.contentY + page; break
+        case Qt.Key_PageUp: to = area.contentY - page; break
+        case Qt.Key_End: to = bottom; break
+        case Qt.Key_Home: to = top; break
+        case Qt.Key_Down: to = area.contentY + line; break
+        case Qt.Key_Up: to = area.contentY - line; break
+        default: return false
+        }
+        area.contentY = Math.min(bottom, Math.max(top, to))
+        return true
+    }
+
     function keyReleased(event) {
         if (settling) { settle.restart(); event.accepted = true; return }
         // The release half of a repeat that the focused control did not
-        // take, because it never saw the press: the key is held.
-        if (pendingId !== "" && event.isAutoRepeat && answers(event.key)) { hold(); event.accepted = true }
+        // take, because it never saw the press: the key is held. (For key
+        // events that were not announced: see keyAnnounced().)
+        if (pendingId !== "" && event.isAutoRepeat && answers(event)) { hold(); event.accepted = true }
     }
-    // Every key press is announced first (so that a control can keep it
-    // from being a shortcut). A repeat of a held key is caught here, before
-    // the control with the focus would take it as a press.
+    // Every key press that comes from the keyboard is announced here
+    // first, whichever control has the keyboard focus, and one that is
+    // accepted here is not looked up as a shortcut. That matters because
+    // every button has a shortcut (Alt and a letter of its label), and a
+    // shortcut answers before keyPressed() is asked: so a page that
+    // settles lets no key become a shortcut, and a repeat of a held key is
+    // caught before a button's shortcut or the control with the focus
+    // would take it as a new press. An accepted press goes on to
+    // keyPressed() as a plain key. (Key events made by a program need not
+    // be announced: for those, keyPressed() and keyReleased() do the same.)
     function keyAnnounced(event) {
-        if (pendingId !== "" && !settling && event.isAutoRepeat && answers(event.key)) hold()
-        event.accepted = false
+        if (settling) {
+            event.accepted = true
+        } else if (pendingId !== "" && event.isAutoRepeat && answers(event)) {
+            hold()
+            event.accepted = true
+        } else {
+            event.accepted = false
+        }
     }
 
     // A closed combo box swallows Enter without doing anything with it:
@@ -396,7 +465,7 @@ Kirigami.ApplicationWindow {
                 anchors.fill: parent
                 z: -1
                 color: Kirigami.Theme.backgroundColor
-                radius: Kirigami.Units.smallSpacing
+                radius: Kirigami.Units.cornerRadius
                 shadow.size: Kirigami.Units.gridUnit
                 shadow.yOffset: Kirigami.Units.smallSpacing
             }
@@ -405,7 +474,7 @@ Kirigami.ApplicationWindow {
                 anchors.fill: parent
                 z: 1
                 color: "transparent"
-                radius: Kirigami.Units.smallSpacing
+                radius: Kirigami.Units.cornerRadius
                 border.width: 1
                 border.color: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.25)
             }
@@ -464,7 +533,7 @@ Kirigami.ApplicationWindow {
             Behavior on opacity { NumberAnimation { duration: Kirigami.Units.shortDuration } }
             width: Math.min(parent.width - Kirigami.Units.gridUnit * 2, busyRow.implicitWidth + Kirigami.Units.gridUnit * 2)
             height: busyRow.implicitHeight + Kirigami.Units.gridUnit * 1.5
-            radius: Kirigami.Units.smallSpacing
+            radius: Kirigami.Units.cornerRadius
             // Alone in the small window it needs no card around it.
             color: root.pageItem ? Kirigami.Theme.backgroundColor : "transparent"
             border.width: root.pageItem ? 1 : 0
@@ -494,17 +563,14 @@ Kirigami.ApplicationWindow {
         }
 
         // Over everything, taking nothing: it sees every press and release
-        // of a mouse button in the window, whatever the click is for. A
-        // button that is down holds the page back as a key does: see
-        // settleTime.
+        // of a mouse button in the window, whatever the click is for. While
+        // a page settles, each one starts the wait again, as a key does:
+        // clicking on and on does not answer the page that comes next.
         Item {
             anchors.fill: parent
             PointHandler {
                 acceptedButtons: Qt.AllButtons
-                onActiveChanged: {
-                    root.mouseDown = active
-                    if (root.settling) settle.restart()
-                }
+                onActiveChanged: if (root.settling) settle.restart()
             }
         }
     }

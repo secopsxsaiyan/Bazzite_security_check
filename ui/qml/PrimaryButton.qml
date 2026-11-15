@@ -1,17 +1,24 @@
 // Security Check - the main button of a page: filled with the highlight
-// colour so it stands out from the other buttons in every Plasma style.
+// colour (a deeper shade of it, so that the label can be read: Util.deep)
+// so it stands out from the other buttons in every Plasma style.
 // Enter presses it from anywhere on the page (Shell.qml: the page's
-// primary()), unless another button has the keyboard focus.
+// primary()), unless another button has the keyboard focus. Confirm.qml is
+// the exception: there, Enter needs the focus on this button.
+// With Alt held down its Alt+letter key is underlined, as on every other
+// button.
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 QQC2.Button {
     id: control
     // "destructive: true" fills it with the negative colour instead.
     property bool destructive: false
-    readonly property color fill: destructive ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.highlightColor
+    readonly property color fill: Util.deep(Kirigami.Theme, destructive ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.highlightColor)
+    // Alt is held down: the letter that presses this button is shown.
+    readonly property bool showsKey: Kirigami.MnemonicData.active && Kirigami.MnemonicData.sequence.toString() !== ""
 
     font.bold: true
     leftPadding: Kirigami.Units.largeSpacing * 2
@@ -43,8 +50,10 @@ QQC2.Button {
             QQC2.Label {
                 Layout.fillWidth: true
                 elide: Text.ElideRight
-                text: control.text
-                textFormat: Text.PlainText
+                // The label may hold text from the PC: plain text, and
+                // escaped where the underline needs styled text.
+                text: control.showsKey ? Util.mnemonic(control.Kirigami.MnemonicData.mnemonicLabel) : control.text
+                textFormat: control.showsKey ? Text.StyledText : Text.PlainText
                 font: control.font
                 color: Kirigami.Theme.highlightedTextColor
             }

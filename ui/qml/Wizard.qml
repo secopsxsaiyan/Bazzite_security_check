@@ -80,6 +80,19 @@ Item {
     function dismiss() { if (step > 0) step--; else page.cancelled() }
     function initialFocus() { return mainButton }
 
+    // A control that gets the keyboard focus comes into view. (A text
+    // field or a link cannot say whether the focus came from the keyboard:
+    // it is brought into view either way.)
+    readonly property Item scrollArea: scroll.contentItem
+    Connections {
+        target: page.Window.window
+        function onActiveFocusItemChanged() {
+            var f = page.Window.activeFocusItem
+            if (f && f.visualFocus !== false && Util.within(f, page.scrollArea))
+                Util.reveal(page.scrollArea, f, Kirigami.Units.gridUnit)
+        }
+    }
+
     // A new step starts at its top.
     onStepChanged: {
         scroll.QQC2.ScrollBar.vertical.position = 0
@@ -170,11 +183,10 @@ Item {
                     Layout.margins: page.sideMargin
                     spacing: Kirigami.Units.gridUnit
 
-                    Kirigami.InlineMessage {
-                        Layout.fillWidth: true
-                        visible: true
-                        type: Kirigami.MessageType.Positive
-                        text: qsTr("<b>Nothing changes without your OK.</b> Every change is shown first and can be undone later.")
+                    Notice {
+                        kind: "positive"
+                        title: qsTr("Nothing changes without your OK.")
+                        text: qsTr("Every change is shown first and can be undone later.")
                     }
                     Section {
                         title: qsTr("This PC")
@@ -201,9 +213,12 @@ Item {
                                         implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
                                         Accessible.ignored: true
                                     }
+                                    // The lock in front and the words say it;
+                                    // the colour is one that can be read as
+                                    // text (Util.ink).
                                     FactValue {
                                         text: page.facts.disk === "yes" ? qsTr("Encrypted (LUKS)") : page.facts.disk === "no" ? qsTr("Not encrypted") : qsTr("Could not tell")
-                                        color: page.facts.disk === "no" ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.textColor
+                                        color: page.facts.disk === "no" ? Util.ink(Kirigami.Theme, Kirigami.Theme.neutralTextColor) : Kirigami.Theme.textColor
                                     }
                                 }
                                 FactName { text: qsTr("Last check") }
@@ -252,10 +267,9 @@ Item {
                     Layout.margins: page.sideMargin
                     spacing: Kirigami.Units.largeSpacing
 
-                    Kirigami.InlineMessage {
-                        Layout.fillWidth: true
+                    Notice {
                         visible: !page.hasFolder
-                        type: Kirigami.MessageType.Warning
+                        kind: "warning"
                         text: qsTr("Choose a report folder below: the check cannot start without one.")
                     }
                     OptionCard {
@@ -307,6 +321,10 @@ Item {
                                         text: page.answers.report_dir || ""
                                         placeholderText: qsTr("No folder chosen")
                                         Accessible.name: qsTr("Report folder")
+                                        // Not the placeholder (which a text field gives as
+                                        // its description) while a folder is chosen.
+                                        Accessible.description: text === "" ? placeholderText
+                                            : qsTr("Read-only. The Choose button next to it picks another folder.")
                                         QQC2.ToolTip.text: Util.tip(text)
                                         QQC2.ToolTip.visible: hovered && contentWidth > width - leftPadding - rightPadding
                                         QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
@@ -381,9 +399,12 @@ Item {
 
         // ---- buttons ------------------------------------------------------
         FooterBar {
+            // Why Settings cannot be used yet: in words on the page, not
+            // only in a tool tip.
+            hint: page.step === 0 && !page.hasFolder ? settingsWhy.text : ""
             leading: [
-                // A switched-off button gets no pointer, so the reason is
-                // shown by the item around it.
+                // A switched-off button gets no pointer, so the tool tip
+                // with the reason is shown by the item around it.
                 Item {
                     visible: page.step === 0
                     implicitWidth: settingsButton.implicitWidth; implicitHeight: settingsButton.implicitHeight
@@ -453,8 +474,10 @@ Item {
             spacing: Kirigami.Units.smallSpacing
             Rectangle {
                 implicitWidth: Kirigami.Units.gridUnit * 1.4; implicitHeight: implicitWidth; radius: width / 2
+                // The current step: a shade of the highlight colour on
+                // which its number can be read.
                 color: stepButton.done ? Kirigami.Theme.positiveTextColor
-                     : stepButton.current ? Kirigami.Theme.highlightColor : "transparent"
+                     : stepButton.current ? Util.deep(Kirigami.Theme, Kirigami.Theme.highlightColor) : "transparent"
                 border.color: stepButton.done || stepButton.current ? color : Kirigami.Theme.disabledTextColor
                 border.width: page.hairline
                 Kirigami.Icon {
@@ -469,7 +492,10 @@ Item {
                     anchors.centerIn: parent
                     visible: !stepButton.done
                     text: stepButton.number + 1
-                    color: stepButton.current ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.disabledTextColor
+                    // A step still to come is dimmed text, not the grey of
+                    // a switched-off control, which is too pale to read.
+                    color: stepButton.current ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
+                    opacity: stepButton.current ? 1 : Util.dimQuiet
                     font.bold: true
                 }
             }
@@ -479,7 +505,8 @@ Item {
                 text: stepButton.name
                 font.bold: stepButton.current
                 font.underline: stepButton.done && (stepButton.hovered || stepButton.visualFocus)
-                color: stepButton.done || stepButton.current ? Kirigami.Theme.textColor : Kirigami.Theme.disabledTextColor
+                color: Kirigami.Theme.textColor
+                opacity: stepButton.done || stepButton.current ? 1 : Util.dimQuiet
             }
         }
         background: Rectangle {
@@ -583,7 +610,8 @@ Item {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
                     text: card.note
                     font: Kirigami.Theme.smallFont
-                    color: Kirigami.Theme.positiveTextColor
+                    // What was found, in green that can be read as text.
+                    color: Util.ink(Kirigami.Theme, Kirigami.Theme.positiveTextColor)
                 }
             }
             // The card around it takes the focus; a click or drag here still works.

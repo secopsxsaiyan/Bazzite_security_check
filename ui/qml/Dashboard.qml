@@ -18,6 +18,8 @@ Item {
 
     readonly property var d: input || ({})
     readonly property int score: d.score || 0
+    // The colour of the grade: the ring has it as it is, the number in the
+    // ring has it made readable as text (Util.ink).
     readonly property color scoreColor: score >= 80 ? Kirigami.Theme.positiveTextColor
                                       : score >= 60 ? Kirigami.Theme.neutralTextColor
                                       : Kirigami.Theme.negativeTextColor
@@ -37,6 +39,37 @@ Item {
     // Scroll so that an item that got keyboard focus is in view.
     function reveal(item) { Util.reveal(flick, item, Kirigami.Units.largeSpacing) }
     function scrollTo(y) { flick.contentY = Math.max(0, Math.min(y, flick.contentHeight - flick.height)) }
+    readonly property Item scrollArea: flick
+
+    // The area chips are one stop for Tab, and so is the list of checks
+    // (all areas together), as the lists of the Choose page and of a
+    // dialog are: Tab stops at the current chip or row, and the arrow
+    // keys, Home and End move between them.
+    property int currentChip: 0
+    property int currentCheck: 0
+    readonly property var checkCounts: (d.areas || []).map(function (a) {
+        return (d.checks || []).filter(function (c) { return c.area === a.name }).length })
+    readonly property int checkTotal: checkCounts.reduce(function (sum, n) { return sum + n }, 0)
+    // The number of the first check of area INDEX in the whole list.
+    function firstOf(index) {
+        var sum = 0
+        for (var n = 0; n < index && n < checkCounts.length; n++) sum += checkCounts[n]
+        return sum
+    }
+    function goToChip(n) {
+        var chip = chipList.itemAt(Math.max(0, Math.min(chipList.count - 1, n)))
+        if (chip) chip.forceActiveFocus(Qt.TabFocusReason)
+    }
+    function goToCheck(n) {
+        n = Math.max(0, Math.min(checkTotal - 1, n))
+        for (var a = 0; a < areaBlocks.count; a++) {
+            var block = areaBlocks.itemAt(a)
+            if (block && n >= block.first && n < block.first + block.rowCount) {
+                block.rowAt(n - block.first).forceActiveFocus(Qt.TabFocusReason)
+                return
+            }
+        }
+    }
     // An area chip was used: show that area's checks, and when it was used
     // with the keyboard carry on from its first check.
     function jumpTo(index, byKeyboard) {
@@ -59,7 +92,7 @@ Item {
 
         // ---- header: score, PC, open problems ------------------------------
         PageHeader {
-            title: qsTr("Security check-up")
+            title: page.title
             subtitle: [page.d.host || "", page.d.os || "", page.d.image || ""].filter(function (s) { return s !== "" }).join(" · ")
 
             leading: Item {
@@ -97,8 +130,8 @@ Item {
                         Layout.alignment: Qt.AlignHCenter
                         text: page.score
                         font.pointSize: Kirigami.Theme.defaultFont.pointSize * 2.2
-                        font.weight: Font.DemiBold
-                        color: page.scoreColor
+                        font.weight: Font.Bold
+                        color: Util.ink(Kirigami.Theme, page.scoreColor)
                     }
                     QQC2.Label {
                         Layout.alignment: Qt.AlignHCenter
@@ -132,23 +165,29 @@ Item {
                     Accessible.name: qsTr("Open problems: %1 high, %2 medium, %3 low, %4 info")
                         .arg(page.open.high || 0).arg(page.open.medium || 0).arg(page.open.low || 0).arg(page.open.info || 0)
                     QQC2.Label { text: qsTr("Open:"); height: highChip.height; verticalAlignment: Text.AlignVCenter }
-                    // A count of none is grey, so the eye goes to what is open.
+                    // A count of none is a grey frame without a fill, so the
+                    // eye goes to what is open; the others have the colour
+                    // of their severity (information is grey everywhere).
                     StatusChip {
                         id: highChip
                         text: qsTr("%1 high").arg(page.open.high || 0)
-                        tint: (page.open.high || 0) > 0 ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.disabledTextColor
+                        quiet: (page.open.high || 0) === 0
+                        tint: quiet ? Kirigami.Theme.disabledTextColor : Util.sevColor(Kirigami.Theme, "high")
                     }
                     StatusChip {
                         text: qsTr("%1 medium").arg(page.open.medium || 0)
-                        tint: (page.open.medium || 0) > 0 ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.disabledTextColor
+                        quiet: (page.open.medium || 0) === 0
+                        tint: quiet ? Kirigami.Theme.disabledTextColor : Util.sevColor(Kirigami.Theme, "medium")
                     }
                     StatusChip {
                         text: qsTr("%1 low").arg(page.open.low || 0)
-                        tint: (page.open.low || 0) > 0 ? Kirigami.Theme.linkColor : Kirigami.Theme.disabledTextColor
+                        quiet: (page.open.low || 0) === 0
+                        tint: quiet ? Kirigami.Theme.disabledTextColor : Util.sevColor(Kirigami.Theme, "low")
                     }
                     StatusChip {
                         text: qsTr("%1 info").arg(page.open.info || 0)
-                        tint: (page.open.info || 0) > 0 ? Kirigami.Theme.textColor : Kirigami.Theme.disabledTextColor
+                        quiet: (page.open.info || 0) === 0
+                        tint: Util.sevColor(Kirigami.Theme, "info")
                     }
                 }
             }
@@ -174,43 +213,40 @@ Item {
                     spacing: Kirigami.Units.largeSpacing
 
                     // ---- what happened in this run ------------------------
-                    Kirigami.InlineMessage {
-                        Layout.fillWidth: true
+                    // The texts from the PC in these are plain text (Notice).
+                    Notice {
                         visible: !!page.d.reboot_reasons
-                        type: Kirigami.MessageType.Warning
-                        text: qsTr("<b>Reboot to finish:</b> %1").arg(Util.esc(page.d.reboot_reasons || ""))
+                        kind: "warning"
+                        title: qsTr("Reboot to finish:")
+                        text: page.d.reboot_reasons || ""
                     }
-                    Kirigami.InlineMessage {
-                        Layout.fillWidth: true
+                    Notice {
                         visible: (page.d.fixed || 0) > 0
-                        type: Kirigami.MessageType.Positive
+                        kind: "positive"
+                        title: qsTr("Fixed in this run:")
                         text: (page.d.fixed_reboot || 0) > 0
-                            ? qsTr("<b>Fixed in this run:</b> %1 (%2 checked again and gone, %3 after a reboot)")
+                            ? qsTr("%1 (%2 checked again and gone, %3 after a reboot)")
                                 .arg(page.d.fixed || 0).arg(page.d.verified || 0).arg(page.d.fixed_reboot || 0)
-                            : qsTr("<b>Fixed in this run:</b> %1 (%2 checked again and gone)")
+                            : qsTr("%1 (%2 checked again and gone)")
                                 .arg(page.d.fixed || 0).arg(page.d.verified || 0)
                     }
-                    Kirigami.InlineMessage {
-                        Layout.fillWidth: true
+                    Notice {
                         visible: page.d.prev === true
-                        type: Kirigami.MessageType.Information
-                        text: (page.d.gone || 0) + (page.d["new"] || 0) === 0 ? qsTr("<b>Since the last check:</b> no changes.")
+                        title: qsTr("Since the last check:")
+                        text: (page.d.gone || 0) + (page.d["new"] || 0) === 0 ? qsTr("no changes.")
                             : page.d.new_titles
-                                ? qsTr("<b>Since the last check:</b> %1 resolved, %2 new - %3")
-                                    .arg(page.d.gone || 0).arg(page.d["new"] || 0).arg(Util.esc(page.d.new_titles))
-                                : qsTr("<b>Since the last check:</b> %1 resolved, %2 new").arg(page.d.gone || 0).arg(page.d["new"] || 0)
+                                ? Util.fill(qsTr("%1 resolved, %2 new - %3"), [page.d.gone || 0, page.d["new"] || 0, page.d.new_titles])
+                                : qsTr("%1 resolved, %2 new").arg(page.d.gone || 0).arg(page.d["new"] || 0)
                     }
-                    Kirigami.InlineMessage {
-                        Layout.fillWidth: true
+                    Notice {
                         visible: page.d.report_only === true
-                        type: Kirigami.MessageType.Information
                         text: qsTr("Report only: nothing on this PC will be changed in this run.")
                     }
-                    Kirigami.InlineMessage {
-                        Layout.fillWidth: true
+                    Notice {
                         visible: !!page.d.report_note
-                        type: Kirigami.MessageType.Warning
-                        text: qsTr("<b>Report:</b> %1").arg(Util.esc(page.d.report_note || ""))
+                        kind: "warning"
+                        title: qsTr("Report:")
+                        text: page.d.report_note || ""
                     }
 
                     // ---- other things to do -------------------------------
@@ -253,6 +289,7 @@ Item {
                             visible: (page.d.areas || []).length > 0
                             spacing: Kirigami.Units.smallSpacing
                             Repeater {
+                                id: chipList
                                 model: page.d.areas || []
                                 delegate: QQC2.AbstractButton {
                                     id: chip
@@ -261,7 +298,17 @@ Item {
                                     readonly property color tint: Util.stateColor(Kirigami.Theme, modelData.state)
                                     // A long area name is cut instead of running off the page.
                                     width: Math.min(implicitWidth, chips.width)
-                                    focusPolicy: Qt.StrongFocus
+                                    // One stop for Tab; Left and Right move
+                                    // between the chips (Up and Down scroll).
+                                    focusPolicy: index === page.currentChip ? Qt.StrongFocus : Qt.ClickFocus
+                                    Keys.onRightPressed: page.goToChip(index + (mirrored ? -1 : 1))
+                                    Keys.onLeftPressed: page.goToChip(index - (mirrored ? -1 : 1))
+                                    Keys.onPressed: function (event) {
+                                        if (event.key === Qt.Key_Home) page.goToChip(0)
+                                        else if (event.key === Qt.Key_End) page.goToChip(chipList.count - 1)
+                                        else return
+                                        event.accepted = true
+                                    }
                                     hoverEnabled: true
                                     leftPadding: Kirigami.Units.largeSpacing; rightPadding: Kirigami.Units.largeSpacing
                                     topPadding: Kirigami.Units.smallSpacing; bottomPadding: Kirigami.Units.smallSpacing
@@ -270,7 +317,10 @@ Item {
                                     Accessible.description: qsTr("Jump to this area in the list of checks")
                                     // Used with the keyboard when the focus came by Tab.
                                     onClicked: page.jumpTo(index, visualFocus)
-                                    onActiveFocusChanged: if (activeFocus && visualFocus) page.reveal(chip)
+                                    onActiveFocusChanged: if (activeFocus) {
+                                        page.currentChip = index
+                                        if (visualFocus) page.reveal(chip)
+                                    }
                                     QQC2.ToolTip.visible: hovered
                                     QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
                                     QQC2.ToolTip.text: Util.tip(Util.fill(qsTr("%1: %2"), [modelData.name, Util.stateName(modelData.state)]))
@@ -300,8 +350,13 @@ Item {
                         delegate: ColumnLayout {
                             id: areaBlock
                             required property var modelData
+                            required property int index
                             readonly property string area: modelData.name
                             readonly property Item firstRow: rows.count > 0 ? rows.itemAt(0) : null
+                            // Where its rows are in the list of all checks.
+                            readonly property int first: page.firstOf(index)
+                            readonly property int rowCount: rows.count
+                            function rowAt(n) { return rows.itemAt(n) }
                             Layout.fillWidth: true
                             spacing: 0
                             Kirigami.ListSectionHeader {
@@ -316,11 +371,33 @@ Item {
                                 delegate: QQC2.ItemDelegate {
                                     id: row
                                     required property var modelData
+                                    required property int index
                                     readonly property string state_: modelData.state || ""
+                                    // Its number in the list of all checks.
+                                    readonly property int number: areaBlock.first + index
                                     Layout.fillWidth: true
-                                    focusPolicy: Qt.StrongFocus
+                                    // One stop for Tab; Up, Down, Home and End
+                                    // move between the checks. Up on the first
+                                    // and Down on the last are left to the
+                                    // window, which scrolls the page.
+                                    focusPolicy: number === page.currentCheck ? Qt.StrongFocus : Qt.ClickFocus
+                                    Keys.onDownPressed: function (event) {
+                                        if (number < page.checkTotal - 1) page.goToCheck(number + 1); else event.accepted = false
+                                    }
+                                    Keys.onUpPressed: function (event) {
+                                        if (number > 0) page.goToCheck(number - 1); else event.accepted = false
+                                    }
+                                    Keys.onPressed: function (event) {
+                                        if (event.key === Qt.Key_Home) page.goToCheck(0)
+                                        else if (event.key === Qt.Key_End) page.goToCheck(page.checkTotal - 1)
+                                        else return
+                                        event.accepted = true
+                                    }
                                     onClicked: page.act("check", modelData.id)
-                                    onActiveFocusChanged: if (activeFocus && visualFocus) page.reveal(row)
+                                    onActiveFocusChanged: if (activeFocus) {
+                                        page.currentCheck = number
+                                        if (visualFocus) page.reveal(row)
+                                    }
                                     Accessible.role: Accessible.Button
                                     Accessible.name: (modelData.affects || "") !== ""
                                         ? Util.fill(qsTr("%1, %2: %3. %4"), [modelData.title, Util.stateName(state_), modelData.summary || "", modelData.affects])
@@ -362,7 +439,9 @@ Item {
                                         QQC2.Label {
                                             text: row.modelData.summary || ""
                                             textFormat: Text.PlainText
-                                            // Medium only (no high) reads orange, like the header's count.
+                                            // Medium only (no high) reads orange, like the header's count
+                                            // (a colour made readable as text: Util.ink). The icon in front
+                                            // of the row and the words say the state.
                                             color: Util.summaryColor(Kirigami.Theme, row.state_, text)
                                             opacity: (row.state_ === "ok" || row.state_ === "na") ? Util.dimQuiet : 1
                                             font.weight: row.state_ === "bad" || row.state_ === "warn" ? Font.DemiBold : Font.Normal

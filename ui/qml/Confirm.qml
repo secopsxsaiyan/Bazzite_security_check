@@ -15,15 +15,23 @@ Item {
     readonly property string title: qsTr("Apply this fix?")
     signal finished(var answer)
     signal cancelled()
-    // Enter applies, unless another button has the keyboard focus (the
-    // window presses that one: a focused "Skip" never applies the fix).
-    function primary() { answer("apply") }
+    // This is the one page where Enter is not the main button from
+    // anywhere: a fix is applied only by a click on Apply, by its Alt key,
+    // or by Enter or Space while Apply itself has the keyboard focus. (The
+    // window presses a focused button on Enter, so a focused "Skip" skips;
+    // with the focus anywhere else Enter comes here and does nothing.) A
+    // fix may be a risky one, and an Enter too many on the page before
+    // must never run it.
+    function primary() { if (applyButton.activeFocus) answer("apply") }
     function dismiss() { cancelled() }
-    // No button starts with the keyboard focus. Space presses the focused
-    // button, and the fixes come one after the other: with the focus on
-    // Apply, the Space meant for "Skip" on the fix before would apply this
-    // one. Apply by Space or a click takes a deliberate move to the button.
+    // No button starts with the keyboard focus either. Space presses the
+    // focused button, and the fixes come one after the other: with the
+    // focus on Apply, the Space meant for "Skip" on the fix before would
+    // apply this one. Applying takes a deliberate move to the button: Tab
+    // goes through the page to it, Shift+Tab goes straight to it (it is
+    // the last control).
     function initialFocus() { return null }
+    readonly property Item scrollArea: scroll.contentItem
 
     readonly property var d: input || ({})
     function answer(c) { finished({ "choice": c }) }
@@ -34,8 +42,9 @@ Item {
 
         PageHeader {
             iconSource: page.iconSource
-            eyebrow: qsTr("Apply this fix?")
-            title: page.d.title || ""
+            // Without a title the question is the title.
+            eyebrow: page.d.title ? qsTr("Apply this fix?") : ""
+            title: page.d.title || qsTr("Apply this fix?")
             StatusChip { sev: page.d.sev || "info" }
         }
 
@@ -73,12 +82,10 @@ Item {
                     CodeBlock { text: page.d.commands || ""; flickable: scroll.contentItem }
                 }
 
-                Kirigami.InlineMessage {
-                    Layout.fillWidth: true
-                    visible: true
-                    type: page.d.undo === true ? Kirigami.MessageType.Positive : Kirigami.MessageType.Error
-                    text: page.d.undo === true ? qsTr("<b>Can be undone</b> later: dashboard → Undo, or run the tool with --undo.")
-                                               : qsTr("<b>No automatic undo.</b>")
+                Notice {
+                    kind: page.d.undo === true ? "positive" : "error"
+                    title: page.d.undo === true ? qsTr("Can be undone") : qsTr("No automatic undo.")
+                    text: page.d.undo === true ? qsTr("later: dashboard → Undo, or run the tool with --undo.") : ""
                 }
 
                 QQC2.Label {
@@ -91,10 +98,16 @@ Item {
         }
 
         FooterBar {
-            hint: qsTr("Nothing changes until you press Apply.")
+            // Enter alone does not apply (see primary()): say what does.
+            hint: qsTr("Nothing changes until you press Apply. With the keyboard: Tab to Apply, then Enter.")
             leading: QQC2.Button { text: qsTr("Stop reviewing"); icon.name: "process-stop"; onClicked: page.answer("stop") }
             QQC2.Button { text: qsTr("Skip"); icon.name: "go-next"; onClicked: page.answer("skip") }
-            PrimaryButton { text: qsTr("Apply"); icon.name: "dialog-ok-apply"; onClicked: page.primary() }
+            PrimaryButton {
+                id: applyButton
+                text: qsTr("Apply"); icon.name: "dialog-ok-apply"
+                Accessible.description: qsTr("Runs the commands shown on this page")
+                onClicked: page.answer("apply")
+            }
         }
     }
 }

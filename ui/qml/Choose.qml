@@ -22,6 +22,7 @@ Item {
     // The main button. Enter continues from anywhere on the page, also from
     // a row: a row is a check box, which Space ticks.
     function initialFocus() { return mainButton.enabled ? mainButton : rows.count > 0 ? rows.itemAt(currentRow) : cancelButton }
+    readonly property Item scrollArea: scroll.contentItem
 
     readonly property var d: input || ({})
     readonly property var items: d.items || []
@@ -181,17 +182,18 @@ Item {
                                     Layout.fillWidth: true
                                     visible: !!row.modelData.warn
                                     spacing: Kirigami.Units.smallSpacing
+                                    // The icon and the chip above say how
+                                    // risky; the warning is in the text
+                                    // colour, so that it can be read.
                                     Kirigami.Icon {
                                         Layout.alignment: Qt.AlignTop
-                                        source: row.modelData.risk === "high" ? "dialog-error"
-                                              : row.modelData.risk === "medium" ? "dialog-warning" : "dialog-information"
+                                        source: Util.riskIcon(row.modelData.risk)
                                         implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
                                         Accessible.ignored: true
                                     }
                                     QQC2.Label {
                                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
                                         text: row.modelData.warn || ""
-                                        color: Util.riskWarnColor(Kirigami.Theme, row.modelData.risk)
                                     }
                                 }
                             }

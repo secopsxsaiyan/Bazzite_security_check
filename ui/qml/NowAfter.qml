@@ -1,6 +1,8 @@
 // Security Check - a setting now and after the fix, one above the other
 // with their labels in a column on the left. The values (and the label of
-// the second one) come from the PC: plain text.
+// the second one) come from the PC: plain text. The value after the fix is
+// green as text can be and still be read (Util.ink), and in heavier type:
+// the labels say which is which.
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
@@ -22,6 +24,7 @@ GridLayout {
     QQC2.Label { visible: grid.after !== ""; text: grid.afterLabel; textFormat: Text.PlainText; opacity: Util.dimLabel; Layout.alignment: Qt.AlignTop }
     QQC2.Label {
         visible: grid.after !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-        text: grid.after; color: Kirigami.Theme.positiveTextColor
+        text: grid.after; font.weight: Font.DemiBold
+        color: Util.ink(Kirigami.Theme, Kirigami.Theme.positiveTextColor)
     }
 }

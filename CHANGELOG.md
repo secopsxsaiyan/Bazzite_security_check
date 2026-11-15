@@ -39,19 +39,35 @@ All notable changes to this project are listed here. The format follows
   never stops a fix that is being applied.
 - Enter does the page's main action and Esc goes back or cancels on every
   page, except that Esc does nothing on the result page (going back from a
-  check must not end the run). Enter in a text field stays with that field,
+  check must not end the run) and that Enter alone never applies a fix (see
+  below). Enter in a text field stays with that field,
   and Enter on a focused button presses that button. In a list of fixes
   and on the wizard's option cards, Space ticks the row or card and Enter
   goes on.
 - A key or click meant for one page cannot answer the next. A page that has
-  just appeared ignores keys and clicks for a moment, and a key or mouse
-  button that is still held down from the page before cannot answer it
-  however long it is held: the page takes input once everything has been
-  let go. A held-down key never answers anything.
-- The "Apply this fix?" page starts with the keyboard focus on no button.
-  Enter applies and Esc cancels as on every page, but Space, which presses
-  the focused button, needs a deliberate move to a button first: the Space
-  meant for "Skip" on one fix cannot apply the next.
+  just appeared ignores keys, the buttons' Alt+letter shortcuts and clicks
+  for a moment, and a key or mouse button that is still held down from the
+  page before cannot answer it however long it is held: the page takes
+  input once everything has been let go. A held-down key counts once, on
+  the page it was pressed on.
+- PageUp, PageDown, Home, End and the arrow keys scroll every page and
+  dialog, so text that does not fit can be read without a mouse.
+- The "Apply this fix?" page starts with the keyboard focus on no button,
+  and Enter applies the fix only while the Apply button itself has the
+  keyboard focus. A fix is applied by a click on Apply, by Alt+A, or by
+  Enter or Space after moving to the button (Shift+Tab goes straight to
+  it): an Enter or Space meant for the page before cannot apply a fix. Esc
+  cancels as on every page.
+- Easier to read and to use without a mouse. Coloured text (severity and
+  risk labels, counts, the score, warnings, the value after a fix) is now
+  dark enough to read in the light theme and the dark one; the colour stays
+  in the fill, the frame and the icon. Tick boxes and the link in Settings
+  show a ring when they have the keyboard focus. On the result page the
+  area chips and the list of checks are one Tab stop each, and the arrow
+  keys move inside them. The main button underlines its Alt key while Alt
+  is held. Screen readers get the messages in boxes and the text of a
+  dialog as plain text. A dialog whose buttons do not fit next to each
+  other stacks them.
 - Changing the theme in Settings switches the open window at once.
 - CI uploads ShellCheck and Scorecard results to code scanning on pull
   requests, so the `Protect main` ruleset can pass without an administrator

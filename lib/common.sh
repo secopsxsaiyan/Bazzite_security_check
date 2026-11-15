@@ -479,7 +479,13 @@ _as_user() {
     local -a _UENV=()
     _user_env "$u" || return 1
     if [[ "$(id -u)" -eq "$(id -u "$u")" ]]; then
-        ( _run_lock_close; exec env -i "${_UENV[@]}" "$@" )
+        # No runuser needed, but CMD gets as little as through _no_tty:
+        # neither the window's two pipes nor the run's lock.
+        (
+            if [[ -n "${_UI_FRONT_W:-}" ]]; then exec {_UI_FRONT_W}>&- {_UI_FRONT_R}<&-; fi
+            _run_lock_close
+            exec env -i "${_UENV[@]}" "$@"
+        )
     else
         _no_tty runuser -u "$u" -- env -i "${_UENV[@]}" "$@"
     fi

@@ -77,7 +77,9 @@ Kirigami.ApplicationWindow {
                         visible: root.detail !== ""
                         text: root.detail
                         textFormat: Text.PlainText
-                        wrapMode: Text.Wrap
+                        // It comes from a check: two lines of it at most,
+                        // the window does not grow with it.
+                        wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
                         opacity: Util.dimLabel
                     }
                 }

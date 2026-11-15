@@ -64,7 +64,18 @@ Item {
     function dismiss() { page.cancelled() }
     function initialFocus() { return mainButton }
 
-    Component.onCompleted: if (input.check_now) check()
+    // A control that gets the keyboard focus comes into view. (A text
+    // field or a link cannot say whether the focus came from the keyboard:
+    // it is brought into view either way.)
+    readonly property Item scrollArea: scroll.contentItem
+    Connections {
+        target: page.Window.window
+        function onActiveFocusItemChanged() {
+            var f = page.Window.activeFocusItem
+            if (f && f.visualFocus !== false && Util.within(f, page.scrollArea))
+                Util.reveal(page.scrollArea, f, Kirigami.Units.gridUnit)
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -153,8 +164,11 @@ Item {
                                         : page.checkState === "error" ? qsTr("Could not reach GitHub")
                                         : page.updateAvailable ? qsTr("%1 - an update is available").arg(page.latest)
                                         : qsTr("%1 - you have the latest version").arg(page.latest)
-                                    color: page.updateAvailable ? Kirigami.Theme.positiveTextColor
-                                         : page.checkState === "error" ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
+                                    // The icon in front says how it went; the colour is one
+                                    // that can be read as text (Util.ink).
+                                    color: page.updateAvailable ? Util.ink(Kirigami.Theme, Kirigami.Theme.positiveTextColor)
+                                         : page.checkState === "error" ? Util.ink(Kirigami.Theme, Kirigami.Theme.negativeTextColor)
+                                         : Kirigami.Theme.textColor
                                     Accessible.name: qsTr("Latest release: %1").arg(text)
                                 }
                             }
@@ -208,11 +222,16 @@ Item {
                             }
                         }
                         QQC2.CheckBox {
-                            Layout.fillWidth: true
+                            id: updateBox
+                            // As wide as its label (and no wider than the
+                            // page), so that the focus ring is around it.
+                            Layout.maximumWidth: parent.width
                             Layout.topMargin: Kirigami.Units.smallSpacing
                             text: qsTr("Check for updates when Security Check starts")
                             checked: page.updateCheck
                             onToggled: page.updateCheck = checked
+                            // The style shows no keyboard focus on a tick box.
+                            FocusRing { target: updateBox }
                         }
                         Hint { text: qsTr("Updates are downloaded from GitHub and installed only after their signature and checksums are verified.") }
                     }
@@ -228,14 +247,21 @@ Item {
                         }
                         Hint { text: qsTr("License: GPL-3.0") }
                         Kirigami.UrlButton {
-                            Layout.fillWidth: true
+                            id: projectLink
+                            // As wide as the address (and no wider than the
+                            // page), so that the focus ring is around it.
+                            Layout.maximumWidth: parent.width
                             horizontalAlignment: Text.AlignLeft
                             elide: Text.ElideMiddle
                             url: "https://github.com/" + page.repo
                             // Only a link to a real "owner/name" repository is offered.
                             visible: page.repoOk
                             activeFocusOnTab: visible
+                            // The link colour made readable as text (it is
+                            // underlined: a link not by its colour alone).
+                            normalColor: Util.ink(Kirigami.Theme, Kirigami.Theme.linkColor)
                             Accessible.name: qsTr("Project page: %1").arg(url)
+                            FocusRing { target: projectLink }
                         }
                     }
                 }

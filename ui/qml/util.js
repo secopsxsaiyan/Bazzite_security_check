@@ -17,6 +17,32 @@ function tip(s) {
     return "<span>" + esc(s).replace(/\n/g, "<br>") + "</span>"
 }
 
+// The label of a button with its Alt+letter key underlined, as styled
+// text. MARKED is the label with "&" in front of that letter (Kirigami's
+// MnemonicData.mnemonicLabel; "&&" is a real "&"). The label may hold text
+// from the PC: everything else in it is escaped.
+function mnemonic(marked) {
+    var s = String(marked === undefined || marked === null ? "" : marked), out = "", done = false
+    for (var n = 0; n < s.length; n++) {
+        if (s[n] !== "&" || n + 1 >= s.length) { out += esc(s[n]); continue }
+        n++
+        if (s[n] === "&" || done) out += esc(s[n])
+        else { out += "<u>" + esc(s[n]) + "</u>"; done = true }
+    }
+    return out
+}
+
+// Rich text as the plain text a screen reader should get: tags removed
+// (a line break or the end of a block is a space), entities as characters.
+function plain(html) {
+    return String(html === undefined || html === null ? "" : html)
+        .replace(/<(br|\/p|\/div|\/li|\/tr|\/h[1-6])\b[^>]*>/gi, " ")
+        .replace(/<[^>]*>/g, "")
+        .replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+        .replace(/&quot;/g, "\"").replace(/&#0*39;|&apos;/g, "'").replace(/&amp;/g, "&")
+        .replace(/\s+/g, " ").trim()
+}
+
 // TEMPLATE with %1, %2, ... replaced by VALUES in one pass. For texts from
 // the PC: unlike a chain of .arg(), a "%2" inside one value is left alone.
 function fill(template, values) {
@@ -55,6 +81,13 @@ function reveal(flickable, item, gap) {
         flickable.contentY = Math.max(0, Math.min(last, top + item.height + g - flickable.height))
 }
 
+// Is ITEM inside ANCESTOR (or the same item)?
+function within(item, ancestor) {
+    for (var p = item; p; p = p.parent)
+        if (p === ancestor) return true
+    return false
+}
+
 // ---- how much is dimmed, and how strong a tint is ----------------------------
 // Opacity of text that is not the main thing where it stands.
 var dimSentence = 0.85  // a sentence that still has to be read
@@ -70,6 +103,28 @@ var tintOnHover = 0.16  // ticked, under the pointer
 var tintEdge = 0.15     // the frame
 var tintEdgeOn = 0.6    // the frame when ticked
 
+// A state colour as the colour of text. The state colours of a theme are
+// made for icons, fills and frames: as text on the page they are too pale
+// to read, above all in the light theme. Half state colour, half the text
+// colour of the place keeps the hue and reads well in both themes (measured
+// from pictures: at least 4.5:1 on every background the pages use).
+function ink(theme, c) {
+    var t = theme.textColor
+    return Qt.rgba((c.r + t.r) / 2, (c.g + t.g) / 2, (c.b + t.b) / 2, 1)
+}
+
+// A highlight or state colour as a fill under the theme's text for
+// highlighted things (the main button, the number of the current step).
+// As it is, the highlight colour of Breeze gives that text 2.5:1; half of
+// it and half the darker one of the place's text and background colour
+// gives at least 4.5:1 in both themes, also when the fill is lightened
+// under the pointer.
+function deep(theme, c) {
+    var t = theme.textColor, b = theme.backgroundColor
+    var d = (t.r + t.g + t.b) < (b.r + b.g + b.b) ? t : b
+    return Qt.rgba((c.r + d.r) / 2, (c.g + d.g) / 2, (c.b + d.b) / 2, 1)
+}
+
 // The colour of a check's summary on the dashboard. A check with problems
 // is red, but one with medium problems only is orange, as the count in the
 // header is. The root side sends no field for "has a high problem": the
@@ -78,8 +133,8 @@ var tintEdgeOn = 0.6    // the frame when ticked
 // root side sends the highest severity of a check, use that here instead.
 function summaryColor(theme, state, summary) {
     if (state === "ok" || state === "na") return theme.textColor
-    if (state === "bad" && String(summary || "").indexOf(" high") < 0) return theme.neutralTextColor
-    return stateColor(theme, state)
+    if (state === "bad" && String(summary || "").indexOf(" high") < 0) return ink(theme, theme.neutralTextColor)
+    return ink(theme, stateColor(theme, state))
 }
 
 // ---- the state of a check or an area ---------------------------------------
@@ -126,9 +181,10 @@ function riskColor(theme, r) {
     return r === "high" ? theme.negativeTextColor : r === "medium" ? theme.neutralTextColor
          : r === "low" ? theme.positiveTextColor : theme.disabledTextColor
 }
-// A warning about an item is written in the colour of its risk.
-function riskWarnColor(theme, r) {
-    return r === "high" ? theme.negativeTextColor : r === "medium" ? theme.neutralTextColor : theme.textColor
+// The icon in front of a warning about an item: the warning itself is in
+// the colour of all text, so that it can be read.
+function riskIcon(r) {
+    return r === "high" ? "dialog-error" : r === "medium" ? "dialog-warning" : "dialog-information"
 }
 // "Label, High risk" for screen readers; the label alone without a grade.
 function riskLabel(label, r) {

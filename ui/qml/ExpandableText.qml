@@ -35,7 +35,10 @@ ColumnLayout {
     QQC2.Button {
         visible: label.truncated || box.expanded
         flat: true
-        Layout.leftMargin: -leftPadding      // its icon lines up with the text above
+        // Its icon lines up with the text above: the style keeps
+        // about this much room left of the icon of a flat button
+        // (and says so nowhere: its leftPadding is 0).
+        Layout.leftMargin: -Kirigami.Units.smallSpacing * 1.5
         text: box.expanded ? qsTr("Show less") : qsTr("Show all details")
         icon.name: box.expanded ? "go-up" : "go-down"
         onClicked: box.expanded = !box.expanded

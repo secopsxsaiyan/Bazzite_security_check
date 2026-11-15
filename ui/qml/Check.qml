@@ -52,13 +52,14 @@ Item {
 
     // Scroll so that an item that got keyboard focus is in view.
     function reveal(item) { Util.reveal(flick, item, Kirigami.Units.gridUnit) }
+    readonly property Item scrollArea: flick
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
 
         PageHeader {
-            title: page.d.title || ""
+            title: page.d.title || qsTr("Check")
             subtitle: [page.d.area || "", page.d.summary || ""].filter(function (s) { return s !== "" }).join(" · ")
             leading: Kirigami.Icon {
                 source: Util.stateIcon(page.d.state || "")
@@ -125,6 +126,8 @@ Item {
                             // All of them, unless all are ticked already.
                             onClicked: page.setAll(page.count !== page.fixable.length)
                             onActiveFocusChanged: if (activeFocus && visualFocus) page.reveal(this)
+                            // The style shows no keyboard focus on a tick box.
+                            FocusRing { target: selectAll }
                         }
                     }
 
@@ -154,6 +157,11 @@ Item {
                                              : Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.2)
                             Accessible.role: Accessible.Grouping
                             Accessible.name: Util.fill(qsTr("%1: %2"), [Util.sevName(f.sev), f.title || ""])
+
+                            // The tick box has no label of its own and the
+                            // style shows no keyboard focus on it: the ring
+                            // goes around the card it ticks.
+                            FocusRing { target: tick; cornerRadius: card.radius }
 
                             Rectangle {
                                 id: strip
@@ -230,9 +238,14 @@ Item {
                                     spacing: Kirigami.Units.smallSpacing
                                     QQC2.Button {
                                         flat: true
-                                        Layout.leftMargin: -leftPadding      // its icon lines up with the text above
+                                        // Its icon lines up with the text above: the style keeps
+                                        // about this much room left of the icon of a flat button
+                                        // (and says so nowhere: its leftPadding is 0).
+                                        Layout.leftMargin: -Kirigami.Units.smallSpacing * 1.5
                                         onActiveFocusChanged: if (activeFocus && visualFocus) page.reveal(this)
                                         text: qsTr("How to fix it yourself")
+                                        // One such button per finding: which one it is.
+                                        Accessible.name: Util.fill(qsTr("How to fix it yourself: %1"), [card.f.title || ""])
                                         icon.name: card.manualOpen ? "go-down" : "go-next"
                                         // The steps open below the button: bring them into view.
                                         onClicked: { card.manualOpen = !card.manualOpen; steps.justOpened = card.manualOpen }

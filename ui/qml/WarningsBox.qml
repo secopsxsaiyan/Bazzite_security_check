@@ -1,17 +1,29 @@
 // Security Check - "before you apply" side effects of a fix.
-// warnings: [{tag, text}]. The box shows rich text, so the tags and texts
-// (which may name things found on the PC) are escaped.
+// warnings: [{tag, text}]. The tags and texts may name things found on the
+// PC: they are escaped where a line shows them in bold and plain.
 import QtQuick
+import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import "util.js" as Util
 
-Kirigami.InlineMessage {
+Notice {
     id: box
     property var warnings: []
-    Layout.fillWidth: true
     visible: (warnings || []).length > 0
-    type: Kirigami.MessageType.Warning
-    text: "<b>" + qsTr("Before you apply") + "</b><br>" + (warnings || []).map(function (w) {
-        return "<b>" + qsTr("%1:").arg(Util.esc(w.tag)) + "</b> " + Util.esc(w.text) }).join("<br>")
+    kind: "warning"
+    title: qsTr("Before you apply")
+    spoken: title + ". " + (warnings || []).map(function (w) {
+        return Util.fill(qsTr("%1: %2"), [w.tag, w.text]) }).join(" ")
+    Repeater {
+        model: box.warnings || []
+        delegate: QQC2.Label {
+            required property var modelData
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            textFormat: Text.StyledText
+            text: "<b>" + Util.esc(qsTr("%1:").arg(modelData.tag)) + "</b> " + Util.esc(modelData.text)
+            Accessible.ignored: true    // the box says it, as plain text
+        }
+    }
 }

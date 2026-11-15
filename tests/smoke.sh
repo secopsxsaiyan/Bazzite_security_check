@@ -1176,6 +1176,11 @@ assert f[1]["fixable"] is False' "$(_check_input check_firewall)" && echo "check
             && APP_OUT='{"button":1,"tag":"b"}' && [[ "$(ui_radiolist "t" a A on b B off)" == b ]] \
             && APP_OUT='{"button":1,"tag":"zz"}' && UI_MODE=none && [[ "$(ui_radiolist "t" a A on b B off)" == a ]] && echo "dialog-answer-checked"
         UI_MODE=kde
+        # The button: a whole number from 0 to the last button's, nothing else.
+        dlg() { APP_OUT="$1"; _ui_dialog question "q" "" "No" "Yes" 2>/dev/null; }
+        [[ "$(dlg '{"button":0}')" == 0 && "$(dlg '{"button":1}')" == 1 ]] && ! dlg '{"button":2}' > /dev/null && ! dlg '{"button":-1}' > /dev/null \
+            && ! dlg '{"button":true}' > /dev/null && ! dlg '{"button":"1"}' > /dev/null && ! dlg '{"button":1.0}' > /dev/null && ! dlg '[1]' > /dev/null \
+            && echo "dialog-button-in-range"
     )
 
     # The real detection rules: Steam alone does not mean Remote Play is
@@ -1593,7 +1598,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
-         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked kept-no-date-no-since; do
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked dialog-button-in-range kept-no-date-no-since; do
     expect "$W/t6.out" "$m" "$m"
 done
 
@@ -1627,6 +1632,8 @@ for line in sys.stdin:
     if m.get("quit"):
         note("quit")
         break
+    if m.get("leave"):
+        sys.exit(7)             # it ends while nobody waits for an answer
     if "mode" not in m:
         note(json.dumps(m, sort_keys=True))
         continue
@@ -1656,6 +1663,19 @@ for line in sys.stdin:
         sys.stdout.write("x" * d["long"])
         sys.stdout.flush()
         continue
+    if d.get("line"):
+        # A line whose first d["line"] bytes have the form of an answer:
+        # "fill" in the answer, then d["more"] bytes, then the line end.
+        head = '{"id":%s,"status":0,"answer":"' % json.dumps(m["id"])
+        fill = d.get("fill", "x").encode()
+        body = fill * ((d["line"] - len(head) - 2) // len(fill))
+        body += b"x" * (d["line"] - len(head) - 2 - len(body))
+        sys.stdout.buffer.write(head.encode() + body + b'"}' + b"y" * d.get("more", 0) + b"\n")
+        sys.stdout.flush()
+        continue
+    if d.get("noid"):
+        # "That request could not be read", and an answer to it all the same.
+        send("", 3, None)
     if d.get("stale"):
         send("an-earlier-request", 0, {"wrong": True})
     if d.get("garbage"):
@@ -1688,8 +1708,8 @@ PYEOF
     [[ $rc -eq 1 && -z "$a" ]] && echo "front-cancelled-is-1"
     a=$(ui_app confirm '{"stale":true,"say":"s"}'); rc=$?
     [[ $rc -eq 0 && "$a" == *'"say": "s"'* ]] && echo "front-stale-answer-skipped"
-    a=$(ui_app dashboard "$(python3 -I -c 'import json; print(json.dumps({"say": "x" * 200000}))')"); rc=$?
-    [[ $rc -eq 0 && ${#a} -gt 200000 ]] && echo "front-large-answer"
+    a=$(ui_app dashboard "$(python3 -I -c 'import json; print(json.dumps({"say": "x" * 60000}))')"); rc=$?
+    [[ $rc -eq 0 && ${#a} -gt 60000 ]] && echo "front-large-answer"
     # A fix being applied: the window's spinner. The scan: its progress window.
     ui_busy_start 'Applying: "Firewall"'; ui_busy_stop
     ui_progress_start "Checking your PC…" 4; ui_progress_set 2 "Firewall"; ui_progress_set 4 "Malware" slow; ui_progress_stop
@@ -1722,15 +1742,78 @@ PYEOF
     ui_front_start
     a=$(ui_app wizard '{"say":"x"}'); rc=$?
     [[ ( $rc -eq 3 || $rc -eq 4 ) && -z "$a" ]] && ! _qml_ok && echo "front-cannot-start"
+    # A page in a window of its own (the front end was not started): every
+    # end but "answered" and "cancelled" is 3, and the shell that asked in
+    # $(...) knows afterwards that the front end is not to be used.
+    new_run
+    _ui_app_cmd() { echo '{"not":"an answer"}'; return 2; }
+    a=$(ui_app settings '{}'); rc=$?
+    [[ $rc -eq 3 && -z "$a" && "$_QML_OK" == yes ]] && ! _qml_ok && echo "front-one-shot-failure-is-3-and-remembered"
     _ui_app_cmd() { python3 -I "$W/fake-front.py" "$FL" "$@"; }
+
+    # A subshell does not start the front end: it would end with the subshell.
+    new_run
+    ( ui_front_start; [[ -z "$_UI_FRONT_W" ]] ) && [[ -z "$(ls -A "$RUN_TMP")" ]] && echo "front-not-started-in-a-subshell"
+    # A request is one line, whatever is in its input.
+    ui_front_start
+    a=$(ui_app wizard $'{"say":\n"two lines"}'); rc=$?
+    [[ $rc -eq 0 && "$a" == *'"say": "two lines"'* ]] && echo "front-request-is-one-line"
+    # "That request could not be read" (an answer without an id) means the
+    # front end failed, even if an answer follows.
+    a=$(ui_app wizard '{"noid":true,"say":"late"}'); rc=$?
+    [[ $rc -eq 3 && -z "$a" ]] && ! _qml_ok && echo "front-answer-without-id-is-3"
+    # The longest answer line: one byte less than the limit. A longer line
+    # is refused even when what is read of it has the form of an answer,
+    # and the limit counts bytes whatever the language settings are.
+    new_run; ui_front_start
+    a=$(ui_app wizard "{\"line\":$(( _UI_FRONT_LINE_MAX - 1 ))}"); rc=$?
+    [[ $rc -eq 0 && "$a" == '"xxx'*'x"' ]] && _ui_front_up && echo "front-longest-answer"
+    a=$(ui_app wizard "{\"line\":${_UI_FRONT_LINE_MAX},\"more\":50}"); rc=$?
+    [[ $rc -eq 3 && -z "$a" ]] && ! _qml_ok && echo "front-cut-answer-is-3"
+    if locale -a 2>/dev/null | grep -qiE '^C\.utf-?8$'; then
+        # A whole line of exactly the limit in bytes, and half as many characters.
+        new_run; ui_front_start
+        a=$(LC_ALL=C.UTF-8; ui_app wizard "{\"line\":${_UI_FRONT_LINE_MAX},\"fill\":\"é\"}"); rc=$?
+        [[ $rc -eq 3 && -z "$a" ]] && echo "front-answer-limit-counts-bytes"
+    else
+        echo "front-answer-limit-counts-bytes (no UTF-8 locale here: not tried)"
+    fi
+
+    # The front end ends between two requests, when nobody waits for an
+    # answer: the helper's file says so. From then on nothing is sent to
+    # it, and the scan's progress is a kdialog bar.
+    new_run; ui_front_start
+    a=$(ui_app wizard '{"say":"x"}')
+    _ui_front_send '{"leave":true}'
+    for _ in $(seq 1 50); do [[ -e "$RUN_TMP/ui-front-gone" ]] && break; sleep 0.1; done
+    [[ -e "$RUN_TMP/ui-front-gone" && -n "$_UI_FRONT_W" ]] && _proc_stat "$_UI_FRONT_PID" && echo "front-gone-between-requests-is-noted"
+    ! _ui_front_up && ! _ui_front_send '{"busy":"x"}' && echo "front-gone-nothing-sent"
+    ui_progress_start "Checking" 3
+    [[ "$_PROGRESS_BACKEND" == kdialog && -z "$_UI_FRONT_W" ]] && echo "front-gone-progress-is-kdialog"
+    ui_progress_stop
+
+    # A write to a pipe that nobody reads fails: it does not end the shell
+    # (SIGPIPE), which would skip the EXIT trap. Afterwards the signal is
+    # back at its default for the programs started from here.
+    mkfifo "$W/dead-pipe"
+    cat "$W/dead-pipe" > /dev/null & rdr=$!
+    exec {dw}> "$W/dead-pipe"
+    kill "$rdr"; wait "$rdr" 2>/dev/null
+    ( _pipe_write "$dw" "x"; echo "pipe-write-status-$?" ); echo "pipe-write-shell-status-$?"
+    ( _pipe_write "$dw" "x"; echo x >&"$dw"; echo "not reached" ) 2>/dev/null; [[ $? -eq 141 ]] && echo "pipe-write-leaves-sigpipe-alone"
+    exec {dw}>&-
 
     # The front end is a program of a less trusted account. It never gets
     # the run log itself: its stderr is a pipe, which this side copies into
     # the log line by line, cut to size, cleaned and marked "ui: ".
+    # Nor the run's lock, which this shell holds while it starts it.
     _UI_LOG_MAX=20000
+    exec {lk}> "$W/front.lock"; _RUN_LOCK_FD=$lk
     new_run; : > "$RUN_LOG"; ui_front_start
     a=$(ui_app wizard '{"fds":true}'); rc=$?
     [[ $rc -eq 0 && "$a" == *'"2": "pipe:'* && "$a" == *"/front.log"* && "$a" != *"front-run.log"* ]] && echo "front-no-log-descriptor"
+    [[ $rc -eq 0 && -e "/proc/self/fd/$lk" && "$a" != *"front.lock"* ]] && echo "front-no-lock-descriptor"
+    _RUN_LOCK_FD=""; exec {lk}>&-
     a=$(ui_app wizard "$(python3 -I -c 'import json; print(json.dumps({"say": "e", "stderr": "plain line\n12:00:00 [OK] forged\x1b[31m\ttab\r\n\x00caf\u00e9\n" + "y" * 4500 + "\n"}))')")
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [[ "$(grep -c 'ui: yyy' "$RUN_LOG")" -eq 3 ]] && break; sleep 0.1; done
     [[ "$a" == *'"say": "e"'* ]] && grep -qE '^[0-9:]{8} ui: plain line$' "$RUN_LOG" \
@@ -1756,13 +1839,16 @@ PYEOF
     [[ ${st[0]} -eq 141 && $(( SECONDS - t0 )) -lt 10 && "$(stat -c %s "$RUN_LOG")" -lt 1000 ]] && echo "front-stderr-nul-lines-capped"
     # What it logs is not held back, and a program that keeps the pipe
     # open does not keep the reader (or its dd) once the stop file is there.
-    : > "$RUN_LOG"; rm -f "$W/reader-stop"; ndd=$(pgrep -xc dd)
+    # (Counted without the ones that have ended and wait to be collected,
+    # which "pgrep" and "kill -0" still find.)
+    dd_running() { local p n=0; for p in $(pgrep -x dd); do _proc_stat "$p" && n=$((n + 1)); done; echo "$n"; }
+    : > "$RUN_LOG"; rm -f "$W/reader-stop"; ndd=$(dd_running)
     ( echo "first line"; sleep 2; : > "$W/reader-stop"; exec sleep 21 ) {_UI_FRONT_W}>&- {_UI_FRONT_R}<&- | _ui_log_reader "$W/reader-stop" &
     rd=$!
     for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q 'ui: first line' "$RUN_LOG" && break; sleep 0.1; done
     grep -q 'ui: first line' "$RUN_LOG" && [[ ! -e "$W/reader-stop" ]] && echo "front-stderr-logged-at-once"
     for _ in $(seq 1 60); do kill -0 "$rd" 2>/dev/null || break; sleep 0.1; done
-    ! kill -0 "$rd" 2>/dev/null && [[ "$(pgrep -xc dd)" == "$ndd" ]] && echo "front-stderr-reader-ends-on-stop-file"
+    ! _proc_stat "$rd" && [[ "$(dd_running)" == "$ndd" ]] && echo "front-stderr-reader-ends-on-stop-file"
     pkill -x -f 'sleep 21'
 
     # A program started through _no_tty (a fix, another account's program)
@@ -1773,6 +1859,9 @@ PYEOF
     quiet=$(_no_tty bash -c "$probe" _ "$_UI_FRONT_W" "$_UI_FRONT_R"); qrc=$?
     [[ -n "$_UI_FRONT_W" && "$plain" == "has-${_UI_FRONT_W} has-${_UI_FRONT_R} " && -z "$quiet" && $prc -eq 7 && $qrc -eq 7 ]] \
         && echo "no-tty-drops-window-pipes"
+    # The same for a program started "as another account" that is this one.
+    same=$(_as_user root bash -c "$probe" _ "$_UI_FRONT_W" "$_UI_FRONT_R"); src=$?
+    [[ -n "$_UI_FRONT_W" && -z "$same" && $src -eq 7 ]] && echo "same-account-drops-window-pipes"
 
     # ui_front_stop ends the front end's processes (the helper subshell,
     # the front end, the log reader) and nothing else - also a front end
@@ -1827,9 +1916,23 @@ PYEOF
     fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START")
     : > "$W/front-kills"; t0=$SECONDS
     ui_front_stop
-    grep -qx hanging "$FL" && [[ -n "$fpid" && ${#tree[@]} -ge 3 && -z "$(_procs_left "${tree[@]}")" ]] && ! builtin kill -0 "$fpid" 2>/dev/null \
+    grep -qx hanging "$FL" && [[ -n "$fpid" && ${#tree[@]} -ge 3 && -z "$(_procs_left "${tree[@]}")" ]] && ! _proc_stat "$fpid" \
         && builtin kill -0 "$other" 2>/dev/null && [[ $(( SECONDS - t0 )) -le 6 ]] && echo "front-stuck-process-ended"
     [[ -s "$W/front-kills" ]] && kills_in_tree && echo "front-stuck-signals-only-its-processes"
+    # The same when the helper has ended before it (ended from outside):
+    # there is no process to find the front end from, so what was seen
+    # below the helper while it lived is what is ended.
+    new_run; ui_front_start; _ui_front_send '{"hang":true}'
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -qx hanging "$FL" && break; sleep 0.1; done
+    fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); _ui_front_up; mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START"); hpid=$_UI_FRONT_PID
+    builtin kill -KILL "$hpid"
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do _proc_stat "$hpid" || break; sleep 0.1; done
+    orphan=no; ! _proc_stat "$hpid" && _proc_stat "$fpid" && [[ " ${_UI_FRONT_SEEN[*]} " == *" $fpid $_PS_START own "* ]] && orphan=yes
+    : > "$W/front-kills"; t0=$SECONDS
+    ui_front_stop
+    [[ "$orphan" == yes && -s "$W/front-kills" && $(( SECONDS - t0 )) -le 6 ]] && ! _proc_stat "$fpid" && kills_in_tree \
+        && builtin kill -0 "$other" 2>/dev/null && echo "front-stuck-without-its-helper-ended"
+    builtin kill -KILL "$fpid" 2>/dev/null
     builtin kill "$other" 2>/dev/null
     unset -f kill
     _UI_LOG_MAX=262144
@@ -1858,9 +1961,61 @@ for m in front-started front-answer-in-subshell front-one-process front-cancelle
          front-no-log-descriptor front-stderr-marked-and-cleaned front-stderr-line-capped front-stderr-total-capped \
          front-stderr-nul-bytes-capped front-stderr-nul-lines-capped front-stderr-logged-at-once front-stderr-reader-ends-on-stop-file \
          no-tty-drops-window-pipes front-helper-named-by-id-and-start-time front-processes-gone-after-stop front-stop-sends-no-signal \
-         front-stop-spares-a-reused-id front-stop-with-a-pipe-holder front-stuck-process-ended front-stuck-signals-only-its-processes front-endless-answer-is-3; do
+         front-stop-spares-a-reused-id front-stop-with-a-pipe-holder front-stuck-process-ended front-stuck-signals-only-its-processes front-endless-answer-is-3 \
+         front-one-shot-failure-is-3-and-remembered front-not-started-in-a-subshell front-request-is-one-line front-answer-without-id-is-3 \
+         front-longest-answer front-cut-answer-is-3 front-answer-limit-counts-bytes front-gone-between-requests-is-noted front-gone-nothing-sent \
+         front-gone-progress-is-kdialog pipe-write-status-1 pipe-write-shell-status-0 pipe-write-leaves-sigpipe-alone front-no-lock-descriptor \
+         same-account-drops-window-pipes front-stuck-without-its-helper-ended; do
     expect "$W/front.out" "$m" "$m"
 done
+
+# A signal that goes to every process of the tool while a fix is being
+# recorded (the session ends, the terminal is closed): the main shell holds
+# it back, the window's helper and the front end are ended by it. The next
+# line for the window then has no reader. The tool must not be ended by
+# that write (SIGPIPE: no EXIT trap, nothing cleaned up): it goes on
+# without the window, and stops in order when the fix is recorded.
+cat > "$W/sigpipe.sh" <<'SIGEOF'
+# shellcheck disable=SC1090
+source "$TOOL"
+RUN_LOG="$W/sigpipe-run.log"; : > "$RUN_LOG"; RUN_TMP=$(mktemp -d "$W/sigpipe-rt.XXXXXX")
+_ui_app_cmd() { python3 -I "$W/fake-front.py" "$W/sigpipe-front.log" "$@"; }
+UI_MODE=kde; _QML_OK=yes
+trap _on_signal INT TERM HUP
+trap 'echo "exit-trap-ran"; _cleanup' EXIT
+ui_front_start
+a=$(ui_app wizard '{"say":"x"}'); echo "first-page-status-$?"
+_signals_hold
+ui_busy_start "Applying a fix"
+kill -TERM 0
+for _ in $(seq 1 50); do _proc_stat "$_UI_FRONT_PID" || break; sleep 0.1; done
+_proc_stat "$_UI_FRONT_PID" || echo "helper-ended"
+ui_busy_stop
+[[ -e "$RUN_TMP/ui-front-gone" ]] && echo "window-marked-gone"
+a=$(ui_app confirm '{"say":"y"}'); echo "next-page-status-$?"
+echo "fix-recorded"
+_signals_release
+echo "not reached: the signal takes effect at the release"
+SIGEOF
+env TOOL="$TOOL" W="$W" setsid --wait bash "$W/sigpipe.sh" > "$W/sigpipe.out" 2>&1
+rc=$?
+[[ $rc -eq 130 ]] && ok "a signal to every process of the tool: it stops in order (130)" || bad "after a signal to every process of the tool: exit $rc"
+for m in first-page-status-0 helper-ended window-marked-gone next-page-status-4 fix-recorded exit-trap-ran; do
+    expect "$W/sigpipe.out" "$m" "no window after its helper ended: $m"
+done
+reject "$W/sigpipe.out" "not reached" "the held signal takes effect when the fix is recorded"
+[[ -z "$(compgen -G "$W/sigpipe-rt.*")" ]] && ok "the private folder is removed after that" || bad "private folder left behind: $(compgen -G "$W/sigpipe-rt.*")"
+
+# The form of an answer line is written down twice: where the root side
+# takes it apart, and where the test of the real front end checks every
+# answer against it. The two must be the same.
+re_sh=$(sed -n "s/^ *local re='\\(.*\\)'\$/\\1/p" "$HERE/../lib/ui.sh")
+re_py=$(sed -n "s/^ANSWER_RE = re\\.compile(r'\\(.*\\)')\$/\\1/p" "$HERE/../tests/ui-offscreen.py")
+if [[ -n "$re_sh" && "$re_sh" != *$'\n'* && "$re_sh" == "$re_py" ]]; then
+    ok "one form of an answer line in lib/ui.sh and tests/ui-offscreen.py"
+else
+    bad "answer line pattern differs: lib/ui.sh '${re_sh}', tests/ui-offscreen.py '${re_py}'"
+fi
 
 # The run's lock (descriptor 9) stays with this tool: a program started as
 # another account, or by a fix, does not get a copy, so it can neither
@@ -1922,8 +2077,11 @@ done
       [[ $rc -eq 3 && "$(wc -l < "$RUN_LOG")" -eq $(( _LOG_FOREIGN_LINES + 1 )) ]] && grep -q ' undo: end$' "$RUN_LOG" && echo "undo-out-memory-bounded" )
     run 'printf "a\\0b\\n"; exit 0'
     [[ $rc -eq 0 ]] && grep -q ' undo: ab$' "$RUN_LOG" && echo "undo-out-nul-bytes-dropped"
+    # A line without end is cut ("12:00:00 undo: " are 15 characters).
+    run 'head -c 5000 /dev/zero | tr "\0" x; echo; exit 0'
+    [[ $rc -eq 0 && "$(awk '{ print length($0) }' "$RUN_LOG")" == $(( _LOG_FOREIGN_LINE + 15 )) ]] && echo "undo-out-long-line-cut"
 ) > "$W/undo-out.out" 2>&1
-for m in undo-out-small-ok undo-out-status-kept undo-out-large-ok-is-ok undo-out-failure-logs-the-end undo-out-memory-bounded undo-out-nul-bytes-dropped; do
+for m in undo-out-small-ok undo-out-status-kept undo-out-large-ok-is-ok undo-out-failure-logs-the-end undo-out-memory-bounded undo-out-nul-bytes-dropped undo-out-long-line-cut; do
     expect "$W/undo-out.out" "$m" "$m"
 done
 
@@ -1993,6 +2151,10 @@ OWNEREOF
     up=""; for _ in $(seq 1 30); do up=$(pgrep -u "$U" -P "$ru" -x sleep) && break; sleep 0.1; done
     if [[ -n "$up" ]] && _proc_stat "$up"; then
         ustart=$_PS_START; _proc_stat "$rootp"; rstart=$_PS_START
+        # Root's own signal is for root's own processes: not for one of
+        # another account, even with the right id and start time.
+        _kill_same KILL "$up" "$ustart"; ksrc=$?
+        _kill_same 0 "$rootp" "$rstart" && [[ $ksrc -ne 0 ]] && echo "root-signal-not-for-another-account"
         _ui_front_signal KILL "$up 1$ustart user" "$rootp $rstart user"; sleep 0.3
         [[ -d "/proc/$up" && -d "/proc/$rootp" ]] && echo "user-signal-spares-root-and-reused-ids"
         _ui_front_signal KILL "$up $ustart user"
@@ -2019,7 +2181,7 @@ OWNEREOF
     kill "$(cat "$W/owner.sleep")" 2>/dev/null
     mapfile -t tree < "$W/owner.tree"; _ui_front_reap "${tree[@]}"
 ) > "$W/owner.out" 2>&1
-for m in real-front-stopped real-front-stuck-ended real-front-root-signals-only-root-processes user-signal-spares-root-and-reused-ids \
+for m in real-front-stopped real-front-stuck-ended real-front-root-signals-only-root-processes root-signal-not-for-another-account user-signal-spares-root-and-reused-ids \
          user-signal-ends-the-users-process real-front-runs-as-user real-front-no-log-descriptor pipes-still-held real-front-leaves-when-root-side-is-killed; do
     expect "$W/owner.out" "$m" "$m"
 done

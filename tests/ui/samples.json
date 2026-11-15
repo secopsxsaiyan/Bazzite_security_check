@@ -5,7 +5,7 @@
    "image": "bazzite:stable",
    "hardware": "Desktop, AMD Ryzen 7, Radeon RX 7800",
    "disk": "no",
-   "last": "3 days ago · score 64 (D)"
+   "last": "12 Nov 2026, 14:05 · 64/100 (grade D)"
   },
   "detected": {
    "gaming": "Steam is installed",
@@ -213,6 +213,58 @@
    }
   ]
  },
+ "dashboard-report-only": {
+  "score": 58,
+  "score_was": 58,
+  "grade": "D",
+  "host": "living-room-pc",
+  "os": "Bazzite 45 (Kinoite)",
+  "use": "Gaming",
+  "depth": "Standard",
+  "open": {
+   "high": 1,
+   "medium": 0,
+   "low": 1,
+   "info": 0
+  },
+  "fixed": 0,
+  "verified": 0,
+  "fixed_reboot": 0,
+  "report_only": true,
+  "report_note": "The report could not be saved in /home/player/Documents/reports (player cannot write there); it is in /var/lib/bazzite-sec-audit/reports.",
+  "nfix": 2,
+  "undo": false,
+  "keep": false,
+  "kept": 0,
+  "areas": [
+   {
+    "name": "System",
+    "state": "ok"
+   },
+   {
+    "name": "Network",
+    "state": "bad"
+   }
+  ],
+  "checks": [
+   {
+    "id": "check_updates",
+    "title": "System updates",
+    "area": "System",
+    "state": "ok",
+    "affects": "",
+    "summary": "Up to date"
+   },
+   {
+    "id": "check_firewall",
+    "title": "Firewall",
+    "area": "Network",
+    "state": "bad",
+    "affects": "Steam Remote Play, KDE Connect",
+    "summary": "1 high, 1 low"
+   }
+  ]
+ },
  "check": {
   "id": "check_firewall",
   "title": "Firewall",
@@ -400,24 +452,23 @@
   "note": "Open ports you chose earlier stay open."
  },
  "dialog": {
-  "kind": "warningyesno",
+  "kind": "warning",
   "title": "Undo a change?",
   "html": "<p><b>Firewall zone</b> was changed 3 days ago.</p><p>Undo sets it back to <tt>trusted</tt>.</p>",
   "details": "firewall-cmd --set-default-zone=trusted\nfirewall-cmd --reload",
   "buttons": [
    {
-    "label": "Cancel",
-    "icon": "dialog-cancel"
+    "label": "Cancel"
    },
    {
-    "label": "Undo",
-    "icon": "edit-undo"
+    "label": "Undo"
    }
   ],
-  "items": []
+  "items": [],
+  "primary": 1
  },
  "dialog-message": {
-  "kind": "msgbox",
+  "kind": "info",
   "title": "Security Check",
   "html": "<p>Security Check is installed. Start it from the application menu (System → Security Check) or with the command <tt>bazzite-sec-audit</tt>.</p><p>Updates: Settings → Updates installs new releases.</p>",
   "details": "",
@@ -426,7 +477,8 @@
     "label": "OK"
    }
   ],
-  "items": []
+  "items": [],
+  "primary": 0
  },
  "dialog-error": {
   "kind": "error",
@@ -438,10 +490,11 @@
     "label": "OK"
    }
   ],
-  "items": []
+  "items": [],
+  "primary": 0
  },
  "dialog-list": {
-  "kind": "menu",
+  "kind": "question",
   "title": "What next?",
   "html": "<p>Choose what to do with the 5 problems that have a fix.</p>",
   "details": "",
@@ -459,23 +512,93 @@
     "label": "Choose fixes",
     "detail": "Pick from a list; each one is confirmed",
     "risk": "",
-    "warn": ""
+    "warn": "",
+    "on": true
    },
    {
     "tag": "report",
     "label": "Open the report",
     "detail": "HTML report in your browser",
     "risk": "",
-    "warn": ""
+    "warn": "",
+    "on": false
    },
    {
     "tag": "undo",
     "label": "Undo earlier changes",
     "detail": "2 changes can be undone",
     "risk": "",
-    "warn": ""
+    "warn": "",
+    "on": false
    }
-  ]
+  ],
+  "primary": 1
+ },
+ "dialog-warning": {
+  "kind": "warning",
+  "title": "Turn off the firewall?",
+  "html": "<p>Every service on this PC can then be reached from the network.</p>",
+  "details": "",
+  "buttons": [
+   {
+    "label": "No"
+   },
+   {
+    "label": "Yes"
+   }
+  ],
+  "items": [],
+  "primary": 0
+ },
+ "dialog-three": {
+  "kind": "warning",
+  "title": "Remove the saved reports too?",
+  "html": "<p>The reports of earlier runs are in <tt>/home/player/Documents/bazzite-security-check</tt>.</p>",
+  "details": "",
+  "buttons": [
+   {
+    "label": "Cancel"
+   },
+   {
+    "label": "Keep them"
+   },
+   {
+    "label": "Remove them"
+   }
+  ],
+  "items": [],
+  "primary": 1
+ },
+ "dialog-no-main": {
+  "kind": "question",
+  "title": "Which one?",
+  "html": "<p>Neither answer is the usual one.</p>",
+  "details": "",
+  "buttons": [
+   {
+    "label": "This PC only"
+   },
+   {
+    "label": "Every account"
+   }
+  ],
+  "items": [],
+  "primary": -1
+ },
+ "dialog-no-primary": {
+  "kind": "question",
+  "title": "Start the check-up?",
+  "html": "<p>An input without <tt>primary</tt>: the last button is the main one.</p>",
+  "details": "",
+  "buttons": [
+   {
+    "label": "Cancel"
+   },
+   {
+    "label": "Start"
+   }
+  ],
+  "items": []
  },
  "settings": {
   "version": "1.5.0",

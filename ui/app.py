@@ -557,9 +557,12 @@ class _Serve:
 
     def send(self, rid, status, answer):
         """One answer line for the root side, always in this exact form."""
+        # An answer that is not JSON (a page passed a date, a function, NaN)
+        # is a page that failed: the root side falls back, it never waits.
         try:
-            text = json.dumps(answer)
+            text = json.dumps(answer, allow_nan=False)
         except (TypeError, ValueError):
+            _say("app.py: the answer of %s is not JSON" % (rid or "a page"))
             status, text = 3, "null"
         try:
             _write_all(self.wfd, ('{"id":%s,"status":%d,"answer":%s}\n' % (json.dumps(rid), status, text)).encode())
@@ -618,10 +621,11 @@ class _Serve:
         label = msg["busy"]
         if not isinstance(label, str):
             return
-        # A label asks for the spinner now; "" only puts the usual label
-        # back (and closes the progress window if that is what shows).
-        if label or self.progress.open:
-            self.show_window()
+        # The progress window, if it is what shows, makes way for the main
+        # window. A label asks for the spinner now; "" only puts the usual
+        # label back, and the Shell does not bring back a window the person
+        # has closed for it.
+        self.show_window()
         self.host.busy.emit(label[:200])
 
     def on_mode(self, msg):
@@ -667,7 +671,12 @@ class _OnePage:
 
         self.ui.feed(reader, lambda line: None, begin, owner)
         if self.status == 0:
-            _write_all(self.wfd, (json.dumps(self.answer) + "\n").encode())
+            try:
+                text = json.dumps(self.answer, allow_nan=False)
+            except (TypeError, ValueError):
+                _say("app.py: the answer of the page is not JSON")
+                return 3
+            _write_all(self.wfd, (text + "\n").encode())
             return 0
         return 3 if self.status == 3 else 1
 

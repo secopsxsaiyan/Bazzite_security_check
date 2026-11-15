@@ -43,6 +43,7 @@ Item {
         return items.length ? items[0].tag : ""
     }
     property bool showDetails: false
+    readonly property Item scrollArea: scroll.contentItem
 
     // ---- size -----------------------------------------------------------
     // The width comes from what the content would like when nothing wraps
@@ -51,12 +52,26 @@ Item {
     // which makes the height the same whatever size the dialog is shown at.
     readonly property real margin: Kirigami.Units.gridUnit
     property real listWidth: 0          // the widest pick-one row, unwrapped
+    // The bar at the bottom with the buttons next to each other: their own
+    // widths (never the width the bar was given), the gaps and the margins.
+    property real buttonsWidth: 0
+    function measureButtons() {
+        var sum = 0, n = 0
+        for (var i = 0; i < footerButtons.count; i++) {
+            var slot = footerButtons.itemAt(i)
+            if (slot && slot.item) { sum += slot.item.implicitWidth; n++ }
+        }
+        buttonsWidth = sum + Math.max(0, n - 1) * Kirigami.Units.smallSpacing + Kirigami.Units.largeSpacing * 4
+    }
+    // Long labels (they come from the root side) that do not fit next to
+    // each other in the room the dialog may take: one under the other.
+    readonly property bool stackButtons: buttonsWidth > Math.min(maximumWidth, width > 0 ? width : maximumWidth)
     readonly property real wantedWidth: Math.ceil(Math.max(
         Kirigami.Units.gridUnit * (d.details || items.length ? 26 : 20),
         head.implicitWidth + margin * 2,
         bodyText.visible ? bodyText.implicitWidth + margin * 2 : 0,
         listWidth + margin * 2,
-        footer.implicitWidth))
+        buttonsWidth))
     readonly property real textWidth: Math.min(wantedWidth, maximumWidth) - margin * 2
     implicitWidth: Math.min(wantedWidth, maximumWidth)
     implicitHeight: Math.ceil(Math.min(maximumHeight,
@@ -139,6 +154,9 @@ Item {
                     wrapMode: Text.Wrap
                     textFormat: Text.RichText
                     text: page.d.html || ""
+                    // A screen reader gets the words, not the markup.
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: Util.plain(text)
                 }
 
                 // Pick one (with each item's risk and warning).
@@ -207,11 +225,24 @@ Item {
                                     wrapMode: Text.Wrap; textFormat: Text.PlainText
                                     opacity: Util.dimText; text: radio.modelData.detail || ""
                                 }
-                                QQC2.Label {
-                                    Layout.fillWidth: true; visible: !!radio.modelData.warn
-                                    wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                    text: radio.modelData.warn || ""
-                                    color: Util.riskWarnColor(Kirigami.Theme, radio.modelData.risk)
+                                // The icon and the chip above say how risky;
+                                // the warning is in the text colour, so
+                                // that it can be read.
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: !!radio.modelData.warn
+                                    spacing: Kirigami.Units.smallSpacing
+                                    Kirigami.Icon {
+                                        Layout.alignment: Qt.AlignTop
+                                        source: Util.riskIcon(radio.modelData.risk)
+                                        implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
+                                        Accessible.ignored: true
+                                    }
+                                    QQC2.Label {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.Wrap; textFormat: Text.PlainText
+                                        text: radio.modelData.warn || ""
+                                    }
                                 }
                             }
                         }
@@ -222,6 +253,10 @@ Item {
                 QQC2.Button {
                     visible: !!page.d.details
                     flat: true
+                    // Its icon lines up with the text above: the style keeps
+                    // about this much room left of the icon of a flat button
+                    // (and says so nowhere: its leftPadding is 0).
+                    Layout.leftMargin: -Kirigami.Units.smallSpacing * 1.5
                     text: page.showDetails ? qsTr("Hide details") : qsTr("Show details")
                     icon.name: page.showDetails ? "go-up" : "go-down"
                     onClicked: page.showDetails = !page.showDetails
@@ -238,6 +273,7 @@ Item {
 
         FooterBar {
             id: footer
+            stacked: page.stackButtons
             // One button per entry: the main one filled, the others plain.
             // Enter presses the one with the keyboard focus (the window
             // sees to it), else the main one.
@@ -248,7 +284,10 @@ Item {
                     id: slot
                     required property var modelData
                     required property int index
+                    Layout.fillWidth: footer.stacked
                     sourceComponent: index === page.primaryIndex ? mainButton : plainButton
+                    onImplicitWidthChanged: page.measureButtons()
+                    onLoaded: page.measureButtons()
                     Component {
                         id: plainButton
                         QQC2.Button {
