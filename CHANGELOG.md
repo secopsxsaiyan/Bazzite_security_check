@@ -6,10 +6,13 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-14
+
 ### Added
 
 - OpenSSF Scorecard workflow (weekly, on pushes to `main` and on demand) with a
   README badge. Every action is pinned to a commit.
+- OpenSSF Best Practices badge for project 16708.
 - Releases carry a build provenance attestation (`.intoto.jsonl`) for the
   source archive, which `gh attestation verify` can check.
 
@@ -289,7 +292,8 @@ First release.
   a symlink in a user's folder. Changes to `sshd` and `sudoers` are
   validated and rolled back if they fail.
 
-[Unreleased]: https://github.com/secopsxsaiyan/Bazzite_security_check/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/secopsxsaiyan/Bazzite_security_check/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.5.0
 [1.4.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.4.0
 [1.3.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.3.0
 [1.2.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.2.0

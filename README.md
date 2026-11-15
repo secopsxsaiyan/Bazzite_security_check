@@ -12,6 +12,7 @@
   <a href="https://github.com/secopsxsaiyan/Bazzite_security_check/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/secopsxsaiyan/Bazzite_security_check/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <a href="https://github.com/secopsxsaiyan/Bazzite_security_check/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/secopsxsaiyan/Bazzite_security_check?sort=semver"></a>
   <a href="https://scorecard.dev/viewer/?uri=github.com/secopsxsaiyan/Bazzite_security_check"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/secopsxsaiyan/Bazzite_security_check/badge"></a>
+  <a href="https://www.bestpractices.dev/projects/16708"><img alt="OpenSSF Best Practices" src="https://www.bestpractices.dev/projects/16708/badge"></a>
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
 </p>
 
@@ -124,7 +125,7 @@ Fixes that touch a Bazzite feature say so, in the fix list, the Apply dialog, ea
 Each [release](https://github.com/secopsxsaiyan/Bazzite_security_check/releases) has the source archive, `SHA256SUMS` and an SSH signature of the checksums. To verify one by hand, with [`release-signers`](release-signers) from this repository:
 
 ```bash
-v=1.4.0
+v=1.5.0
 ssh-keygen -Y verify -f release-signers -I release@bazzite-sec-audit \
   -n bazzite-sec-audit-release -s SHA256SUMS.sig < SHA256SUMS
 sha256sum -c SHA256SUMS
