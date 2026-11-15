@@ -5,11 +5,11 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 Rectangle {
     id: header
-    property string iconName: ""
-    property string iconSource: ""       // a file URL, used when iconName is empty
+    property string iconSource: ""       // a file URL
     property string eyebrow: ""
     property string title: ""
     property string subtitle: ""
@@ -35,8 +35,8 @@ Rectangle {
             Layout.alignment: Qt.AlignVCenter
         }
         Kirigami.Icon {
-            visible: leadingSlot.children.length === 0 && (header.iconName !== "" || header.iconSource !== "")
-            source: header.iconName !== "" ? header.iconName : header.iconSource
+            visible: leadingSlot.children.length === 0 && header.iconSource !== ""
+            source: header.iconSource
             Layout.alignment: Qt.AlignTop
             implicitWidth: Kirigami.Units.iconSizes.large; implicitHeight: implicitWidth
             // Decoration (the app's icon, or one that repeats the title). A
@@ -46,16 +46,24 @@ Rectangle {
         ColumnLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
-            QQC2.Label { visible: header.eyebrow !== ""; text: header.eyebrow; opacity: 0.75; textFormat: Text.PlainText }
+            QQC2.Label { visible: header.eyebrow !== ""; text: header.eyebrow; opacity: Util.dimLabel; textFormat: Text.PlainText }
+            // A title from the PC can be very long: three lines of it, the
+            // whole of it in a tool tip (and for a screen reader).
             Kirigami.Heading {
                 Layout.fillWidth: true; level: 2; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                maximumLineCount: 3; elide: Text.ElideRight
                 text: header.title
                 Accessible.role: Accessible.Heading
+                Accessible.name: header.title
+                QQC2.ToolTip.visible: truncated && titleHover.hovered
+                QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
+                QQC2.ToolTip.text: Util.tip(header.title)
+                HoverHandler { id: titleHover }
             }
             QQC2.Label {
                 visible: header.subtitle !== ""
                 Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                opacity: 0.8; text: header.subtitle
+                opacity: Util.dimText; text: header.subtitle
             }
             RowLayout {
                 id: extraRow

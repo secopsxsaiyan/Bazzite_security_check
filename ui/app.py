@@ -34,7 +34,8 @@
 #     keys, a page request without a usable id), and any line whose handling
 #     fails here, is answered by {"id":"","status":3,"answer":null} - with
 #     the request's id instead of "" when it had a usable one.
-#     Nothing is loaded and no window exists before the first line arrives.
+#     Nothing is loaded and no window exists before the first line that is
+#     not empty arrives; if that line is "quit", nothing ever is.
 #     Exit status 0; 3 when Qt or the window could not be loaded (the root
 #     side does not read it: it sees the answer pipe close).
 #
@@ -74,6 +75,7 @@ PAGES = {"wizard": "Wizard.qml", "settings": "Settings.qml", "dashboard": "Dashb
          "check": "Check.qml", "choose": "Choose.qml", "confirm": "Confirm.qml", "dialog": "Dialog.qml"}
 MODES = tuple(PAGES) + ("progress", "serve")
 KEYS = ("quit", "theme", "progress", "busy", "mode")    # what a "serve" line may hold
+OWNER_CHECK_MS = 2000       # how often: is the root side still there? (_Owner)
 
 # The test interface (tests/ui-offscreen.py); nothing else may set these,
 # and there is no environment variable for them:
@@ -104,15 +106,16 @@ def _scheme_path(theme):
 def _scheme_groups(path):
     """The [Colors:*] groups of a .colors file: {group: [(key, value)]}."""
     groups, cur = {}, None
-    for line in open(path, encoding="utf-8"):
-        line = line.rstrip("\n")
-        if line.startswith("[") and line.endswith("]"):
-            cur = line[1:-1] if line[1:-1].startswith("Colors:") else None
-            if cur:
-                groups[cur] = []
-        elif cur and "=" in line:
-            k, _, v = line.partition("=")
-            groups[cur].append((k.strip(), v.strip()))
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if line.startswith("[") and line.endswith("]"):
+                cur = line[1:-1] if line[1:-1].startswith("Colors:") else None
+                if cur:
+                    groups[cur] = []
+            elif cur and "=" in line:
+                k, _, v = line.partition("=")
+                groups[cur].append((k.strip(), v.strip()))
     return groups
 
 
@@ -240,9 +243,10 @@ class _Lines:
         *lines, self.buf = self.buf.split(b"\n")
         return [line.decode("utf-8", "replace") for line in lines]
 
-    def first(self, owner):
+    def first(self, owner, skip_blank=False):
         """The first line (waits for it, as long as OWNER is there); None
-        when there is none. Lines that came with it are kept in .pending."""
+        when there is none. Lines that came with it are kept in .pending.
+        With SKIP_BLANK, lines of white space do not count as the first."""
         while not self.eof:
             try:
                 ready = select.select([self.fd], [], [], OWNER_CHECK_MS / 1000)[0]
@@ -253,14 +257,15 @@ class _Lines:
                     return None
                 continue
             lines = self.more()
+            while skip_blank and lines and not lines[0].strip():
+                del lines[0]
             if lines:
                 self.pending = lines[1:]
                 return lines[0]
         rest, self.buf = self.buf, b""
+        if skip_blank and not rest.strip():
+            return None
         return rest.decode("utf-8", "replace") if rest else None
-
-
-OWNER_CHECK_MS = 2000
 
 
 def _say(text=None):
@@ -329,18 +334,20 @@ def main():
         pass
     reader = _Lines(rfd)
     # Waits here: no Qt, no window, before the root side asks for one.
-    first = reader.first(owner)
     if mode == "serve":
-        if first is None or _is_quit(first):
+        # Empty lines say nothing (_Serve.line ignores them too): the first
+        # line that does decides whether Qt is needed at all.
+        line = reader.first(owner, skip_blank=True)
+        if line is None or _is_quit(line):
             return 0                # nothing was ever shown: no Qt needed
-        return _run(mode, first, reader, wfd, owner)
+        return _run(mode, reader, wfd, owner, line=line)
     try:
-        data = json.loads(first or "{}")
+        data = json.loads(reader.first(owner) or "{}")
     except ValueError:
         return 2
     if not isinstance(data, dict):
         return 2
-    return _run(mode, data, reader, wfd, owner)
+    return _run(mode, reader, wfd, owner, data=data)
 
 
 def _is_quit(line):
@@ -691,9 +698,9 @@ class _ProgressOnly:
         return self.status
 
 
-def _run(mode, first, reader, wfd, owner):
-    """Start Qt and run MODE. FIRST is the first line for "serve", else the
-    JSON object that was read from stdin."""
+def _run(mode, reader, wfd, owner, line=None, data=None):
+    """Start Qt and run MODE: "serve" with LINE, the first line that was
+    read; any other mode with DATA, the JSON object that was read."""
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "org.kde.desktop")
     # Without this Qt keeps its warnings (a page that does not load) to
     # itself when stderr is not a terminal; the root side wants them.
@@ -704,10 +711,10 @@ def _run(mode, first, reader, wfd, owner):
     except ImportError:
         return 3
     if mode == "serve":
-        return _Serve(wfd).run(first, reader, owner)
+        return _Serve(wfd).run(line, reader, owner)
     if mode == "progress":
-        return _ProgressOnly().run(first, reader, owner)
-    return _OnePage(wfd).run(mode, first, reader, owner)
+        return _ProgressOnly().run(data, reader, owner)
+    return _OnePage(wfd).run(mode, data, reader, owner)
 
 
 if __name__ == "__main__":

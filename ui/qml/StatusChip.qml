@@ -12,7 +12,6 @@ Rectangle {
     property string sev: ""            // high | medium | low | info
     property string risk: ""           // high | medium | low
     property string text: sev !== "" ? Util.sevName(sev) : Util.riskText(risk)
-    property string iconName: ""
     property color tint: sev !== "" ? Util.sevColor(Kirigami.Theme, sev) : Util.riskColor(Kirigami.Theme, risk)
     // How strong the fill and the outline are, as a share of the tint.
     readonly property real fillStrength: 0.15
@@ -29,15 +28,11 @@ Rectangle {
     RowLayout {
         id: row
         anchors.centerIn: parent
-        spacing: Kirigami.Units.smallSpacing
-        Kirigami.Icon {
-            visible: chip.iconName !== ""
-            source: chip.iconName
-            implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
-            Accessible.ignored: true
-        }
+        // A chip made narrower than its text (Layout.maximumWidth) cuts it.
+        width: Math.min(implicitWidth, chip.width - Kirigami.Units.largeSpacing * 2)
         // The text may come from the PC: never markup.
         QQC2.Label {
+            Layout.fillWidth: true; elide: Text.ElideRight
             text: chip.text; textFormat: Text.PlainText
             font: Kirigami.Theme.smallFont; color: chip.tint
             Accessible.ignored: true

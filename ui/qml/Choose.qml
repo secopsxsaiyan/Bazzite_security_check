@@ -19,7 +19,8 @@ Item {
     signal cancelled()
     function primary() { if (canContinue) done() }
     function dismiss() { cancelled() }
-    // The main button, so that Enter continues (on a row it ticks the row).
+    // The main button. Enter continues from anywhere on the page, also from
+    // a row: a row is a check box, which Space ticks.
     function initialFocus() { return mainButton.enabled ? mainButton : rows.count > 0 ? rows.itemAt(currentRow) : cancelButton }
 
     readonly property var d: input || ({})
@@ -72,7 +73,7 @@ Item {
             QQC2.Label {
                 Layout.fillWidth: true
                 horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft
-                text: qsTr("%1 of %2 selected").arg(page.count).arg(page.items.length); opacity: 0.75
+                text: qsTr("%1 of %2 selected").arg(page.count).arg(page.items.length); opacity: Util.dimLabel
             }
         }
 
@@ -95,7 +96,7 @@ Item {
                     model: page.items
                     // One item: a card that is a check box as a whole
                     // (click anywhere; with the keyboard focus on it, Space
-                    // or Enter ticks it).
+                    // ticks it, and Enter continues as on any check box).
                     delegate: QQC2.AbstractButton {
                         id: row
                         required property var modelData
@@ -105,7 +106,16 @@ Item {
                         Layout.fillWidth: true
                         padding: Kirigami.Units.largeSpacing
                         hoverEnabled: true
-                        onClicked: page.toggle(index, !on)
+                        // Really a check box, also for a screen reader. A
+                        // click or Space replaces the binding of "checked",
+                        // so it is put back.
+                        checkable: true
+                        checked: on
+                        onToggled: {
+                            page.toggle(index, checked)
+                            checked = Qt.binding(function () { return row.on })
+                        }
+                        function flip() { page.toggle(index, !on) }
                         focusPolicy: index === page.currentRow ? Qt.StrongFocus : Qt.ClickFocus
                         onActiveFocusChanged: if (activeFocus) {
                             page.currentRow = index
@@ -121,18 +131,16 @@ Item {
                         }
 
                         Accessible.role: Accessible.CheckBox
-                        Accessible.checkable: true
-                        Accessible.checked: on
                         Accessible.name: Util.riskLabel(modelData.label, modelData.risk)
                         Accessible.description: Util.describe(modelData.detail, modelData.warn)
-                        Accessible.onPressAction: clicked()
-                        Accessible.onToggleAction: clicked()
+                        Accessible.onPressAction: flip()
+                        Accessible.onToggleAction: flip()
 
                         background: Rectangle {
                             radius: Kirigami.Units.cornerRadius
-                            color: row.on ? Qt.rgba(row.edge.r, row.edge.g, row.edge.b, row.hovered ? 0.16 : 0.10)
-                                 : row.hovered ? Qt.rgba(row.edge.r, row.edge.g, row.edge.b, 0.05) : Kirigami.Theme.backgroundColor
-                            border.color: Qt.rgba(row.edge.r, row.edge.g, row.edge.b, row.on ? 0.6 : 0.15)
+                            color: row.on ? Qt.alpha(row.edge, row.hovered ? Util.tintOnHover : Util.tintOn)
+                                 : row.hovered ? Qt.alpha(row.edge, Util.tintHover) : Kirigami.Theme.backgroundColor
+                            border.color: Qt.alpha(row.edge, row.on ? Util.tintEdgeOn : Util.tintEdge)
                             FocusRing { target: row; cornerRadius: parent.radius }
                         }
 
@@ -144,7 +152,7 @@ Item {
                                 checked: row.on
                                 focusPolicy: Qt.NoFocus
                                 Accessible.ignored: true
-                                MouseArea { anchors.fill: parent; onClicked: row.clicked() }
+                                MouseArea { anchors.fill: parent; onClicked: row.flip() }
                             }
                             ColumnLayout {
                                 Layout.fillWidth: true
@@ -166,7 +174,7 @@ Item {
                                 }
                                 QQC2.Label {
                                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                    visible: text !== ""; opacity: 0.8
+                                    visible: text !== ""; opacity: Util.dimText
                                     text: row.modelData.detail || ""
                                 }
                                 RowLayout {
@@ -193,7 +201,7 @@ Item {
 
                 QQC2.Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap
-                    visible: page.items.length === 0; opacity: 0.75
+                    visible: page.items.length === 0; opacity: Util.dimLabel
                     text: qsTr("There is nothing to choose from.")
                 }
                 Item { implicitHeight: Kirigami.Units.largeSpacing }
@@ -205,7 +213,7 @@ Item {
             QQC2.Button { id: cancelButton; text: qsTr("Cancel"); icon.name: "dialog-cancel"; onClicked: page.dismiss() }
             PrimaryButton {
                 id: mainButton
-                text: qsTr("%1 (%2)").arg(page.d.ok || qsTr("Continue")).arg(page.count)
+                text: Util.fill(qsTr("%1 (%2)"), [page.d.ok || qsTr("Continue"), page.count])
                 icon.name: "go-next"
                 enabled: page.canContinue
                 onClicked: page.primary()

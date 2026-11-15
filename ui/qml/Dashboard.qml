@@ -67,7 +67,7 @@ Item {
                 implicitHeight: implicitWidth
                 width: implicitWidth; height: implicitHeight
                 Accessible.role: Accessible.StaticText
-                Accessible.name: qsTr("Score %1 out of 100, grade %2").arg(page.score).arg(page.d.grade || "?")
+                Accessible.name: Util.fill(qsTr("Score %1 out of 100, grade %2"), [page.score, page.d.grade || "?"])
                 Canvas {
                     id: ring
                     anchors.fill: parent
@@ -105,7 +105,7 @@ Item {
                         text: qsTr("grade %1").arg(page.d.grade || "?")
                         textFormat: Text.PlainText
                         font: Kirigami.Theme.smallFont
-                        opacity: 0.75
+                        opacity: Util.dimLabel
                     }
                 }
             }
@@ -114,7 +114,7 @@ Item {
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
                 QQC2.Label {
-                    Layout.fillWidth: true; wrapMode: Text.Wrap; opacity: 0.8
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; opacity: Util.dimText
                     textFormat: Text.PlainText
                     visible: text !== ""
                     text: {
@@ -217,7 +217,6 @@ Item {
                     // The main action (fix, or finish) is in the bar at the
                     // bottom; these are the side doors.
                     Flow {
-                        id: actions
                         Layout.fillWidth: true
                         spacing: Kirigami.Units.smallSpacing
                         ActionButton { text: qsTr("Open the full report"); icon.name: "document-preview"; onClicked: page.act("report") }
@@ -241,7 +240,7 @@ Item {
                         title: qsTr("Checks")
                         QQC2.Label {
                             Layout.fillWidth: true; wrapMode: Text.Wrap
-                            opacity: 0.75
+                            opacity: Util.dimLabel
                             text: (page.d.checks || []).length === 0 ? qsTr("No checks were run.")
                                 : qsTr("Open a check to see what it found and the settings it saw. Pick an area to jump to it.")
                         }
@@ -267,14 +266,14 @@ Item {
                                     leftPadding: Kirigami.Units.largeSpacing; rightPadding: Kirigami.Units.largeSpacing
                                     topPadding: Kirigami.Units.smallSpacing; bottomPadding: Kirigami.Units.smallSpacing
                                     Accessible.role: Accessible.Button
-                                    Accessible.name: qsTr("%1: %2").arg(modelData.name).arg(Util.stateName(modelData.state))
+                                    Accessible.name: Util.fill(qsTr("%1: %2"), [modelData.name, Util.stateName(modelData.state)])
                                     Accessible.description: qsTr("Jump to this area in the list of checks")
                                     // Used with the keyboard when the focus came by Tab.
                                     onClicked: page.jumpTo(index, visualFocus)
                                     onActiveFocusChanged: if (activeFocus && visualFocus) page.reveal(chip)
                                     QQC2.ToolTip.visible: hovered
                                     QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
-                                    QQC2.ToolTip.text: qsTr("%1: %2").arg(modelData.name).arg(Util.stateName(modelData.state))
+                                    QQC2.ToolTip.text: Util.tip(Util.fill(qsTr("%1: %2"), [modelData.name, Util.stateName(modelData.state)]))
                                     contentItem: RowLayout {
                                         spacing: Kirigami.Units.smallSpacing
                                         Kirigami.Icon {
@@ -308,7 +307,7 @@ Item {
                             Kirigami.ListSectionHeader {
                                 Layout.fillWidth: true; text: areaBlock.area
                                 Accessible.role: Accessible.Heading
-                                Accessible.name: qsTr("%1: %2").arg(areaBlock.area).arg(Util.stateName(areaBlock.modelData.state))
+                                Accessible.name: Util.fill(qsTr("%1: %2"), [areaBlock.area, Util.stateName(areaBlock.modelData.state)])
                                 contentItem: QQC2.Label { text: areaBlock.area; textFormat: Text.PlainText; font.weight: Font.DemiBold; elide: Text.ElideRight }
                             }
                             Repeater {
@@ -324,8 +323,8 @@ Item {
                                     onActiveFocusChanged: if (activeFocus && visualFocus) page.reveal(row)
                                     Accessible.role: Accessible.Button
                                     Accessible.name: (modelData.affects || "") !== ""
-                                        ? qsTr("%1, %2: %3. %4").arg(modelData.title).arg(Util.stateName(state_)).arg(modelData.summary || "").arg(modelData.affects)
-                                        : qsTr("%1, %2: %3").arg(modelData.title).arg(Util.stateName(state_)).arg(modelData.summary || "")
+                                        ? Util.fill(qsTr("%1, %2: %3. %4"), [modelData.title, Util.stateName(state_), modelData.summary || "", modelData.affects])
+                                        : Util.fill(qsTr("%1, %2: %3"), [modelData.title, Util.stateName(state_), modelData.summary || ""])
                                     Accessible.description: qsTr("Opens this check")
                                     // Inside the row: the rows touch each other.
                                     FocusRing { target: row; outset: 0; z: 1 }
@@ -349,14 +348,14 @@ Item {
                                                 text: row.modelData.affects || ""
                                                 textFormat: Text.PlainText
                                                 font: Kirigami.Theme.smallFont
-                                                opacity: 0.75
+                                                opacity: Util.dimLabel
                                                 Layout.fillWidth: true
                                                 wrapMode: Text.Wrap
                                                 maximumLineCount: 2
                                                 elide: Text.ElideRight
                                                 // The whole line when it is cut off.
                                                 QQC2.ToolTip.visible: truncated && affectsHover.hovered
-                                                QQC2.ToolTip.text: text
+                                                QQC2.ToolTip.text: Util.tip(text)
                                                 HoverHandler { id: affectsHover }
                                             }
                                         }
@@ -364,16 +363,14 @@ Item {
                                             text: row.modelData.summary || ""
                                             textFormat: Text.PlainText
                                             // Medium only (no high) reads orange, like the header's count.
-                                            color: (row.state_ === "ok" || row.state_ === "na") ? Kirigami.Theme.textColor
-                                                 : row.state_ === "bad" && text.indexOf(" high") < 0 ? Kirigami.Theme.neutralTextColor
-                                                 : Util.stateColor(Kirigami.Theme, row.state_)
-                                            opacity: (row.state_ === "ok" || row.state_ === "na") ? 0.7 : 1
+                                            color: Util.summaryColor(Kirigami.Theme, row.state_, text)
+                                            opacity: (row.state_ === "ok" || row.state_ === "na") ? Util.dimQuiet : 1
                                             font.weight: row.state_ === "bad" || row.state_ === "warn" ? Font.DemiBold : Font.Normal
                                             horizontalAlignment: Text.AlignRight
                                             wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
                                             Layout.maximumWidth: Math.min(Kirigami.Units.gridUnit * 18, content.width * 0.38)
                                         }
-                                        Kirigami.Icon { source: "go-next"; implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth; opacity: 0.6; Accessible.ignored: true }
+                                        Kirigami.Icon { source: "go-next"; implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth; opacity: Util.dimMark; Accessible.ignored: true }
                                     }
                                 }
                             }

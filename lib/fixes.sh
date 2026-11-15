@@ -328,9 +328,8 @@ $(tail -n 15 <<< "$out")"
     if [[ -n "$undo" ]] && ui_yesno "Put back what this fix may already have changed?" "Roll back" "Leave it" "y"; then
         # Its output goes to the log through this shell, not by handing it
         # the log file: an undo step can run a program as another account.
-        local undo_out undo_rc=0
-        undo_out=$(_no_tty bash -c "$undo" 2>&1 < /dev/null) || undo_rc=$?
-        _log_foreign "undo: " "$undo_out"
+        local undo_rc=0
+        _undo_run bash -c "$undo" || undo_rc=$?
         if [[ $undo_rc -eq 0 ]]; then
             print_status "OK" "Rolled back: ${title}"
         else
@@ -338,6 +337,29 @@ $(tail -n 15 <<< "$out")"
         fi
     fi
     return 3
+}
+
+# _undo_run CMD... — run an undo step (see _no_tty) and write the end of
+# what it printed to the run log; returns CMD's status. An undo step can
+# run a program as another account, so it never gets the log file itself
+# (see _log_foreign), and what it prints is limited where it is read, not
+# afterwards: "tail" keeps the last _UNDO_OUT_MAX bytes and reads to the
+# end, so a step that prints without end costs no memory and a step that
+# prints a lot is not ended by a closed pipe. Of those bytes the last
+# _LOG_FOREIGN_LINES lines are logged: when a step fails, the reason is
+# at the end.
+_UNDO_OUT_MAX=400000
+_undo_run() {
+    local out rc=0 n
+    out=$(set -o pipefail
+          _no_tty "$@" 2>&1 < /dev/null | tail -c "$_UNDO_OUT_MAX" | tr -d '\000') || rc=$?
+    n=$(wc -l <<< "$out")
+    if (( n > _LOG_FOREIGN_LINES )); then
+        _log_foreign "undo: " "(the last ${_LOG_FOREIGN_LINES} lines of the output)"
+        out=$(tail -n "$_LOG_FOREIGN_LINES" <<< "$out")
+    fi
+    _log_foreign "undo: " "$out"
+    return "$rc"
 }
 
 # ====================== CHOOSING AND REVIEWING ======================
@@ -710,7 +732,7 @@ _sync_undone() {
 run_undo() {
     local base="$STATE_DIR/undo" r count label choice f title
     local -a items=() runs=()
-    local d i undo_out undo_rc
+    local d i undo_rc
     for d in "$base"/*/; do [[ -d "$d" ]] && runs+=("$(basename "$d")"); done
     for (( i = ${#runs[@]} - 1; i >= 0; i-- )); do
         r="${runs[$i]}"
@@ -759,8 +781,7 @@ Undo this older run anyway?" "Undo anyway" "Cancel" "n"; then
         _signals_hold
         # (Output: see the roll-back in _run_change.)
         undo_rc=0
-        undo_out=$(_no_tty bash "$f" 2>&1 < /dev/null) || undo_rc=$?
-        _log_foreign "undo: " "$undo_out"
+        _undo_run bash "$f" || undo_rc=$?
         if [[ $undo_rc -eq 0 ]]; then
             mv -f -- "$f" "${f%.sh}.done"
             _signals_release

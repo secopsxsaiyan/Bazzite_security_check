@@ -70,7 +70,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     container:
-      # registry.fedoraproject.org/fedora:43, by digest. For a newer one:
+      # registry.fedoraproject.org/fedora:43, by digest. Dependabot does not
+      # update it: its github-actions updates cover "uses:" references to
+      # GitHub repositories only (no registry URLs), and its docker updates
+      # read Dockerfiles and Kubernetes manifests, not a job's container
+      # image. So it is refreshed by hand. For a newer one:
       # skopeo inspect --format '{{.Digest}}' docker://registry.fedoraproject.org/fedora:43
       image: registry.fedoraproject.org/fedora@sha256:086bb30fc7dd0f84b266b9c93d14298f06e30d04421dcd6813629ea00542fa8a
     env:

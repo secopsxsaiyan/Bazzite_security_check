@@ -6,6 +6,7 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 Item {
     id: page
@@ -18,7 +19,11 @@ Item {
     // window presses that one: a focused "Skip" never applies the fix).
     function primary() { answer("apply") }
     function dismiss() { cancelled() }
-    function initialFocus() { return applyButton }
+    // No button starts with the keyboard focus. Space presses the focused
+    // button, and the fixes come one after the other: with the focus on
+    // Apply, the Space meant for "Skip" on the fix before would apply this
+    // one. Apply by Space or a click takes a deliberate move to the button.
+    function initialFocus() { return null }
 
     readonly property var d: input || ({})
     function answer(c) { finished({ "choice": c }) }
@@ -62,7 +67,7 @@ Item {
                     visible: (page.d.commands || "") !== ""
                     QQC2.Label {
                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                        opacity: 0.8
+                        opacity: Util.dimText
                         text: qsTr("These run as administrator. You are not asked for your password again.")
                     }
                     CodeBlock { text: page.d.commands || ""; flickable: scroll.contentItem }
@@ -89,7 +94,7 @@ Item {
             hint: qsTr("Nothing changes until you press Apply.")
             leading: QQC2.Button { text: qsTr("Stop reviewing"); icon.name: "process-stop"; onClicked: page.answer("stop") }
             QQC2.Button { text: qsTr("Skip"); icon.name: "go-next"; onClicked: page.answer("skip") }
-            PrimaryButton { id: applyButton; text: qsTr("Apply"); icon.name: "dialog-ok-apply"; onClicked: page.primary() }
+            PrimaryButton { text: qsTr("Apply"); icon.name: "dialog-ok-apply"; onClicked: page.primary() }
         }
     }
 }

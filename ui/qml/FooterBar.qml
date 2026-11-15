@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 ColumnLayout {
     id: bar
@@ -24,7 +25,7 @@ ColumnLayout {
             Layout.fillWidth: true
             wrapMode: Text.Wrap; textFormat: Text.PlainText
             maximumLineCount: 2; elide: Text.ElideRight
-            opacity: 0.8; text: bar.hint
+            opacity: Util.dimText; text: bar.hint
         }
         RowLayout { id: buttonRow; spacing: Kirigami.Units.smallSpacing }
     }

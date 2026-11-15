@@ -9,7 +9,8 @@
 # Each scenario runs in a process of its own: ui/app.py is loaded as a
 # module and its main() runs there with stdin and stdout replaced by two
 # pipes, the same two the root side (lib/ui.sh) holds. The scenario sends
-# request lines, presses keys in the window and reads the answer lines. It
+# request lines, presses keys and clicks in the window and reads the answer
+# lines. It
 # is driven from inside the front end's own event loop, through the
 # module's test interface: PAGE_DIR (the folder the page files come from)
 # and TEST_HOOK(app, shell, host).
@@ -37,7 +38,7 @@ REPO = os.path.dirname(HERE)
 APP = os.path.join(REPO, "ui", "app.py")
 SAMPLES_FILE = os.path.join(HERE, "ui", "samples.json")
 
-SETTLE = 0.65           # the window ignores Enter and Esc for ~350 ms after a page appears
+SETTLE = 0.65           # the window takes no keys and no clicks for ~350 ms after a page appears
 SCENARIO_LIMIT = 100    # seconds for one scenario, inside it
 KILL_AFTER = 120        # seconds after which the parent kills a scenario
 
@@ -315,6 +316,168 @@ def K():
     return Qt.Key
 
 
+def FOCUS_BY_TAB():
+    from PySide6.QtCore import Qt
+    return Qt.FocusReason.TabFocusReason
+
+
+def key_event(press, k, text="", repeat=False):
+    """One key event: a press or a release; REPEAT marks it as the
+    keyboard's auto-repeat of a key that is held down."""
+    from PySide6.QtCore import QCoreApplication, QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    kind = QEvent.Type.KeyPress if press else QEvent.Type.KeyRelease
+    QCoreApplication.sendEvent(shell, QKeyEvent(kind, k, Qt.KeyboardModifier.NoModifier, text, repeat))
+
+
+def hold(k, text, seconds, until=None):
+    """Keep a key held down for SECONDS, or until UNTIL() is true: the
+    keyboard repeats it (a release and a press, both marked as repeats)."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end and not (until and until()):
+        key_event(False, k, text, True)
+        key_event(True, k, text, True)
+        yield P(0.03)
+
+
+def page_root():
+    """The page that takes the input now: the dialog over a page, else the page."""
+    return prop("dialogItem") or prop("pageItem")
+
+
+def items_under(root):
+    out, todo = [], [root] if root is not None else []
+    while todo:
+        item = todo.pop()
+        out.append(item)
+        todo.extend(reversed(item.childItems()))
+    return out
+
+
+def plain(value):
+    """A value of a QML property as Python data."""
+    return value.toVariant() if hasattr(value, "toVariant") else value
+
+
+def is_main(item):
+    """ITEM is a page's main button (PrimaryButton.qml)."""
+    return item is not None and item.metaObject().className().startswith("PrimaryButton")
+
+
+def controls(kind="QQuickAbstractButton", root=None):
+    """The controls of the page that can be used now, in the order they are drawn."""
+    return [i for i in items_under(root or page_root()) if i.inherits(kind) and i.isVisible() and i.isEnabled()]
+
+
+def control(what, test, kind="QQuickAbstractButton"):
+    """The first usable control that TEST accepts; a failed check when there is none."""
+    for item in controls(kind):
+        try:
+            if test(item):
+                return item
+        except Exception:
+            pass
+    check(False, "%s: there is such a control on the page" % what)
+    return None
+
+
+def button(text):
+    """The button whose label starts with TEXT."""
+    return control("the button \"%s\"" % text, lambda i: (i.property("text") or "").startswith(text))
+
+
+def main_button():
+    return control("the main button", is_main)
+
+
+def row(field, value):
+    """The row (card, list entry) that shows the input's item whose FIELD is VALUE."""
+    def test(i):
+        data = plain(i.property("modelData"))
+        return (data[field] if isinstance(field, int) else data.get(field)) == value
+    return control("the row for %r" % (value,), test)
+
+
+def scene_point(item):
+    """The middle of ITEM in the window, None when it is not on screen
+    there (outside the window, or scrolled out of a list)."""
+    from PySide6.QtCore import QPointF, QRectF
+    c = item.mapToScene(QPointF(item.width() / 2, item.height() / 2))
+    if not (0 <= c.x() < shell.width() and 0 <= c.y() < shell.height()):
+        return None
+    up = item.parentItem()
+    while up is not None:
+        if up.clip() and not up.mapRectToScene(QRectF(0, 0, up.width(), up.height())).contains(c):
+            return None
+        up = up.parentItem()
+    return c
+
+
+def mouse_at(point, press=True, release=True):
+    """The left mouse button, pressed and/or let go at POINT of the window."""
+    from PySide6.QtCore import QCoreApplication, QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    where = QPointF(shell.mapToGlobal(point.toPoint()))
+    left, none = Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton
+    if press:
+        QCoreApplication.sendEvent(shell, QMouseEvent(QEvent.Type.MouseButtonPress, point, where, left, left,
+                                                      Qt.KeyboardModifier.NoModifier))
+    if release:
+        QCoreApplication.sendEvent(shell, QMouseEvent(QEvent.Type.MouseButtonRelease, point, where, left, none,
+                                                      Qt.KeyboardModifier.NoModifier))
+
+
+def click(item, what="a control"):
+    """A mouse click in the middle of ITEM. An item in a list is scrolled
+    into view first, as the Tab key does it."""
+    from PySide6.QtCore import Qt
+    if item is None:
+        return False
+    if scene_point(item) is None:
+        item.forceActiveFocus(Qt.FocusReason.TabFocusReason)
+    point = scene_point(item)
+    if point is None:
+        return check(False, "%s can be clicked: it is on screen" % what)
+    mouse_at(point)
+    return True
+
+
+def space(item):
+    """The keyboard: the focus on ITEM, as Tab puts it there, then Space."""
+    from PySide6.QtCore import Qt
+    if item is None:
+        return False
+    item.forceActiveFocus(Qt.FocusReason.TabFocusReason)
+    key(Qt.Key.Key_Space, text=" ")
+    return True
+
+
+def stderr_text():
+    """Everything the front end has written to stderr so far (the file
+    itself: not what the QML engine reported to this test)."""
+    err_file.seek(0)
+    return err_file.read().decode("utf-8", "replace")
+
+
+def at_once(rid, mode, data, act, what):
+    """Ask for a page and call ACT() the moment it appears, inside the
+    Shell's settle pause. ACT is only called while the Shell says it is
+    still settling: when this machine stalled for longer than the pause,
+    the page is asked for again (a few times). Returns the id of the
+    request ACT was called for, None (a failed check) if that never
+    worked out."""
+    for attempt in range(5):
+        cur = "%s-%d" % (rid, attempt)
+        ask(cur, mode, data)
+        ok = yield W(lambda: got(cur) or prop("pendingId") == cur, "%s: page shown" % what)
+        if ok and not got(cur) and prop("settling") is True and act() is not False:
+            return cur
+        say("     note: %s: the settle pause was over before the test could act (try %d)" % (what, attempt + 1))
+        yield from settled(what)
+    check(False, "%s: the test could act within the settle pause in one of 5 tries" % what)
+    return None
+
+
 # ---- the scenarios -----------------------------------------------------------
 def sc_pages():
     """Every real page, with its sample input and with {}: it loads without
@@ -540,38 +703,332 @@ def sc_shell():
     send({"quit": True})
 
 
+def sc_controls():
+    """Every control that produces an answer, other than Enter and Esc on
+    the page as it comes up: clicked with the mouse or, with the keyboard
+    focus on it, pressed with Space. The answers are what the root side
+    accepts (_wizard_answer, _dashboard_answer, _check_answer,
+    _confirm_answer, lib/settings.sh, the dialog and choose callers in
+    lib/ui.sh)."""
+    Return, Down = K().Key_Return, K().Key_Down
+    S = SAMPLES
+    wiz = S["wizard"]["answers"]
+    fixable = [f["id"] for f in S["check"]["findings"] if f.get("fixable")]
+    first_check = S["dashboard"]["checks"][0]["id"]
+    state = {}
+
+    def card(title):
+        return control("the card \"%s\"" % title, lambda i: i.property("title") == title)
+
+    # ---- the steps of each case: a generator that uses the page
+    def wizard_settings(rid):
+        click(button("Settings"), "Settings")
+        yield P(0)
+
+    def wizard_changed(rid):
+        key(Return)                         # to "Your PC"
+        yield P(0.15)
+        page = prop("pageItem")
+        off = control("a use that is not ticked", lambda i: i.property("switchedOn") is False and plain(i.property("modelData"))[0] not in wiz["use"])
+        if off is None:
+            return
+        state["use"] = plain(off.property("modelData"))[0]
+        space(off)                          # Space ticks the card that has the focus
+        yield P(0.1)
+        check(off.property("switchedOn") is True and off.property("checked") is True, "wizard: Space on a card ticks it")
+        key(Return, text="\r")              # Enter on a card is the page's main action, not a tick
+        yield P(0.15)
+        check(page.property("step") == 2 and off.property("switchedOn") is True, "wizard: Enter on a card goes on, and leaves the tick alone")
+        click(card("Offer fixes"), "Offer fixes")
+        yield P(0.1)
+        deep = card("Deep check")
+        space(deep)
+        yield P(0.1)
+        check(deep is not None and deep.property("switchedOn") is True, "wizard: Space on \"Deep check\" ticks it")
+        key(Return, text="\r")
+        yield P(0.15)
+        check(page.property("step") == 3, "wizard: Enter on a card of the Options step goes on to Review")
+        key(Return, text="\r")
+
+    def settings_changed(rid):
+        combo = control("the theme box", lambda i: True, "QQuickComboBox")
+        if combo is None:
+            return
+        combo.forceActiveFocus(FOCUS_BY_TAB())
+        key(Down)                           # the next entry: Light
+        yield P(0.1)
+        click(button("Check for updates when"), "the tick box")
+        yield P(0.1)
+        key(Return, text="\r")              # Enter on a tick box is the page's main action
+
+    def settings_update(rid):
+        page = prop("pageItem")
+        page.setProperty("latest", "99.0.0")        # as if "Check now" had found a newer release
+        page.setProperty("checkState", "done")
+        yield P(0.1)
+        click(button("Install update"), "Install update")
+
+    def press_with(text, how):
+        def steps(rid):
+            (click if how == "mouse" else space)(button(text))
+            yield P(0)
+        return steps
+
+    def open_check(rid):
+        click(row("id", first_check), "the row of a check")
+        yield P(0)
+
+    def check_all(rid):
+        click(button("Select all"), "Select all")
+        yield P(0.1)
+        click(main_button(), "the main button")
+
+    def check_one(rid):
+        boxes = [b for b in controls("QQuickCheckBox") if not b.property("text")]
+        off = [b for b in boxes if not b.property("checked")]
+        if not check(len(boxes) == len(fixable) and off, "check: a tick box for each finding that can be fixed (%d)" % len(boxes)):
+            return
+        space(off[0])
+        yield P(0.1)
+        key(Return, text="\r")
+
+    def choose_keys(rid):
+        r = row("tag", "c")
+        space(r)
+        yield P(0.1)
+        check(r is not None and r.property("checked") is True, "choose: Space on a row ticks it")
+        key(Return, text="\r")              # Enter on a row continues, and does not untick it
+
+    def choose_mouse(rid):
+        click(row("tag", "a"), "a row")
+        yield P(0.1)
+        click(main_button(), "the main button")
+
+    def choose_button(text):
+        def steps(rid):
+            click(button(text), text)
+            yield P(0.1)
+            click(main_button(), "the main button")
+        return steps
+
+    def list_other(rid):
+        rows = controls("QQuickRadioDelegate")
+        other = [r for r in rows if not r.property("checked")]
+        if not check(len(rows) == len(S["dialog-list"]["items"]) and other, "dialog, list: a row for each item"):
+            return
+        state["tag"] = plain(other[-1].property("modelData"))["tag"]
+        click(other[-1], "a row of the list")
+        yield P(0.1)
+        click(main_button(), "the main button")
+
+    def list_down_cancel(rid):
+        state["tag"] = None
+        before = [plain(r.property("modelData"))["tag"] for r in controls("QQuickRadioDelegate") if r.property("checked")]
+        key(Down)                           # the arrow keys pick the next row
+        yield P(0.1)
+        now = [plain(r.property("modelData"))["tag"] for r in controls("QQuickRadioDelegate") if r.property("checked")]
+        if check(len(now) == 1 and now != before, "dialog, list: Down picks the next row (%s, then %s)" % (before, now)):
+            state["tag"] = now[0]
+        space(button("Cancel"))             # the other button: answered, not cancelled
+
+    wizard_keys = {"use", "fix", "deep", "report_dir", "action"}
+    cases = [
+        # name, mode, input, steps, status, what the answer must be
+        ("wizard: the Settings button", "wizard", S["wizard"], wizard_settings, 0,
+         lambda a: set(a) == wizard_keys and a["action"] == "settings" and a["use"] == wiz["use"] and a["fix"] is True and a["deep"] is False),
+        ("wizard: other choices on every step", "wizard", S["wizard"], wizard_changed, 0,
+         lambda a: set(a) == wizard_keys and a["action"] == "start" and sorted(a["use"]) == sorted(wiz["use"] + [state["use"]])
+         and a["fix"] is False and a["deep"] is True and a["report_dir"] == wiz["report_dir"]),
+        ("wizard: Quit", "wizard", S["wizard"], press_with("Quit", "mouse"), 1, None),
+        ("settings: another theme and the tick box", "settings", S["settings"], settings_changed, 0,
+         lambda a: a == {"action": "save", "theme": "light", "update_check": False}),
+        ("settings: Install update", "settings", S["settings"], settings_update, 0,
+         lambda a: a == {"action": "update", "theme": "system", "update_check": True}),
+        ("settings: Cancel", "settings", S["settings"], press_with("Cancel", "space"), 1, None),
+        ("dashboard: Open the full report", "dashboard", S["dashboard"], press_with("Open the full report", "mouse"), 0, lambda a: a == {"action": "report"}),
+        ("dashboard: Undo changes", "dashboard", S["dashboard"], press_with("Undo changes", "space"), 0, lambda a: a == {"action": "undo"}),
+        ("dashboard: Kept on purpose", "dashboard", S["dashboard"], press_with("Kept on purpose", "mouse"), 0, lambda a: a == {"action": "keep"}),
+        ("dashboard: Settings", "dashboard", S["dashboard"], press_with("Settings", "space"), 0, lambda a: a == {"action": "settings"}),
+        ("dashboard: Finish", "dashboard", S["dashboard"], press_with("Finish", "mouse"), 0, lambda a: a == {"action": "finish"}),
+        ("dashboard: a check is opened", "dashboard", S["dashboard"], open_check, 0, lambda a: a == {"action": "check", "check": first_check}),
+        ("check: Back", "check", S["check"], press_with("Back", "mouse"), 0, lambda a: a == {"action": "back"}),
+        ("check: Select all, then fix", "check", S["check"], check_all, 0, lambda a: a == {"action": "fix", "ids": fixable}),
+        ("check: one more ticked, then fix", "check", S["check"], check_one, 0,
+         lambda a: set(a) == {"action", "ids"} and a["action"] == "fix" and len(a["ids"]) == 2 and "13" in a["ids"] and set(a["ids"]) <= set(fixable)),
+        ("choose: Space on a row, Enter", "choose", S["choose"], choose_keys, 0, lambda a: a == {"tags": ["a", "b", "c"]}),
+        ("choose: a row clicked", "choose", S["choose"], choose_mouse, 0, lambda a: a == {"tags": ["b"]}),
+        ("choose: Select all", "choose", S["choose"], choose_button("Select all"), 0, lambda a: a == {"tags": ["a", "b", "c", "d"]}),
+        ("choose: Select none", "choose", S["choose"], choose_button("Select none"), 0, lambda a: a == {"tags": []}),
+        ("choose: Low risk only", "choose", S["choose"], choose_button("Low risk only"), 0, lambda a: a == {"tags": ["a"]}),
+        ("choose: Cancel", "choose", S["choose"], press_with("Cancel", "mouse"), 1, None),
+        ("confirm: Skip", "confirm", S["confirm"], press_with("Skip", "mouse"), 0, lambda a: a == {"choice": "skip"}),
+        ("confirm: Stop reviewing", "confirm", S["confirm"], press_with("Stop reviewing", "space"), 0, lambda a: a == {"choice": "stop"}),
+        ("confirm: Apply, clicked", "confirm", S["confirm"], press_with("Apply", "mouse"), 0, lambda a: a == {"choice": "apply"}),
+        ("dialog, question: the other button", "dialog", S["dialog"], press_with("Cancel", "mouse"), 0, lambda a: a == {"button": 0}),
+        ("dialog, list: another row, clicked", "dialog", S["dialog-list"], list_other, 0, lambda a: a == {"button": 1, "tag": state["tag"]}),
+        ("dialog, list: Down, then the other button", "dialog", S["dialog-list"], list_down_cancel, 0,
+         lambda a: state["tag"] is not None and a == {"button": 0, "tag": state["tag"]}),
+    ]
+    for n, (what, mode, data, steps, status, answer) in enumerate(cases):
+        rid = "c%d" % n
+        if (yield from show(rid, mode, data, what)):
+            yield from steps(rid)
+        yield from answered(rid, what)
+        expect(rid, status, what, answer)
+        no_warnings(what)
+    send({"quit": True})
+
+
+def sc_tab():
+    """Tab reaches every button of the bar at the bottom of each page (in
+    a dialog: each of its buttons)."""
+    Tab = K().Key_Tab
+    S = SAMPLES
+    for n, (mode, sample) in enumerate((("wizard", "wizard"), ("settings", "settings"), ("dashboard", "dashboard"), ("check", "check"),
+                                        ("choose", "choose"), ("confirm", "confirm"), ("dialog", "dialog"), ("dialog", "dialog-list"))):
+        what = "%s (%s)" % (mode, sample)
+        if not (yield from show("t%d" % n, mode, S[sample], what)):
+            continue
+        if mode == "dialog":
+            labels = [b["label"] for b in S[sample]["buttons"]]
+            want = [b for b in controls() if b.property("text") in labels and not b.property("checkable")]
+            check(len(want) == len(labels), "%s: %d buttons for %d in the request" % (what, len(want), len(labels)))
+        else:
+            bars = [i for i in items_under(page_root()) if i.metaObject().className().startswith("FooterBar")]
+            want = controls(root=bars[0]) if len(bars) == 1 else []
+            check(len(want) >= 2, "%s: the bar at the bottom has %d buttons" % (what, len(want)))
+        seen = []
+        for i in range(400):
+            if all(b in seen for b in want):
+                break
+            key(Tab)
+            seen.append(shell.activeFocusItem())
+            if i % 10 == 9:
+                yield P(0)
+        left = [b.property("text") for b in want if b not in seen]
+        check(not left, "%s: Tab reaches %s%s" % (what, ", ".join(repr(b.property("text")) for b in want),
+                                                 "" if not left else " - but not %s (in %d presses)" % (", ".join(map(repr, left)), len(seen))))
+        no_warnings(what)
+    send({"quit": True})
+
+
 def sc_guard():
-    """Enter and Esc that arrive as a page appears (typed for the page
-    before) or from a held-down key must not answer the new page."""
-    Return, Escape = K().Key_Return, K().Key_Escape
-    data = SAMPLES["confirm"]
-    missing = " (the key guard in ui/qml/Shell.qml is missing or does not cover this)"
+    """What arrives as a page appears was meant for the page before and
+    must not answer the new one: a key or a click in the first moment, and
+    a key or mouse button that is held down (or repeats) across the change
+    of page - however long it is held."""
+    Return, Escape, Space, Tab = K().Key_Return, K().Key_Escape, K().Key_Space, K().Key_Tab
+    data, choose = SAMPLES["confirm"], SAMPLES["choose"]
+    missing = " (the guard in ui/qml/Shell.qml is missing or does not cover this)"
+
+    def no_answer(rid, what):
+        return check(not got(rid), what + (missing if got(rid) else ""))
+
     # A page that is answered normally first, so that the window is up.
     if (yield from show("g0", "confirm", data, "first page")):
+        # The page that asks "apply this?" does not start with the keyboard
+        # focus on Apply: Space, which presses a focused button, does nothing.
+        check(not is_main(shell.activeFocusItem()), "confirm: the keyboard focus does not start on Apply (it is on: %s)" % focus_text())
+        key(Space, text=" ")
+        yield P(0.3)
+        no_answer("g0", "confirm: Space on the page as it comes up answers nothing")
         key(Escape)
     yield from answered("g0", "first page")
-    for rid, k, name in (("g1", Return, "Enter"), ("g2", Escape, "Esc")):
-        ask(rid, "confirm", data)
-        yield W(lambda: prop("pendingId") == rid, "%s at once: page shown" % name)
-        key(k)
+
+    # 1. A key or a click in the first moment.
+    for base, k, name in (("g1", Return, "Enter"), ("g2", Escape, "Esc"), ("g3", Space, "Space")):
+        rid = yield from at_once(base, "confirm", data, lambda: key(k, text={Return: "\r", Space: " "}.get(k, "")), name + " at once")
+        if rid is None:
+            continue
         yield P(0.2)
-        check(not got(rid), "%s pressed the moment a page appears does not answer it%s" % (name, missing if got(rid) else ""))
+        no_answer(rid, "%s pressed the moment a page appears does not answer it" % name)
         yield from settled(name)
         if not got(rid):
-            key(k)
+            key(Return if k == Space else k)
             yield from answered(rid, "%s after the pause" % name)
-            expect(rid, 0 if k == Return else 1, "%s pressed after the pause answers" % name)
-    for rid, k, name in (("g3", Return, "Enter"), ("g4", Escape, "Esc")):
+            expect(rid, 1 if k == Escape else 0, "a key pressed after the pause answers")
+    rid = yield from at_once("g4", "confirm", data, lambda: click(button("Skip"), "Skip"), "a click at once")
+    if rid is not None:
+        yield P(0.2)
+        no_answer(rid, "a click in the moment a page appears is dropped")
+        yield from settled("a click at once")
+        if not got(rid):
+            click(button("Skip"), "Skip")
+            yield from answered(rid, "a click after the pause")
+            expect(rid, 0, "a click after the pause answers", lambda a: a == {"choice": "skip"})
+
+    # 2. Auto-repeat alone (the press itself was never seen here).
+    for rid, k, name in (("g5", Return, "Enter"), ("g6", Escape, "Esc")):
         if not (yield from show(rid, "confirm", data, "auto-repeat %s" % name)):
             continue
         for _ in range(5):
             key(k, repeat=True)
         yield P(0.3)
-        check(not got(rid), "auto-repeat %s (a held-down key) does not answer a page%s" % (name, missing if got(rid) else ""))
+        no_answer(rid, "auto-repeat %s (a held-down key) does not answer a page" % name)
+        yield from settled("after auto-repeat " + name)
         if not got(rid):
             key(k)
             yield from answered(rid, "%s pressed once" % name)
             expect(rid, 0 if k == Return else 1, "%s pressed once answers" % name)
+
+    # 3. A key held down on the page before, still down (and repeating)
+    # when the next page appears and long after its settle pause: Choose,
+    # then Confirm, as in a review of fixes.
+    for k, name, text in ((Space, "Space", " "), (Return, "Enter", "\r"), (Escape, "Esc", "")):
+        c, f = "gc-" + name, "gf-" + name
+        if not (yield from show(c, "choose", choose, "held %s: the page before" % name)):
+            continue
+        key_event(True, k, text)
+        yield from hold(k, text, 0.25)
+        ask(f, "confirm", data)             # the next page comes while the key is down
+        yield from hold(k, text, 6.0, lambda: got(f) or prop("pendingId") == f)
+        if not check(prop("pendingId") == f or got(f), "held %s: the next page is shown" % name):
+            continue
+        yield from hold(k, text, 1.5)       # four times the settle pause
+        no_answer(f, "%s held down since the page before does not answer the new page, however long" % name)
+        key_event(False, k, text)
+        yield P(0.2)
+        no_answer(f, "letting go of %s does not answer it either" % name)
+        yield from settled("after the held " + name)
+        if got(f):
+            continue
+        # Pressed again on purpose, the key works.
+        if k == Space:
+            key(Space, text=" ")
+            yield P(0.3)
+            no_answer(f, "Space with the focus on no button answers nothing")
+            for _ in range(12):
+                if is_main(shell.activeFocusItem()):
+                    break
+                key(Tab)
+                yield P(0.03)
+            check(is_main(shell.activeFocusItem()), "Tab reaches Apply (the focus is on: %s)" % focus_text())
+            key(Space, text=" ")
+        else:
+            key(k, text=text)
+        yield from answered(f, "%s pressed again" % name)
+        if k == Escape:
+            expect(f, 1, "Esc let go and pressed again cancels")
+        else:
+            expect(f, 0, "%s let go and pressed again applies" % name, lambda a: a == {"choice": "apply"})
+
+    # 4. The mouse button held down on the page before and let go on the new one.
+    if (yield from show("gm0", "choose", choose, "held mouse button: the page before")):
+        point = scene_point(main_button())
+        if check(point is not None, "the main button of the page before is on screen"):
+            mouse_at(point, release=False)
+            yield P(0.1)
+            ask("gm1", "confirm", data)
+            ok = yield W(lambda: got("gm1") or prop("pendingId") == "gm1", "held mouse button: the next page is shown")
+            yield P(1.5)                    # four times the settle pause
+            mouse_at(point, press=False)
+            yield P(0.3)
+            no_answer("gm1", "a mouse button held since the page before, let go over the new page's button, does not answer it")
+            yield from settled("after the held mouse button")
+            if ok and not got("gm1"):
+                click(main_button(), "Apply")
+                yield from answered("gm1", "a click on purpose")
+                expect("gm1", 0, "a click on purpose applies", lambda a: a == {"choice": "apply"})
     no_warnings("the whole scenario")
     send({"quit": True})
 
@@ -687,6 +1144,13 @@ def sc_broken():
         yield from answered(rid, what, 5.0)
         expect(rid, 3, what + ": status 3")
     check(prop("pendingId") == "", "nothing is left waiting for an answer")
+    # Why a page did not load must reach the run log, which is this
+    # process's stderr. Qt writes there by itself only on a terminal; this
+    # scenario runs without QT_FORCE_STDERR_LOGGING in its environment, so
+    # it is ui/app.py that has to ask for it.
+    err = stderr_text()
+    check(re.search(r"Check\.qml:\d+", err) is not None and "NoSuchComponent" in err,
+          "the reason a page file did not load is written to stderr (%d bytes there)" % len(err))
     w = new_warnings()
     check(not w, "only the expected warnings%s" % ("" if not w else ": " + cut(" | ".join(w[:2]), 300)))
     if (yield from show("b5", "wizard", {"n": 5}, "a good page after the broken ones")):
@@ -710,6 +1174,86 @@ def sc_quit():
     yield W(lambda: prop("pendingId") == "x1" and shell.isVisible(), "page shown")
     yield P(0.3)
     send({"quit": True})
+
+
+def sc_exception():
+    """An exception while a line is handled (here: a colour scheme that
+    cannot be read): one answer line with status 3, never silence, and the
+    front end goes on."""
+    Return = K().Key_Return
+    # The traceback the front end logs is not a QML warning.
+    allowed.append(re.compile(r"^(?!.*(qml|QML|Binding loop)).*$"))
+    if (yield from show("e0", "confirm", SAMPLES["confirm"], "a page first")):
+        key(Return)
+    yield from answered("e0", "a page first")
+    scheme = appmod._scheme_path("light") or ""
+    if not check(scheme.startswith(os.environ.get("BSA_UI_TEST_HOME", "\0")), "the colour scheme that cannot be read is the one found: %r" % scheme):
+        return send({"quit": True})
+    n = len(replies)
+    send({"theme": "light"})
+    yield W(lambda: (pump(), len(replies) > n)[1], "an exception while a line is handled: answered (silence makes the root side wait for ever)", 3.0)
+    yield P(0.3)
+    pump()
+    check(replies[n:] == ['{"id":"","status":3,"answer":null}'], "an exception while a line is handled: exactly one line, status 3, no id: %s" % cut(" | ".join(replies[n:])))
+    check("Traceback (most recent call last)" in stderr_text(), "the exception is written to stderr")
+    # With a page request in the same line, the answer carries its id.
+    send({"theme": "light", "id": "e1", "mode": "confirm", "data": {}})
+    yield from answered("e1", "an exception in a line with a page request")
+    expect("e1", 3, "an exception in a line with a page request: status 3 with the request's id")
+    if (yield from show("e2", "confirm", SAMPLES["confirm"], "the next request")):
+        key(Return)
+    yield from answered("e2", "the next request")
+    expect("e2", 0, "the front end still serves the next request", lambda a: a == {"choice": "apply"})
+    send({"quit": True})
+
+
+owner_proc = None
+owner_killed = 0.0
+
+
+def prepare_owner():
+    """A process that stands for the tool's main shell (BSA_OWNER_PID)."""
+    global owner_proc
+    owner_proc = subprocess.Popen(["sleep", "300"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.environ["BSA_OWNER_PID"] = str(owner_proc.pid)
+
+
+def sc_owner_gone():
+    """The root side is killed while a page is on screen and its other
+    processes still hold the pipes: no "quit", no end of input."""
+    global owner_killed
+    yield W(lambda: prop("pendingId") == "x1" and shell.isVisible(), "page shown")
+    yield from settled("page shown")
+    check(appmod._Owner().pid == owner_proc.pid, "the front end watches the process in BSA_OWNER_PID")
+    owner_proc.kill()
+    owner_proc.wait()
+    owner_killed = time.monotonic()
+
+
+def after_owner_gone(rc):
+    took = time.monotonic() - owner_killed if owner_killed else -1
+    if owner_proc is not None and owner_proc.poll() is None:
+        owner_proc.kill()
+    check(rc == 0 and 0 <= took < 6, "the root side's main process is gone: app.py serve ended with status %r, %.1f s later "
+          "(checked every %.0f s)" % (rc, took, appmod.OWNER_CHECK_MS / 1000))
+    line, p = reply_for("x1")
+    check(line is None or (p[1] == 1 and p[2] is None), "the waiting request got no answer line, or \"cancelled\": %s" % cut(line))
+    no_warnings("owner gone")
+
+
+def after_no_qt(what):
+    """SERVE ended before anything was to be shown: status 0, nothing
+    printed, and Qt was never started."""
+    def f(rc):
+        check(rc == 0 and not replies, "%s: status %r, nothing printed" % (what, rc))
+        check(app is None and "PySide6.QtWidgets" not in sys.modules, "%s: no Qt application was made for it" % what)
+    return f
+
+
+def after_oneshot_broken(rc):
+    allowed.extend(re.compile(p) for p in (r"Security Check: ", r"Check\.qml", r"^\s+\^|^\s+this is not QML"))
+    check(rc == 3 and not replies, "app.py check with a page file that does not load: status %r (3 expected), nothing printed" % (rc,))
+    check(re.search(r"Check\.qml:\d+", stderr_text()) is not None, "app.py check: the reason is written to stderr")
 
 
 def sc_oneshot(how):
@@ -780,22 +1324,33 @@ def request(rid, mode, sample):
 SCENARIOS = {
     "pages": (["serve"], lambda: {"busy": ""}, None, sc_pages, after_serve),
     "shell": (["serve"], request("d1", "dialog", "dialog"), None, sc_shell, after_serve),
+    "controls": (["serve"], lambda: {"busy": ""}, None, sc_controls, after_serve),
+    "tab": (["serve"], lambda: {"busy": ""}, None, sc_tab, after_serve),
     "guard": (["serve"], lambda: {"busy": ""}, None, sc_guard, after_serve),
     "keys": (["serve"], lambda: {"busy": ""}, STUBS_KEYS, sc_keys, after_serve),
     "malformed": (["serve"], lambda: BAD_LINES[0][1], None, sc_malformed, after_serve),
     "broken-page": (["serve"], lambda: {"busy": ""}, STUBS_BROKEN, sc_broken, after_serve),
     "eof": (["serve"], request("x1", "confirm", "confirm"), None, sc_eof, after_end("end of input while a page waits", 1)),
-    "eof-idle": (["serve"], None, None, None, lambda rc: check(rc == 0 and not replies, "end of input before any request: status %r, nothing printed" % (rc,))),
+    "eof-idle": (["serve"], None, None, None, after_no_qt("end of input before any request")),
+    "exception": (["serve"], lambda: {"busy": ""}, None, sc_exception, after_serve),
+    "owner-gone": (["serve"], request("x1", "confirm", "confirm"), None, sc_owner_gone, after_owner_gone),
     "quit": (["serve"], request("x1", "confirm", "confirm"), None, sc_quit, after_end("quit while a page waits", 1)),
-    "quit-first": (["serve"], lambda: {"quit": True}, None, None, lambda rc: check(rc == 0 and not replies, "quit as the first line: status %r, nothing printed" % (rc,))),
+    "quit-first": (["serve"], lambda: {"quit": True}, None, None, after_no_qt("quit as the first line")),
+    "blank-quit": (["serve"], lambda: "\n   \n" + json.dumps({"quit": True}), None, None, after_no_qt("empty lines, then quit")),
     "progress-only": (["progress"], lambda: {"heading": "Checking your PC"}, None, sc_progress_only,
                       lambda rc: check(rc == 0 and not replies, "app.py progress ended with status %r, nothing printed" % (rc,))),
     "oneshot": (["dialog"], lambda: SAMPLES["dialog"], None, sc_oneshot("enter"), after_oneshot(0, {"button": 1})),
     "oneshot-esc": (["dialog"], lambda: SAMPLES["dialog"], None, sc_oneshot("esc"), after_oneshot(1, None)),
     "oneshot-close": (["dialog"], lambda: SAMPLES["dialog"], None, sc_oneshot("close"), after_oneshot(1, None)),
+    "oneshot-broken": (["check"], lambda: SAMPLES["check"], STUBS_BROKEN, None, after_oneshot_broken),
     "oneshot-bad": (["dialog"], lambda: "this is not json", None, None,
                     lambda rc: check(rc == 2 and not replies, "app.py dialog with input that is not JSON: status %r (2 expected), nothing printed" % (rc,))),
 }
+# What a scenario needs done in its process before main() runs.
+PREPARE = {"owner-gone": prepare_owner}
+# Scenarios that run without QT_FORCE_STDERR_LOGGING: there ui/app.py must
+# see to it that Qt's messages reach stderr.
+NO_FORCED_STDERR = ("broken-page", "oneshot-broken")
 
 
 def run_scenario(name):
@@ -889,6 +1444,8 @@ def run_scenario(name):
         hook.keep = (timer, engine)
 
     appmod.TEST_HOOK = hook
+    if name in PREPARE:
+        PREPARE[name]()
     if first is None:
         os.close(req_w)
         req_w = -1
@@ -943,6 +1500,10 @@ def main():
     if shots:
         os.makedirs(shots, exist_ok=True)
     home = tempfile.mkdtemp(prefix="bsa-ui-test-")
+    # For "exception": a colour scheme that is found first and cannot be read.
+    os.makedirs(os.path.join(home, "share", "color-schemes"))
+    with open(os.path.join(home, "share", "color-schemes", "BreezeLight.colors"), "w", encoding="utf-8") as f:
+        f.write("[Colors:Window]\nBackgroundNormal=abc\n")
     env = dict(os.environ)
     env.update({
         "QT_QPA_PLATFORM": "offscreen",
@@ -955,8 +1516,9 @@ def main():
         "XDG_CACHE_HOME": os.path.join(home, "cache"),
         "BSA_UI_TEST_SHOTS": shots,
         "BSA_UI_TEST_VERBOSE": "1" if verbose else "",
+        "BSA_UI_TEST_HOME": home,
     })
-    for var in ("BSA_THEME", "QT_QUICK_CONTROLS_STYLE", "QT_LOGGING_RULES", "QML_IMPORT_TRACE", "QT_DEBUG_PLUGINS"):
+    for var in ("BSA_THEME", "BSA_OWNER_PID", "QT_QUICK_CONTROLS_STYLE", "QT_LOGGING_RULES", "QML_IMPORT_TRACE", "QT_DEBUG_PLUGINS"):
         env.pop(var, None)
     total = failed = 0
     bad = []
@@ -964,8 +1526,13 @@ def main():
     try:
         for name in names or list(SCENARIOS):
             cmd = [sys.executable, "-I", os.path.realpath(__file__), "--scenario", name]
+            env_now = dict(env)
+            if name in NO_FORCED_STDERR:
+                del env_now["QT_FORCE_STDERR_LOGGING"]
+            if name == "exception":
+                env_now["XDG_DATA_DIRS"] = os.path.join(home, "share") + ":" + env.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
             try:
-                p = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                p = subprocess.run(cmd, env=env_now, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    timeout=KILL_AFTER)
                 out, rc = p.stdout.decode("utf-8", "replace"), p.returncode
             except subprocess.TimeoutExpired as e:

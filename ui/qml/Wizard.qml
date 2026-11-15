@@ -7,6 +7,7 @@ import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import QtQuick.Dialogs
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 Item {
     id: page
@@ -66,10 +67,13 @@ Item {
         a.action = action
         page.finished(a)
     }
+    // The root side rejects an answer without a report folder, whatever
+    // the action: "Start the check" then goes to Options, where a message
+    // asks for the folder, and "Settings" waits for it.
+    readonly property bool hasFolder: !!answers.report_dir
     function primary() {
         if (step < lastStep) step++
-        // Without a report folder the root side would reject the answer.
-        else if (!answers.report_dir) step = 2
+        else if (!hasFolder) step = 2
         else finish("start")
     }
     // Esc is Back; on the first step it leaves the wizard.
@@ -248,6 +252,12 @@ Item {
                     Layout.margins: page.sideMargin
                     spacing: Kirigami.Units.largeSpacing
 
+                    Kirigami.InlineMessage {
+                        Layout.fillWidth: true
+                        visible: !page.hasFolder
+                        type: Kirigami.MessageType.Warning
+                        text: qsTr("Choose a report folder below: the check cannot start without one.")
+                    }
                     OptionCard {
                         Layout.fillWidth: true
                         title: qsTr("Offer fixes"); iconName: "tools-wizard"
@@ -280,7 +290,7 @@ Item {
                                 spacing: Kirigami.Units.smallSpacing
                                 Kirigami.Heading { text: qsTr("Report folder"); level: 4; Layout.fillWidth: true; wrapMode: Text.Wrap }
                                 QQC2.Label {
-                                    Layout.fillWidth: true; wrapMode: Text.Wrap; opacity: 0.8
+                                    Layout.fillWidth: true; wrapMode: Text.Wrap; opacity: Util.dimText
                                     text: qsTr("An HTML and a Markdown report are saved here after the check.")
                                 }
                                 RowLayout {
@@ -297,7 +307,7 @@ Item {
                                         text: page.answers.report_dir || ""
                                         placeholderText: qsTr("No folder chosen")
                                         Accessible.name: qsTr("Report folder")
-                                        QQC2.ToolTip.text: text
+                                        QQC2.ToolTip.text: Util.tip(text)
                                         QQC2.ToolTip.visible: hovered && contentWidth > width - leftPadding - rightPadding
                                         QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
                                         // Show the end of the path: that is the part that tells folders apart.
@@ -355,14 +365,14 @@ Item {
                     SummaryCard {
                         iconName: "folder-documents"; name: qsTr("Report folder"); goTo: 2
                         value: page.answers.report_dir || qsTr("Not chosen")
-                        untrusted: true
+                        wrapAnywhere: true
                         detail: page.answers.report_dir ? qsTr("An HTML and a Markdown report are saved here.")
                                                         : qsTr("Choose a folder before the check can start.")
                     }
                     QQC2.Label {
                         Layout.fillWidth: true
                         Layout.topMargin: Kirigami.Units.smallSpacing
-                        wrapMode: Text.Wrap; opacity: 0.8
+                        wrapMode: Text.Wrap; opacity: Util.dimText
                         text: qsTr("Your answers are remembered for next time. Afterwards a dashboard shows the result of every check.")
                     }
                 }
@@ -372,7 +382,27 @@ Item {
         // ---- buttons ------------------------------------------------------
         FooterBar {
             leading: [
-                QQC2.Button { text: qsTr("Settings"); icon.name: "configure"; visible: page.step === 0; onClicked: page.finish("settings") },
+                // A switched-off button gets no pointer, so the reason is
+                // shown by the item around it.
+                Item {
+                    visible: page.step === 0
+                    implicitWidth: settingsButton.implicitWidth; implicitHeight: settingsButton.implicitHeight
+                    QQC2.Button {
+                        id: settingsButton
+                        anchors.fill: parent
+                        text: qsTr("Settings"); icon.name: "configure"
+                        enabled: page.hasFolder
+                        onClicked: page.finish("settings")
+                        Accessible.description: enabled ? "" : settingsWhy.text
+                    }
+                    HoverHandler { id: settingsHover; enabled: !page.hasFolder }
+                    QQC2.ToolTip {
+                        id: settingsWhy
+                        visible: settingsHover.hovered
+                        delay: Kirigami.Units.toolTipDelay
+                        text: qsTr("Choose a report folder first (under Options).")
+                    }
+                },
                 QQC2.Button { text: qsTr("Quit"); icon.name: "application-exit"; onClicked: page.cancelled() }
             ]
             QQC2.Button { text: qsTr("Back"); icon.name: "go-previous"; visible: page.step > 0; onClicked: page.dismiss() }
@@ -475,7 +505,7 @@ Item {
     }
 
     // Name and value of one fact about this PC. The values come from the PC.
-    component FactName: QQC2.Label { opacity: 0.75; Layout.alignment: Qt.AlignTop }
+    component FactName: QQC2.Label { opacity: Util.dimLabel; Layout.alignment: Qt.AlignTop }
     component FactValue: QQC2.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText }
 
     // One line of "what happens next".
@@ -494,8 +524,9 @@ Item {
     }
 
     // A card with an icon, a title, a description, an optional badge and a
-    // switch. The whole card is the control: a click, Space or Enter toggles
-    // it. Switched on shows as a highlighted frame; the keyboard focus as a
+    // switch. The whole card is the control, a check box: a click or Space
+    // toggles it, and Enter is the page's main button as on any check box.
+    // Switched on shows as a highlighted frame; the keyboard focus as a
     // ring around the card, so the two cannot be mixed up.
     component OptionCard: QQC2.AbstractButton {
         id: card
@@ -510,12 +541,14 @@ Item {
 
         padding: Kirigami.Units.largeSpacing * 1.5
         focusPolicy: Qt.StrongFocus
-        onClicked: card.switched(!card.switchedOn)
+        // Really a check box, also for a screen reader. A click or Space
+        // replaces the binding of "checked", so it is put back.
+        checkable: true
+        checked: switchedOn
+        onToggled: { card.switched(checked); checked = Qt.binding(function () { return card.switchedOn }) }
         Accessible.role: Accessible.CheckBox
         Accessible.name: card.badge !== "" ? qsTr("%1 (%2)").arg(card.title).arg(card.badge) : card.title
         Accessible.description: card.note !== "" ? qsTr("%1 Found on this PC: %2").arg(card.description).arg(card.note) : card.description
-        Accessible.checkable: true
-        Accessible.checked: card.switchedOn
         Accessible.onToggleAction: card.switched(!card.switchedOn)
         Accessible.onPressAction: card.switched(!card.switchedOn)
         Kirigami.Theme.colorSet: Kirigami.Theme.View
@@ -544,7 +577,7 @@ Item {
                     StatusChip { visible: card.badge !== ""; text: card.badge; tint: card.badgeTint; Accessible.ignored: true }
                     Item { Layout.fillWidth: true }
                 }
-                QQC2.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: card.description; opacity: 0.8 }
+                QQC2.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: card.description; opacity: Util.dimText }
                 QQC2.Label {
                     visible: card.note !== ""
                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
@@ -583,7 +616,7 @@ Item {
         property string value
         property string detail
         property int goTo
-        property bool untrusted: false      // the value is a path: break it anywhere
+        property bool wrapAnywhere: false   // the value is a path: break it anywhere
         Layout.fillWidth: true
         RowLayout {
             anchors.left: parent.left; anchors.right: parent.right
@@ -597,18 +630,18 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 0
-                QQC2.Label { text: summary.name; font: Kirigami.Theme.smallFont; opacity: 0.75; Layout.fillWidth: true; elide: Text.ElideRight }
+                QQC2.Label { text: summary.name; font: Kirigami.Theme.smallFont; opacity: Util.dimLabel; Layout.fillWidth: true; elide: Text.ElideRight }
                 QQC2.Label {
                     Layout.fillWidth: true
                     text: summary.value
                     textFormat: Text.PlainText
                     font.weight: Font.DemiBold
-                    wrapMode: summary.untrusted ? Text.WrapAnywhere : Text.Wrap
+                    wrapMode: summary.wrapAnywhere ? Text.WrapAnywhere : Text.Wrap
                     maximumLineCount: 4; elide: Text.ElideRight
                 }
                 QQC2.Label {
                     visible: summary.detail !== ""
-                    Layout.fillWidth: true; wrapMode: Text.Wrap; opacity: 0.8
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; opacity: Util.dimText
                     text: summary.detail
                 }
             }

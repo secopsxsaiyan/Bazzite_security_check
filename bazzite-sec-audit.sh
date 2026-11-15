@@ -314,6 +314,8 @@ _init_state() {
         echo "Another security check is already running." >&2
         exit 1
     fi
+    # Programs started for another account, and fixes, do not get it.
+    _RUN_LOCK_FD=9
     RUN_LOG="$STATE_DIR/logs/run-${RUN_ID}.log"
     : > "$RUN_LOG"
     RUN_TMP=$(mktemp -d "${TMPDIR:-/tmp}/bazzite-sec-audit.XXXXXX") || RUN_TMP=""

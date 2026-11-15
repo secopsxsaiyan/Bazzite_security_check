@@ -10,8 +10,9 @@ All notable changes to this project are listed here. The format follows
 
 - An off-screen test of the real windows, `make test-ui`
   (`tests/ui-offscreen.py`): it shows every page in the real front end,
-  answers it with the keyboard and checks each answer line; a QML warning
-  fails it. CI runs it as the new "UI test" job, in a Fedora container.
+  answers it with the keyboard and the mouse, through every button, row and
+  tick box, and checks each answer line; a QML warning fails it. CI runs it
+  as the new "UI test" job, in a Fedora container.
 - `docs/ui.md` describes the front end for developers: the protocol between
   the root side and the window, what a page is, and how to add one.
 
@@ -39,13 +40,38 @@ All notable changes to this project are listed here. The format follows
 - Enter does the page's main action and Esc goes back or cancels on every
   page, except that Esc does nothing on the result page (going back from a
   check must not end the run). Enter in a text field stays with that field,
-  and Enter on a focused button presses that button. A page that has just
-  appeared ignores keys and clicks for a moment, and a held-down key never
-  answers anything, so a key meant for one page cannot answer the next.
+  and Enter on a focused button presses that button. In a list of fixes
+  and on the wizard's option cards, Space ticks the row or card and Enter
+  goes on.
+- A key or click meant for one page cannot answer the next. A page that has
+  just appeared ignores keys and clicks for a moment, and a key or mouse
+  button that is still held down from the page before cannot answer it
+  however long it is held: the page takes input once everything has been
+  let go. A held-down key never answers anything.
+- The "Apply this fix?" page starts with the keyboard focus on no button.
+  Enter applies and Esc cancels as on every page, but Space, which presses
+  the focused button, needs a deliberate move to a button first: the Space
+  meant for "Skip" on one fix cannot apply the next.
 - Changing the theme in Settings switches the open window at once.
 - CI uploads ShellCheck and Scorecard results to code scanning on pull
   requests, so the `Protect main` ruleset can pass without an administrator
   bypass. The ruleset and its thresholds are unchanged.
+
+### Security
+
+- Programs the tool starts as the desktop user (the windows, kdialog, the
+  browser for the report) and the fixes it runs no longer get a copy of the
+  run's lock. Such a program could release the lock while the run was going
+  on, or keep it after the run, so that the next one stopped with "Another
+  security check is already running".
+- The run log is never handed to a program of another account. What the
+  window and an undo step print is copied into the log by the tool itself,
+  cut to size: at most 256 KiB from the window, and the end of an undo
+  step's output (where the reason for a failure is) rather than all of it.
+- When the tool closes its window it signals only processes it has checked
+  to be the ones it started (by process id and start time), and the window's
+  own processes are signalled as the desktop user, not as root. A process
+  that merely got the same id later cannot be hit.
 
 ## [1.5.0] - 2026-11-14
 

@@ -14,7 +14,7 @@ The root side starts the front end once per run (`ui_front_start`: `python3 -I u
 
 Trust goes one way. The desktop user's account is trusted less than root, so:
 
-- The front end gets nothing of root's except the two pipes and a third for its stderr. A root process (`_ui_log_reader`) copies that stderr into the run log, each line cut to size and marked `ui:`; the front end never holds the log file.
+- The front end gets nothing of root's except the two pipes and a third for its stderr: not the run log, and not the run's lock (`_run_lock_close` closes it for every program started as another account, and for fixes). A root process (`_ui_log_reader`) copies that stderr into the run log, each line cut to size and marked `ui:`; the front end never holds the log file. In all, `_UI_LOG_MAX` bytes (256 KiB) per front-end process are read, NUL bytes included; then the pipe is closed and the front end's later messages are lost.
 - The root side treats every answer as untrusted input. `_ui_front_ask` takes the answer line apart with one fixed pattern (no JSON parser in the shell) and accepts a line of at most `_UI_FRONT_LINE_MAX` characters. Each caller then validates the answer and keeps only values it offered: a tag from its own list, a button it sent, a known action.
 - Pages treat text from the PC (host names, paths, finding titles, commands) as untrusted too: plain text, or escaped with `Util.esc()` where a label mixes it into rich text.
 
@@ -56,6 +56,10 @@ What fails, and what happens then:
 The rule behind all of these: the root side must never wait for ever. It waits for an answer without a time limit, because a person answers when they answer, so every request line must produce an answer line or the pipe must close.
 
 `app.py serve` exits with status 0, or 3 when Qt or the window could not be loaded. The root side does not read the status; it sees the answer pipe close.
+
+### Stopping the front end
+
+`ui_front_stop` sends `quit`, closes the pipes and watches the front end's processes end, which normally takes a fraction of a second and needs no signal. Only a front end that hangs is ended: TERM after two seconds, KILL a second later. Root ends processes for a less trusted account here, so it must never hit a process that is not the front end's. A process id alone does not say that (an id is free again once its process has ended, and the front end decides when that is), so the rules are: a process is named by its id and its start time together, and the helper's are recorded when it is started; the list of what belongs to the front end is made while root still holds the pipes, when the helper cannot have ended; every signal is sent only after the start time has been read again, directly before; the front end's own processes are signalled as the desktop user (through `runuser`), so the kernel refuses anything that is not that account's; and root itself signals only its own helper processes. The comment above `ui_front_stop` in `lib/ui.sh` has the reasoning.
 
 ### Fallback to kdialog
 
@@ -124,24 +128,24 @@ All in `ui/qml/`, used by their bare name.
 
 **Pages and dialogs.** A request replaces the current page; the new one fades in over the old. A `dialog` request is shown as a card over the current page, which is dimmed and takes no input while the dialog is up. When no page has been shown yet, the dialog is the whole content of a small window sized by the dialog (`compact`), and the window grows to its normal size when the first full page arrives.
 
-**Settling.** For `settleTime` (350 ms) after a page or dialog appears, the window takes no keys and no clicks. An Enter or a double click meant for the page before must not answer the next one, which may be "Apply this fix?". A key that is held down (auto-repeat) never answers anything.
+**Settling.** For `settleTime` (350 ms) after a page or dialog appears, the window takes no keys and no clicks. An Enter or a double click meant for the page before must not answer the next one, which may be "Apply this fix?". The time starts again with every key event and for as long as a mouse button is down, so a key or button that is still held (or repeating) when the page appears cannot answer it however long it is held: the page takes input once everything has been let go for `settleTime`. The same holds later: when a key that can answer a page (Space, Enter, Esc) repeats while a page waits, the page stops taking input until the key has been up for `settleTime` (`hold()`), and the keyboard focus then returns to the control it was on. A held key never answers anything.
 
-**Focus.** While a page settles, the keyboard focus stays with the window. Then it goes to the item `initialFocus()` returns, or to wherever the page's own `focus: true` says. Each page is a focus scope. Tab stays inside a dialog while one is shown.
+**Focus.** While a page settles, the keyboard focus stays with the window. Then it goes to the item `initialFocus()` returns, or to wherever the page's own `focus: true` says; with neither, no control has it and Tab goes to the first one. `Confirm.qml` is the page that does this on purpose (`initialFocus()` returns `null`): Space presses the focused button, and with the focus on Apply the Space meant for "Skip" on the fix before would apply the next one. There, Enter still applies and Esc cancels; Space or a click needs a deliberate move to the button. Each page is a focus scope. Tab stays inside a dialog while one is shown.
 
-**Enter and Esc.** They reach the Shell only when the focused control did not use them (an open combo box takes both). Esc calls `dismiss()`. Enter calls `primary()`, with three exceptions: in a text field or text area it does nothing here; on a focused button it presses that button; and a control with `enterIsPrimary: true` (a row of a pick-one list) leaves it to `primary()`. On a closed combo box Enter is `primary()` as well.
+**Enter and Esc.** They reach the Shell only when the focused control did not use them (an open combo box takes both). Esc calls `dismiss()`. Enter calls `primary()`, with two exceptions: in a text field or text area it does nothing here, and on a focused button that cannot be ticked (`checkable` is false) it presses that button. Everything that can be ticked leaves Enter to `primary()`: a tick box, a radio row of a dialog's list, a row of the Choose page, an option card of the wizard. Those rows and cards are real checkable buttons (`AbstractButton` with `checkable: true`), so Space ticks the one with the focus and a screen reader announces a check box. On a closed combo box Enter is `primary()` as well.
 
 **Busy.** After an answer the page stays. If the next request does not come within `Kirigami.Units.veryLongDuration`, the page is dimmed and a spinner shows; a `busy` line shows it at once, with its label. A `busy` line while a page waits for its answer does not cover that page.
 
 **Progress.** `progress start` parks the main window (hidden) and shows `Progress.qml`, with a tray icon where the desktop has a tray. The next page request or busy label closes the progress window and brings the main window back. If the progress window cannot be loaded, the main window's spinner shows the progress labels instead.
 
-**Close button.** It answers the waiting request with status 1 and the window stays; the root side decides what comes next. With nothing to answer, the window hides until the next page. It never stops a fix that is running. Closing the progress window only hides or minimises it.
+**Close button.** It answers the waiting request with status 1 and the window stays; the root side decides what comes next. With nothing to answer, the window hides until the next page or the next busy line with a label, either of which brings it back. It never stops a fix that is running. Closing the progress window only hides or minimises it.
 
 ## Adding a page
 
 1. Write `ui/qml/Name.qml` to the contract above. Start from the page closest to what you need; `Confirm.qml` is the shortest.
 2. Add the mode to `PAGES` in `ui/app.py` and to the list of modes in its header comment.
 3. On the root side, build the input as JSON (`_json_str` for every value), call `out=$(ui_app name "$json")`, and handle each status: 0, validate `out` with a small `python3 -I -c` script that keeps only what was offered, and fall back if it is rejected; 1, cancelled; anything else, fall back to the kdialog or terminal version of the same question. `apply_change` in `lib/fixes.sh` with `_confirm_answer` is a short example.
-4. Add a sample input to `tests/ui/samples.json` (made-up values only) and cases to `sc_pages` in `tests/ui-offscreen.py`: the answer to Enter, the answer to Esc, and the mode in the list that is tried with `{}`.
+4. Add a sample input to `tests/ui/samples.json` (made-up values only) and cases to `tests/ui-offscreen.py`: in `sc_pages` the answer to Enter, the answer to Esc, and the mode in the list that is tried with `{}`; in `sc_controls` every other control that answers; in `sc_tab` the page.
 5. Cover the root-side caller, its validation and its fallback in `tests/smoke.sh`.
 
 ## Trying a page without root
@@ -161,25 +165,29 @@ Without a display, save a picture of every page:
 
 | Command | What it covers | Needs |
 |---|---|---|
-| `make lint` | ShellCheck on the scripts; `ui/app.py` parses | shellcheck |
+| `make lint` | ShellCheck on the scripts; `ui/app.py` and `tests/ui-offscreen.py` parse | shellcheck |
 | `make test-ui` | The real front end, off-screen (`tests/ui-offscreen.py`) | PySide6 with Qt Quick, Kirigami, qqc2-desktop-style; no root, no display |
 | `make test` | The root side against a fake front end and fake system tools (`tests/smoke.sh`): `lib/ui.sh`, answer validation, the kdialog fallback | root, a throwaway container or VM |
 
-`tests/ui-offscreen.py` loads `ui/app.py` as a module and runs its `main()` with stdin and stdout replaced by pipes, one process per scenario. It sends request lines, presses keys in the window and checks every answer line against the pattern `lib/ui.sh` uses. Any QML warning fails the scenario it appears in, every wait has a time limit, and a scenario that does not end is killed and reported. It uses the test interface of `ui/app.py`: `PAGE_DIR` (the folder the page files come from, for stub pages), `TEST_HOOK(app, shell, host)` and `main()`.
+`tests/ui-offscreen.py` loads `ui/app.py` as a module and runs its `main()` with stdin and stdout replaced by pipes, one process per scenario. It sends request lines, presses keys and clicks in the window and checks every answer line against the pattern `lib/ui.sh` uses. Any QML warning fails the scenario it appears in, every wait has a time limit, and a scenario that does not end is killed and reported. It uses the test interface of `ui/app.py`: `PAGE_DIR` (the folder the page files come from, for stub pages), `TEST_HOOK(app, shell, host)` and `main()`. `Shell.qml` and `Progress.qml` are never taken from `PAGE_DIR`: they always come from `ui/qml/`.
 
 | Scenario | Checks |
 |---|---|
 | `pages` | every page with its sample and with `{}`: loads without a warning, Enter and Esc give the expected answer |
 | `shell` | a dialog first and over a page, busy, progress, theme, the close button, two requests at once |
-| `guard` | Enter and Esc as a page appears, and auto-repeat, do not answer it |
+| `controls` | every other control that answers (buttons, rows, tick boxes, the theme box), clicked or pressed with Space: the answer is one the root side accepts |
+| `tab` | Tab reaches every button of the bar at the bottom of each page |
+| `guard` | a key or click as a page appears, auto-repeat, and a key or mouse button held since the page before do not answer it; Confirm starts with the focus on no button |
 | `keys` | which control gets Enter: text field, text area, button, combo box (stub page) |
 | `malformed` | lines that are not requests: one answer with status 3 each, never silence |
-| `broken-page` | page files that do not load or are not pages: status 3, the window goes on |
-| `eof`, `eof-idle`, `quit`, `quit-first` | the ways `serve` ends: status 0 |
-| `progress-only`, `oneshot`, `oneshot-esc`, `oneshot-close`, `oneshot-bad` | `app.py progress` and `app.py dialog` |
+| `exception` | an exception while a line is handled: one answer with status 3, and the next request is served |
+| `broken-page` | page files that do not load or are not pages: status 3, the reason on stderr, the window goes on |
+| `eof`, `quit`, `owner-gone` | the ways `serve` ends with a page on screen: status 0 |
+| `eof-idle`, `quit-first`, `blank-quit` | `serve` ends before anything was shown: status 0, Qt never started |
+| `progress-only`, `oneshot`, `oneshot-esc`, `oneshot-close`, `oneshot-broken`, `oneshot-bad` | `app.py progress` and one page per process |
 
 Run some of them by name, with everything the front end wrote to stderr:
 
     python3 -I tests/ui-offscreen.py --verbose guard keys
 
-CI runs `make test-ui` as the "UI test" job in a Fedora container, because Ubuntu does not package PySide6's Qt Quick modules or Kirigami. Two things to know when a check fails there but not at home: the container has no icon theme and no Breeze colour schemes, so icons are missing in pictures and the theme check only tests the message; and the window's 350 ms settle timer runs with the frames it draws, which off-screen can be slower than the clock, so the test waits for `settling` to end before it presses a key.
+CI runs `make test-ui` as the "UI test" job in a Fedora container, because Ubuntu does not package PySide6's Qt Quick modules or Kirigami. Two things to know when a check fails there but not at home: the container has no icon theme and no Breeze colour schemes, so icons are missing in pictures and the theme check only tests the message; and the window's 350 ms settle timer runs with the frames it draws, which off-screen can be slower than the clock, so the test waits for `settling` to end before it presses a key, and where it must act inside the pause it does so only while `settling` is still true (and asks for the page again when it was too late).

@@ -29,7 +29,7 @@ New functionality comes with tests. A change that adds a check, a fix, an option
 
 ## Working on the GUI
 
-The windows are `ui/app.py` (PySide6) and the pages in `ui/qml/` (Kirigami). [`docs/ui.md`](docs/ui.md) describes how the root side and the window talk, what a page must provide, and how to add one or try one without root. A change to a page, to `ui/app.py` or to the window runs `make test-ui`, which needs no root and no display, and adds or updates checks in `tests/ui-offscreen.py`.
+The windows are `ui/app.py` (PySide6) and the pages in `ui/qml/` (Kirigami). [`docs/ui.md`](docs/ui.md) describes how the root side and the window talk, what a page must provide, and how to add one or try one without root. A change to a page, to `ui/app.py` or to the window runs `make test-ui`, which needs no root and no display, and adds or updates checks in `tests/ui-offscreen.py`: a control that answers a page gets a case in the `controls` scenario, with the answer the root side accepts.
 
 ## Issue reports
 

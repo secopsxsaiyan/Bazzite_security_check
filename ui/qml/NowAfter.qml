@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 GridLayout {
     id: grid
@@ -16,9 +17,9 @@ GridLayout {
     columns: 2
     columnSpacing: Kirigami.Units.largeSpacing
     rowSpacing: Kirigami.Units.smallSpacing
-    QQC2.Label { visible: grid.now !== ""; text: qsTr("Now"); textFormat: Text.PlainText; opacity: 0.75; Layout.alignment: Qt.AlignTop }
+    QQC2.Label { visible: grid.now !== ""; text: qsTr("Now"); textFormat: Text.PlainText; opacity: Util.dimLabel; Layout.alignment: Qt.AlignTop }
     QQC2.Label { visible: grid.now !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: grid.now }
-    QQC2.Label { visible: grid.after !== ""; text: grid.afterLabel; textFormat: Text.PlainText; opacity: 0.75; Layout.alignment: Qt.AlignTop }
+    QQC2.Label { visible: grid.after !== ""; text: grid.afterLabel; textFormat: Text.PlainText; opacity: Util.dimLabel; Layout.alignment: Qt.AlignTop }
     QQC2.Label {
         visible: grid.after !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
         text: grid.after; color: Kirigami.Theme.positiveTextColor

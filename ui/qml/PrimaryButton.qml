@@ -21,24 +21,34 @@ QQC2.Button {
     Accessible.role: Accessible.Button
     Accessible.name: text
 
-    contentItem: RowLayout {
-        spacing: Kirigami.Units.smallSpacing
+    // Icon and label as one group in the middle, also when the button is
+    // wider than they are ("OK").
+    contentItem: Item {
+        implicitWidth: group.implicitWidth
+        implicitHeight: group.implicitHeight
+        RowLayout {
+            id: group
+            anchors.centerIn: parent
+            width: Math.min(implicitWidth, parent.width)
+            spacing: Kirigami.Units.smallSpacing
 
-        Kirigami.Icon {
-            visible: control.icon.name !== ""
-            source: control.icon.name
-            isMask: true
-            color: Kirigami.Theme.highlightedTextColor
-            implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
-            Accessible.ignored: true
+            Kirigami.Icon {
+                visible: control.icon.name !== ""
+                source: control.icon.name
+                isMask: true
+                color: Kirigami.Theme.highlightedTextColor
+                implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
+                Accessible.ignored: true
+            }
+            QQC2.Label {
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+                text: control.text
+                textFormat: Text.PlainText
+                font: control.font
+                color: Kirigami.Theme.highlightedTextColor
+            }
         }
-        QQC2.Label {
-            text: control.text
-            textFormat: Text.PlainText
-            font: control.font
-            color: Kirigami.Theme.highlightedTextColor
-        }
-        Item { Layout.fillWidth: true }
     }
     background: Rectangle {
         implicitWidth: Kirigami.Units.gridUnit * 5

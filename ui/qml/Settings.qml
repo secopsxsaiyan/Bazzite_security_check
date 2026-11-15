@@ -7,6 +7,7 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 Item {
     id: page
@@ -18,6 +19,8 @@ Item {
 
     readonly property string version: input.version || "0"
     readonly property string repo: input.repo || ""
+    // Only a real "owner/name" is asked about or linked to.
+    readonly property bool repoOk: /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)
     // Anything but a known theme counts as "system", as the combo box shows it.
     property string theme: ["light", "dark"].indexOf(input.theme) >= 0 ? input.theme : "system"
     property bool updateCheck: input.update_check === true || input.update_check === "1"
@@ -37,7 +40,7 @@ Item {
         return false
     }
     function check() {
-        if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) { checkState = "error"; return }
+        if (!repoOk) { checkState = "error"; return }
         checkState = "checking"
         var xhr = new XMLHttpRequest()
         xhr.onreadystatechange = function () {
@@ -124,9 +127,9 @@ Item {
                             columns: 2
                             columnSpacing: Kirigami.Units.largeSpacing
                             rowSpacing: Kirigami.Units.smallSpacing
-                            QQC2.Label { text: qsTr("Installed version:"); opacity: 0.8 }
+                            QQC2.Label { text: qsTr("Installed version:"); opacity: Util.dimText }
                             QQC2.Label { Layout.fillWidth: true; text: page.version; textFormat: Text.PlainText; elide: Text.ElideRight }
-                            QQC2.Label { text: qsTr("Latest release:"); opacity: 0.8; Layout.alignment: Qt.AlignTop }
+                            QQC2.Label { text: qsTr("Latest release:"); opacity: Util.dimText; Layout.alignment: Qt.AlignTop }
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: Kirigami.Units.smallSpacing
@@ -200,7 +203,7 @@ Item {
                                     Layout.fillWidth: true
                                     text: page.latestNotes
                                     textFormat: Text.PlainText
-                                    wrapMode: Text.Wrap; opacity: 0.85
+                                    wrapMode: Text.Wrap; opacity: Util.dimSentence
                                 }
                             }
                         }
@@ -230,7 +233,7 @@ Item {
                             elide: Text.ElideMiddle
                             url: "https://github.com/" + page.repo
                             // Only a link to a real "owner/name" repository is offered.
-                            visible: /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(page.repo)
+                            visible: page.repoOk
                             activeFocusOnTab: visible
                             Accessible.name: qsTr("Project page: %1").arg(url)
                         }
@@ -249,6 +252,6 @@ Item {
     component Hint: QQC2.Label {
         Layout.fillWidth: true
         wrapMode: Text.Wrap
-        opacity: 0.7
+        opacity: Util.dimQuiet
     }
 }

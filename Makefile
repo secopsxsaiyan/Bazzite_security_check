@@ -5,7 +5,7 @@ SHELLCHECK_ARGS := -x -S warning -e SC2034 bazzite-sec-audit.sh lib/*.sh checks/
 # ShellCheck every script (modules are followed from the entry script).
 lint:
 	shellcheck $(SHELLCHECK_ARGS)
-	python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])" ui/app.py
+	python3 -c "import ast, sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" ui/app.py tests/ui-offscreen.py
 
 # The same findings as SARIF, for GitHub code scanning. ShellCheck exits
 # non-zero when it finds something; the file is still written then, and

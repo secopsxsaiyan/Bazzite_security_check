@@ -172,6 +172,14 @@ Item {
                             }
                             Layout.fillWidth: true
                             leftPadding: radio.indicator.width + radio.spacing * 2
+                            // The style draws the highlight of a row from
+                            // "inset - (padding - inset)" on each side, which
+                            // put it on the dialog's left edge and short of
+                            // the right one. Half the padding makes that 0:
+                            // the highlight is as wide as the row, with the
+                            // dialog's margin on both sides.
+                            leftInset: leftPadding / 2
+                            rightInset: rightPadding / 2
                             Component.onCompleted: { checked = page.picked === modelData.tag; page.listWidth = Math.max(page.listWidth, implicitWidth) }
                             onImplicitWidthChanged: page.listWidth = Math.max(page.listWidth, implicitWidth)
                             onCheckedChanged: if (checked) page.picked = modelData.tag
@@ -197,7 +205,7 @@ Item {
                                 QQC2.Label {
                                     Layout.fillWidth: true; visible: !!radio.modelData.detail
                                     wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                    opacity: 0.8; text: radio.modelData.detail || ""
+                                    opacity: Util.dimText; text: radio.modelData.detail || ""
                                 }
                                 QQC2.Label {
                                     Layout.fillWidth: true; visible: !!radio.modelData.warn

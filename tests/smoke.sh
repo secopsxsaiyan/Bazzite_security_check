@@ -1745,6 +1745,26 @@ PYEOF
     [[ $rc -eq 0 && "$a" == *'"say": "f"'* && "$b" == *'"say": "g"'* && "$(stat -c %s "$RUN_LOG")" -lt 30000 ]] \
         && grep -q 'ui: (the window wrote more than 20000 bytes' "$RUN_LOG" && ! grep -q 'after the cap' "$RUN_LOG" && echo "front-stderr-total-capped"
 
+    # NUL bytes are counted too ("read" drops them unseen): a front end
+    # that writes nothing else is cut off at the same limit, and the reader
+    # ends instead of reading for the rest of the run.
+    : > "$RUN_LOG"; t0=$SECONDS
+    timeout 30 cat /dev/zero | _ui_log_reader "$W/no-such-stop-file"; st=("${PIPESTATUS[@]}")
+    [[ ${st[0]} -eq 141 && ${st[1]} -eq 0 && $(( SECONDS - t0 )) -lt 10 && ! -s "$RUN_LOG" ]] && echo "front-stderr-nul-bytes-capped"
+    t0=$SECONDS
+    timeout 30 bash -c 'while :; do head -c 5000 /dev/zero; echo; done' | _ui_log_reader "$W/no-such-stop-file"; st=("${PIPESTATUS[@]}")
+    [[ ${st[0]} -eq 141 && $(( SECONDS - t0 )) -lt 10 && "$(stat -c %s "$RUN_LOG")" -lt 1000 ]] && echo "front-stderr-nul-lines-capped"
+    # What it logs is not held back, and a program that keeps the pipe
+    # open does not keep the reader (or its dd) once the stop file is there.
+    : > "$RUN_LOG"; rm -f "$W/reader-stop"; ndd=$(pgrep -xc dd)
+    ( echo "first line"; sleep 2; : > "$W/reader-stop"; exec sleep 21 ) {_UI_FRONT_W}>&- {_UI_FRONT_R}<&- | _ui_log_reader "$W/reader-stop" &
+    rd=$!
+    for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q 'ui: first line' "$RUN_LOG" && break; sleep 0.1; done
+    grep -q 'ui: first line' "$RUN_LOG" && [[ ! -e "$W/reader-stop" ]] && echo "front-stderr-logged-at-once"
+    for _ in $(seq 1 60); do kill -0 "$rd" 2>/dev/null || break; sleep 0.1; done
+    ! kill -0 "$rd" 2>/dev/null && [[ "$(pgrep -xc dd)" == "$ndd" ]] && echo "front-stderr-reader-ends-on-stop-file"
+    pkill -x -f 'sleep 21'
+
     # A program started through _no_tty (a fix, another account's program)
     # does not get the window's two pipes; any other child does. Its exit
     # status comes through.
@@ -1757,18 +1777,61 @@ PYEOF
     # ui_front_stop ends the front end's processes (the helper subshell,
     # the front end, the log reader) and nothing else - also a front end
     # that is stuck.
-    fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID")
-    sleep 300 & other=$!
+    # Every signal this shell sends from here on is noted, with what the
+    # target was at that moment: its start time and its account.
+    kill() {
+        local t="${!#}"
+        if _proc_stat "$t"; then echo "$t $_PS_START $(stat -c %u "/proc/$t" 2>/dev/null)"; else echo "$t gone -"; fi >> "$W/front-kills"
+        builtin kill "$@"
+    }
+    # kills_in_tree — every signal noted went to a process of the list.
+    kills_in_tree() {
+        local kp ks _ p
+        while read -r kp ks _; do
+            for p in "${tree[@]}"; do [[ "$p" == "$kp $ks "* ]] && continue 2; done
+            return 1
+        done < "$W/front-kills"
+        return 0
+    }
+    fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START")
+    builtin kill -0 "$_UI_FRONT_PID" && [[ -n "$_UI_FRONT_START" && "${tree[0]}" == "$_UI_FRONT_PID $_UI_FRONT_START own" ]] \
+        && [[ -z "$(_proc_tree "$_UI_FRONT_PID" "1$_UI_FRONT_START")" ]] && echo "front-helper-named-by-id-and-start-time"
+    sleep 300 {_UI_FRONT_W}>&- {_UI_FRONT_R}<&- & other=$!
+    : > "$W/front-kills"
     ui_front_stop
+    # A front end that leaves when told is not signalled at all.
+    [[ ! -s "$W/front-kills" && -z "$_UI_FRONT_PID" && -z "$_UI_FRONT_START" ]] && echo "front-stop-sends-no-signal"
+    # An id that another process has taken over (the start time differs) is
+    # never signalled, whatever the list says about it.
+    _proc_stat "$other"; ostart=$_PS_START
+    _kill_same KILL "$other" "1$ostart"
+    _ui_front_signal KILL "$other 1$ostart own" "$other 1$ostart user" "$other $ostart other"
+    _ui_front_reap "$other 1$ostart own"
+    builtin kill -0 "$other" 2>/dev/null && [[ ! -s "$W/front-kills" ]] && echo "front-stop-spares-a-reused-id"
     [[ -n "$fpid" && ${#tree[@]} -ge 2 && " ${tree[*]%% *} " == *" $fpid "* && -z "$(_procs_left "${tree[@]}")" ]] \
         && ! kill -0 "$fpid" 2>/dev/null && kill -0 "$other" 2>/dev/null && echo "front-processes-gone-after-stop"
+    # A child of this shell that still holds the two pipes keeps the helper
+    # waiting: only the helper is signalled then, and without a long wait.
+    new_run; ui_front_start
+    a=$(ui_app wizard '{"say":"x"}')
+    mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START"); hpid=$_UI_FRONT_PID
+    sleep 300 & holder=$!
+    : > "$W/front-kills"; t0=${EPOCHREALTIME/[.,]/}
+    ui_front_stop
+    t1=${EPOCHREALTIME/[.,]/}
+    [[ "$(cut -d' ' -f1 "$W/front-kills" | sort -u)" == "$hpid" && $(( t1 - t0 )) -lt 1500000 && -z "$(_procs_left "${tree[@]}")" ]] \
+        && kills_in_tree && builtin kill -0 "$holder" 2>/dev/null && echo "front-stop-with-a-pipe-holder"
+    builtin kill "$holder" 2>/dev/null
     new_run; ui_front_start; _ui_front_send '{"hang":true}'
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -qx hanging "$FL" && break; sleep 0.1; done
-    fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID")
+    fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START")
+    : > "$W/front-kills"; t0=$SECONDS
     ui_front_stop
-    grep -qx hanging "$FL" && [[ -n "$fpid" && ${#tree[@]} -ge 3 && -z "$(_procs_left "${tree[@]}")" ]] && ! kill -0 "$fpid" 2>/dev/null \
-        && kill -0 "$other" 2>/dev/null && echo "front-stuck-process-ended"
-    kill "$other" 2>/dev/null
+    grep -qx hanging "$FL" && [[ -n "$fpid" && ${#tree[@]} -ge 3 && -z "$(_procs_left "${tree[@]}")" ]] && ! builtin kill -0 "$fpid" 2>/dev/null \
+        && builtin kill -0 "$other" 2>/dev/null && [[ $(( SECONDS - t0 )) -le 6 ]] && echo "front-stuck-process-ended"
+    [[ -s "$W/front-kills" ]] && kills_in_tree && echo "front-stuck-signals-only-its-processes"
+    builtin kill "$other" 2>/dev/null
+    unset -f kill
     _UI_LOG_MAX=262144
 
     # An answer that never ends (no line end within the limit) is a failed
@@ -1793,8 +1856,75 @@ for m in front-started front-answer-in-subshell front-one-process front-cancelle
          front-busy-in-window front-progress-lines front-theme-sent front-died-falls-back front-not-used-again front-gone-kdialog-asks \
          front-page-failure-is-3 front-bad-answer-is-3 front-cannot-start front-stopped-on-exit front-one-shot-without-folder \
          front-no-log-descriptor front-stderr-marked-and-cleaned front-stderr-line-capped front-stderr-total-capped \
-         no-tty-drops-window-pipes front-processes-gone-after-stop front-stuck-process-ended front-endless-answer-is-3; do
+         front-stderr-nul-bytes-capped front-stderr-nul-lines-capped front-stderr-logged-at-once front-stderr-reader-ends-on-stop-file \
+         no-tty-drops-window-pipes front-helper-named-by-id-and-start-time front-processes-gone-after-stop front-stop-sends-no-signal \
+         front-stop-spares-a-reused-id front-stop-with-a-pipe-holder front-stuck-process-ended front-stuck-signals-only-its-processes front-endless-answer-is-3; do
     expect "$W/front.out" "$m" "$m"
+done
+
+# The run's lock (descriptor 9) stays with this tool: a program started as
+# another account, or by a fix, does not get a copy, so it can neither
+# release the lock during the run nor hold it afterwards.
+(
+    # shellcheck disable=SC1090
+    source "$TOOL"
+    STATE_DIR="$W/lockstate"; RUN_ID="lock"; mkdir -p "$STATE_DIR"
+    probe='if [ -e /proc/self/fd/9 ]; then echo has-9; else echo no-9; fi'
+    plain=$(bash -c "$probe")
+    [[ "$plain" == no-9 && -z "$_RUN_LOCK_FD" && "$(_no_tty bash -c "$probe")" == no-9 ]] && echo "lock-not-open-is-fine"
+    # Descriptor 9 is closed only when it is the lock.
+    other9=$(exec 9< /dev/null; _no_tty bash -c "$probe")
+    [[ "$other9" == has-9 ]] && echo "lock-close-leaves-another-9-alone"
+    _init_state
+    plain=$(bash -c "$probe")
+    [[ "$_RUN_LOCK_FD" == 9 && "$plain" == has-9 ]] && ! flock -n "$STATE_DIR/.lock" true && echo "lock-held"
+    [[ "$(_no_tty bash -c "$probe")" == no-9 ]] && echo "lock-not-given-to-a-fix"
+    [[ "$(_as_user "$U" bash -c "$probe")" == no-9 ]] && echo "lock-not-given-to-another-account"
+    [[ "$(_as_user root bash -c "$probe")" == no-9 ]] && echo "lock-not-given-as-the-same-account"
+    DESKTOP_USER="$U"
+    [[ "$(_as_desktop_user bash -c "$probe")" == no-9 ]] && echo "lock-not-given-to-the-desktop-user"
+    # Something the desktop user's program leaves running...
+    _as_user "$U" bash -c 'sleep 30 > /dev/null 2>&1 < /dev/null & echo started' > "$W/lock-bg"
+    # ... does not let go of the lock for this run,
+    grep -qx started "$W/lock-bg" && [[ -e /proc/self/fd/9 ]] && ! flock -n "$STATE_DIR/.lock" true && echo "lock-still-held-by-the-run"
+    # and the lock is free the moment the run ends.
+    exec 9>&-
+    pgrep -u "$U" -x sleep > /dev/null && flock -n "$STATE_DIR/.lock" true && echo "lock-free-after-the-run"
+    pkill -u "$U" -x sleep
+    rm -rf -- "$RUN_TMP"
+) > "$W/lock.out" 2>&1
+for m in lock-not-open-is-fine lock-close-leaves-another-9-alone lock-held lock-not-given-to-a-fix lock-not-given-to-another-account \
+         lock-not-given-as-the-same-account lock-not-given-to-the-desktop-user lock-still-held-by-the-run lock-free-after-the-run; do
+    expect "$W/lock.out" "$m" "$m"
+done
+
+# An undo step's output: limited where it is read (a step that prints
+# without end costs no memory and is not ended by a closed pipe), its exit
+# status kept, and the end of it logged.
+(
+    # shellcheck disable=SC1090
+    source "$TOOL"
+    RUN_LOG="$W/undo-out.log"
+    set +o pipefail     # the status must not depend on the caller's options
+    run() { : > "$RUN_LOG"; rc=0; _undo_run bash -c "$1" || rc=$?; }
+    run 'echo done; exit 0'
+    [[ $rc -eq 0 ]] && grep -qE '^[0-9:]{8} undo: done$' "$RUN_LOG" && echo "undo-out-small-ok"
+    run 'echo oops >&2; exit 7'
+    [[ $rc -eq 7 ]] && grep -qE '^[0-9:]{8} undo: oops$' "$RUN_LOG" && echo "undo-out-status-kept"
+    run 'seq 1 300000; echo all-done; exit 0'
+    [[ $rc -eq 0 && "$(wc -l < "$RUN_LOG")" -eq $(( _LOG_FOREIGN_LINES + 1 )) && "$(tail -n 1 "$RUN_LOG")" == *" undo: all-done" ]] \
+        && grep -q "undo: (the last ${_LOG_FOREIGN_LINES} lines" "$RUN_LOG" && ! grep -q ' undo: 1$' "$RUN_LOG" && echo "undo-out-large-ok-is-ok"
+    run 'seq 1 300000; echo "the reason it failed" >&2; exit 5'
+    [[ $rc -eq 5 && "$(tail -n 1 "$RUN_LOG")" == *" undo: the reason it failed" ]] && echo "undo-out-failure-logs-the-end"
+    # 200 MB of output under a memory limit that the shell could not hold
+    # it in: only the end is kept.
+    ( ulimit -v 200000; run 'yes | head -c 200000000; echo end; exit 3'
+      [[ $rc -eq 3 && "$(wc -l < "$RUN_LOG")" -eq $(( _LOG_FOREIGN_LINES + 1 )) ]] && grep -q ' undo: end$' "$RUN_LOG" && echo "undo-out-memory-bounded" )
+    run 'printf "a\\0b\\n"; exit 0'
+    [[ $rc -eq 0 ]] && grep -q ' undo: ab$' "$RUN_LOG" && echo "undo-out-nul-bytes-dropped"
+) > "$W/undo-out.out" 2>&1
+for m in undo-out-small-ok undo-out-status-kept undo-out-large-ok-is-ok undo-out-failure-logs-the-end undo-out-memory-bounded undo-out-nul-bytes-dropped; do
+    expect "$W/undo-out.out" "$m" "$m"
 done
 
 # The real front end, started the real way (as the desktop user, through
@@ -1813,9 +1943,18 @@ ui_front_start
 sleep 300 &
 echo "$!" > "$W/owner.sleep"
 sleep 0.5
-_proc_tree "$_UI_FRONT_PID" > "$W/owner.tree"
-if [[ "${1:-}" == stop ]]; then
+_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START" > "$W/owner.tree"
+if [[ "${1:-}" == stop || "${1:-}" == stuck ]]; then
+    if [[ "$1" == stuck ]]; then
+        # The front end (python, the desktop user's) does not react any
+        # more. Root's own signals are noted with the target's account.
+        while read -r p _ k; do [[ "$k" == user ]] && kill -STOP "$p"; done < "$W/owner.tree"
+        kill() { echo "${!#} $(stat -c %u "/proc/${!#}" 2>/dev/null)" >> "$W/owner.kills"; builtin kill "$@"; }
+    fi
+    : > "$W/owner.kills"; t0=$SECONDS
     ui_front_stop
+    echo $(( SECONDS - t0 )) > "$W/owner.secs"
+    unset -f kill
     mapfile -t tree < "$W/owner.tree"
     _procs_left "${tree[@]}" > "$W/owner.left"
     kill "$(cat "$W/owner.sleep")"
@@ -1838,6 +1977,30 @@ OWNEREOF
     env TOOL="$TOOL" W="$W" U="$U" UH="$UH" bash "$W/owner.sh" stop
     [[ "$(wc -l < "$W/owner.tree")" -ge 4 && ! -s "$W/owner.left" ]] && echo "real-front-stopped"
 
+    # A front end that is stuck is ended within a few seconds: its own
+    # processes (the desktop user's) by a signal sent as the desktop user,
+    # never by root, which signals only root's helper processes.
+    env TOOL="$TOOL" W="$W" U="$U" UH="$UH" bash "$W/owner.sh" stuck
+    uid=$(id -u "$U")
+    grep -q " user$" "$W/owner.tree" && grep -q " own$" "$W/owner.tree" && [[ ! -s "$W/owner.left" && "$(cat "$W/owner.secs")" -le 6 ]] \
+        && echo "real-front-stuck-ended"
+    [[ -s "$W/owner.kills" ]] && ! grep -qvE ' 0?$' "$W/owner.kills" && echo "real-front-root-signals-only-root-processes"
+    # The signal sent as the desktop user: it ends that user's process, it
+    # cannot end root's (the kernel refuses), and it checks the start time.
+    DESKTOP_USER="$U"; DESKTOP_UID=$uid
+    runuser -u "$U" -- sleep 300 & ru=$!
+    sleep 300 & rootp=$!
+    up=""; for _ in $(seq 1 30); do up=$(pgrep -u "$U" -P "$ru" -x sleep) && break; sleep 0.1; done
+    if [[ -n "$up" ]] && _proc_stat "$up"; then
+        ustart=$_PS_START; _proc_stat "$rootp"; rstart=$_PS_START
+        _ui_front_signal KILL "$up 1$ustart user" "$rootp $rstart user"; sleep 0.3
+        [[ -d "/proc/$up" && -d "/proc/$rootp" ]] && echo "user-signal-spares-root-and-reused-ids"
+        _ui_front_signal KILL "$up $ustart user"
+        for _ in $(seq 1 30); do [[ -d "/proc/$up" ]] || break; sleep 0.1; done
+        [[ ! -d "/proc/$up" ]] && echo "user-signal-ends-the-users-process"
+    fi
+    kill "$rootp" "$ru" 2>/dev/null
+
     rm -f "$W/owner.ready"
     env TOOL="$TOOL" W="$W" U="$U" UH="$UH" bash "$W/owner.sh" & owner=$!
     for _ in $(seq 1 50); do [[ -e "$W/owner.ready" ]] && break; sleep 0.1; done
@@ -1856,7 +2019,8 @@ OWNEREOF
     kill "$(cat "$W/owner.sleep")" 2>/dev/null
     mapfile -t tree < "$W/owner.tree"; _ui_front_reap "${tree[@]}"
 ) > "$W/owner.out" 2>&1
-for m in real-front-stopped real-front-runs-as-user real-front-no-log-descriptor pipes-still-held real-front-leaves-when-root-side-is-killed; do
+for m in real-front-stopped real-front-stuck-ended real-front-root-signals-only-root-processes user-signal-spares-root-and-reused-ids \
+         user-signal-ends-the-users-process real-front-runs-as-user real-front-no-log-descriptor pipes-still-held real-front-leaves-when-root-side-is-killed; do
     expect "$W/owner.out" "$m" "$m"
 done
 

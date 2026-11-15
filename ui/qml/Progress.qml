@@ -7,6 +7,7 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 Kirigami.ApplicationWindow {
     id: root
@@ -77,7 +78,7 @@ Kirigami.ApplicationWindow {
                         text: root.detail
                         textFormat: Text.PlainText
                         wrapMode: Text.Wrap
-                        opacity: 0.75
+                        opacity: Util.dimLabel
                     }
                 }
             }
@@ -143,7 +144,7 @@ Kirigami.ApplicationWindow {
                 QQC2.Label {
                     Layout.fillWidth: true
                     text: root.percent >= 0 ? qsTr("Nothing on this PC is changed while it checks.") : ""
-                    opacity: 0.7
+                    opacity: Util.dimQuiet
                     wrapMode: Text.Wrap
                 }
                 QQC2.Button {

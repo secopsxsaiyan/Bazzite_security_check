@@ -99,7 +99,7 @@ Item {
                                 spacing: Kirigami.Units.smallSpacing
                                 Accessible.role: Accessible.ListItem
                                 Accessible.name: String(modelData)
-                                QQC2.Label { text: "•"; opacity: 0.75; Layout.alignment: Qt.AlignTop; Accessible.ignored: true }
+                                QQC2.Label { text: "•"; opacity: Util.dimLabel; Layout.alignment: Qt.AlignTop; Accessible.ignored: true }
                                 QQC2.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: String(parent.modelData) }
                             }
                         }
@@ -112,7 +112,7 @@ Item {
                         QQC2.Label {
                             Layout.fillWidth: true; wrapMode: Text.Wrap
                             visible: page.findings.length === 0
-                            opacity: 0.8
+                            opacity: Util.dimText
                             text: qsTr("Nothing to report.")
                         }
                         QQC2.CheckBox {
@@ -153,7 +153,7 @@ Item {
                             border.color: on ? Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.highlightColor, 0.55)
                                              : Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.2)
                             Accessible.role: Accessible.Grouping
-                            Accessible.name: qsTr("%1: %2").arg(Util.sevName(f.sev)).arg(f.title || "")
+                            Accessible.name: Util.fill(qsTr("%1: %2"), [Util.sevName(f.sev), f.title || ""])
 
                             Rectangle {
                                 id: strip
@@ -201,7 +201,7 @@ Item {
                                         QQC2.Label {
                                             Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
                                             visible: text !== ""
-                                            opacity: 0.75; text: card.f.status || ""
+                                            opacity: Util.dimLabel; text: card.f.status || ""
                                         }
                                     }
                                     StatusChip {

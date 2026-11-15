@@ -454,8 +454,22 @@ _no_tty() {
         # CMD (a fix, a program of another account) must not keep the
         # window's two pipes: the window would never see this tool end.
         if [[ -n "${_UI_FRONT_W:-}" ]]; then exec {_UI_FRONT_W}>&- {_UI_FRONT_R}<&-; fi
+        _run_lock_close
         if _have setsid; then setsid --wait "$@"; else "$@"; fi
     )
+}
+
+# _run_lock_close — close this shell's copy of the run's lock (see
+# _init_state). For the subshell that is about to become another program:
+# whoever holds a copy holds the lock, so a program of the desktop user
+# that got one could release root's lock in the middle of a run, or keep
+# it after the run ("already running"). The same goes for anything a fix
+# leaves behind. Does nothing before the lock is taken.
+_RUN_LOCK_FD=""
+_run_lock_close() {
+    [[ -n "$_RUN_LOCK_FD" ]] || return 0
+    exec {_RUN_LOCK_FD}>&-
+    _RUN_LOCK_FD=""
 }
 
 # _as_user USER CMD... — run CMD as USER in USER's session environment.
@@ -465,7 +479,7 @@ _as_user() {
     local -a _UENV=()
     _user_env "$u" || return 1
     if [[ "$(id -u)" -eq "$(id -u "$u")" ]]; then
-        env -i "${_UENV[@]}" "$@"
+        ( _run_lock_close; exec env -i "${_UENV[@]}" "$@" )
     else
         _no_tty runuser -u "$u" -- env -i "${_UENV[@]}" "$@"
     fi

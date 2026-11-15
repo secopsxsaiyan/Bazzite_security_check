@@ -35,11 +35,19 @@ Section {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: Kirigami.Units.smallSpacing
+                    // Both come from the PC and may be long: the name wraps
+                    // and the chip is cut, so neither sets the width of the
+                    // page.
                     QQC2.Label {
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: Math.ceil(implicitWidth)
+                        wrapMode: Text.Wrap
                         textFormat: Text.PlainText; font.weight: Font.DemiBold
                         text: row.modelData.name
                     }
                     StatusChip {
+                        Layout.alignment: Qt.AlignTop
+                        Layout.maximumWidth: Kirigami.Units.gridUnit * 12
                         text: row.modelData.how
                         tint: row.inUse ? Kirigami.Theme.negativeTextColor
                             : row.modelData.mark === "+" ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
@@ -48,11 +56,11 @@ Section {
                 }
                 QQC2.Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                    opacity: 0.75; text: row.modelData.where
+                    opacity: Util.dimLabel; text: row.modelData.where
                 }
                 QQC2.Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                    opacity: 0.85; text: row.modelData.sentence
+                    opacity: Util.dimSentence; text: row.modelData.sentence
                 }
             }
         }

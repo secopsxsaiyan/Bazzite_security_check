@@ -106,6 +106,7 @@ _qml_ok() {
 _UI_FRONT_W=""         # file descriptor: requests to the front end
 _UI_FRONT_R=""         # file descriptor: its answers
 _UI_FRONT_PID=""       # the helper subshell that runs it (not python itself)
+_UI_FRONT_START=""     # ... and its start time: the two together name it
 _UI_FRONT_ANSWER=""
 _UI_FRONT_OWNER="$BASHPID"     # the shell that may start it and holds the pipes
 _UI_FRONT_LINE_MAX=1048576     # longest answer line that is accepted
@@ -119,29 +120,46 @@ _ui_front_up() {
 # _ui_log_reader [STOPFILE] — copy the front end's stderr (this function's
 # stdin, a pipe) to the run log, as root: each line cut to size, cleaned
 # and marked "ui: " (see _log_foreign), so that the front end can neither
-# touch the log file nor write lines that look like this tool's. It reads
-# _UI_LOG_MAX bytes at most and then closes the pipe (the front end's
-# further writes fail, which it ignores). It ends when the pipe is closed
-# and, because a program the front end started can keep the pipe open,
-# also within a second of STOPFILE appearing or its folder going away.
+# touch the log file nor write lines that look like this tool's.
+#
+# At most _UI_LOG_MAX bytes are taken from the pipe, counted by "dd" and
+# not by this shell: "read" drops NUL bytes without counting them, so a
+# front end that writes nothing else (cat /dev/zero) would otherwise keep
+# this reader busy for the rest of the run. (dd with bs=1 passes every
+# byte on at once; "head -c" would keep the messages back until its
+# buffer is full.) After that many bytes the pipe is closed (the front end's further writes fail, which it
+# ignores). The reader ends when the pipe is closed and, because a program
+# the front end started can keep the pipe open, also within a second of
+# STOPFILE appearing or its folder going away. Always run in a process of
+# its own (a process substitution): it closes its standard input.
 _ui_log_reader() {
-    local stop="${1:-}" line rc total=0 LC_ALL=C
+    local stop="${1:-}" line rc total=0 LC_ALL=C in="" hpid hstart="" held=1
+    # exec: the process to end is "dd" itself, a child of this shell.
+    exec {in}< <(exec dd bs=1 count="$_UI_LOG_MAX" status=none 2>/dev/null)
+    hpid=$!
+    exec <&-
+    _proc_stat "$hpid" && hstart=$_PS_START
     while :; do
         line=""; rc=0
-        IFS= read -r -t 1 -n "$_LOG_FOREIGN_LINE" line || rc=$?
+        IFS= read -r -t 1 -n "$_LOG_FOREIGN_LINE" -u "$in" line || rc=$?
         if [[ -n "$line" || $rc -eq 0 ]]; then
             total=$(( total + ${#line} + 1 ))
-            if (( total > _UI_LOG_MAX )); then
+            if (( total >= _UI_LOG_MAX )); then
                 _log_foreign "ui: " "(the window wrote more than ${_UI_LOG_MAX} bytes of messages; the rest is not recorded)"
-                return 0
+                break
             fi
             _log_foreign "ui: " "$line"
         fi
         (( rc == 0 )) && continue
-        (( rc > 128 )) || return 0      # the pipe was closed
+        if (( rc <= 128 )); then held=0; break; fi      # the pipe was closed, or dd is done
         # Nothing for a second: is anyone still there?
-        if [[ -n "$stop" ]] && { [[ -e "$stop" ]] || [[ ! -d "${stop%/*}" ]]; }; then return 0; fi
+        if [[ -n "$stop" ]] && { [[ -e "$stop" ]] || [[ ! -d "${stop%/*}" ]]; }; then break; fi
     done
+    # "dd" still holds the pipe when this loop ended first. It is this
+    # shell's own child and is ended only while it is still that process.
+    exec {in}<&-
+    if (( held )) && [[ -n "$hstart" ]]; then _kill_same TERM "$hpid" "$hstart"; fi
+    return 0
 }
 
 # ui_front_start — start the front end (once; does nothing in a subshell,
@@ -158,15 +176,21 @@ ui_front_start() {
     # When the front end ends (or cannot start), its answer pipe is closed,
     # so a waiting ui_app sees the end at once; then the file says it has
     # gone, and what is still written to it is thrown away: writing to it
-    # never fails and never blocks. 9>&-: it must not hold the run's lock.
-    # The log reader must hold neither of the two pipes.
+    # never fails and never blocks. It must not hold the run's lock
+    # (_run_lock_close). The log reader must hold neither of the two pipes.
     (
+        _run_lock_close
         _ui_app_cmd serve 2> >(_ui_log_reader "$RUN_TMP/ui-front-gone" > /dev/null 2>&1)
         exec >&-
         : 2>/dev/null > "$RUN_TMP/ui-front-gone"
         exec cat > /dev/null
-    ) < "$d/req" > "$d/rep" 9>&- &
+    ) < "$d/req" > "$d/rep" &
     _UI_FRONT_PID=$!
+    # It cannot have ended yet: it waits for the other end of its pipes,
+    # which is opened below. Its start time tells it from any later process
+    # with the same id (see ui_front_stop).
+    _UI_FRONT_START=""
+    _proc_stat "$_UI_FRONT_PID" && _UI_FRONT_START=$_PS_START
     disown "$_UI_FRONT_PID" 2>/dev/null || true
     exec {_UI_FRONT_W}> "$d/req" {_UI_FRONT_R}< "$d/rep"
     rm -rf -- "$d"
@@ -188,52 +212,153 @@ _proc_stat() {
     _PS_PPID="$2"; _PS_START="${20}"
 }
 
-# _proc_tree PID — PID and every process below it, one "PID STARTTIME" a
-# line.
+# _proc_uid PID — the account a process runs as, in _PS_UID; fails when
+# the process is not there or its real and effective ids differ (a setuid
+# program: nobody's to signal here).
+_PS_UID=""
+_proc_uid() {
+    local k r e rest
+    while read -r k r e rest; do
+        [[ "$k" == Uid: ]] || continue
+        [[ -n "$r" && "$r" == "$e" ]] || return 1
+        _PS_UID=$r
+        return 0
+    done 2>/dev/null < "/proc/$1/status"
+    return 1
+}
+
+# _kill_same SIGNAL PID STARTTIME — signal one of this tool's own
+# processes, and only if PID is still the process that started at
+# STARTTIME and still runs as this account: both are read here, directly
+# before the signal, so a process that merely got the same id later is
+# never signalled.
+_kill_same() {
+    if ! _proc_stat "$2" || [[ "$_PS_START" != "$3" ]]; then return 1; fi
+    if ! _proc_uid "$2" || [[ "$_PS_UID" != "$EUID" ]]; then return 1; fi
+    kill -s "$1" "$2" 2>/dev/null
+}
+
+# _proc_tree PID STARTTIME — the process PID that started at STARTTIME and
+# every process below it, one "PID STARTTIME KIND" a line. KIND says who
+# may signal it:
+#   own    it runs as this account, and so does everything between it and
+#          PID: this tool's helper, runuser, the log reader
+#   user   it runs as the desktop user: the front end and what it started
+#   other  anything else (a setuid program the front end started): left
+#          alone
+# Nothing is printed when PID is not that process any more. A second look
+# at every process (parent first) drops what changed while /proc was read:
+# a process is listed only if it and its parent were still the same ones
+# afterwards, so a process that took over an id in between is never taken
+# for a child of the tree.
 _proc_tree() {
-    local -A kids=() start=()
+    local -A kids=() start=() who=()
     local -a todo=("$1")
-    local f pid
+    local f pid k
     for f in /proc/[0-9]*; do
         pid=${f#/proc/}
         _proc_stat "$pid" || continue
         kids[$_PS_PPID]+=" $pid"; start[$pid]=$_PS_START
     done
+    [[ "${start[$1]:-}" == "$2" ]] || return 0
+    who[$1]=own
     while (( ${#todo[@]} )); do
         pid=${todo[0]}; todo=("${todo[@]:1}")
         [[ -n "${start[$pid]:-}" ]] || continue
-        printf '%s %s\n' "$pid" "${start[$pid]}"
-        # shellcheck disable=SC2206
-        todo+=(${kids[$pid]:-})
-    done
-    return 0
-}
-
-# _procs_left "PID STARTTIME"... — those of them that still run.
-_procs_left() {
-    local p
-    for p in "$@"; do
-        _proc_stat "${p% *}" && [[ "$_PS_START" == "${p#* }" ]] && printf '%s\n' "$p"
-    done
-    return 0
-}
-
-# _ui_front_reap "PID STARTTIME"... — the processes of a front end that was
-# told to leave: wait two seconds for them to end by themselves (they do,
-# normally at once), then end them (TERM, a second later KILL: a stopped
-# process only reacts to that). Only these processes, and only while they
-# are still the same ones.
-_ui_front_reap() {
-    local -a left=("$@")
-    local sig p i
-    for sig in "" TERM KILL; do
-        for p in "${left[@]}"; do
-            [[ -z "$sig" ]] || kill -s "$sig" "${p% *}" 2>/dev/null
+        if ! _proc_stat "$pid" || [[ "$_PS_START" != "${start[$pid]}" ]]; then continue; fi
+        k=other
+        if _proc_uid "$pid"; then
+            if [[ "$_PS_UID" == "$EUID" && "${who[$pid]}" == own ]]; then
+                k=own
+            elif [[ -n "${DESKTOP_UID:-}" && "$_PS_UID" == "$DESKTOP_UID" ]]; then
+                k=user
+            fi
+        fi
+        printf '%s %s %s\n' "$pid" "${start[$pid]}" "$k"
+        for f in ${kids[$pid]:-}; do
+            who[$f]=$k
+            todo+=("$f")
         done
-        for (( i = 0; i < ( ${#sig} ? 10 : 20 ); i++ )); do
-            mapfile -t left < <(_procs_left "${left[@]}")
+    done
+    return 0
+}
+
+# _procs_left "PID STARTTIME KIND"... — those of them that still run.
+_procs_left() {
+    local p pid st
+    for p in "$@"; do
+        read -r pid st _ <<< "$p"
+        _proc_stat "$pid" && [[ "$_PS_START" == "$st" ]] && printf '%s\n' "$p"
+    done
+    return 0
+}
+
+# What ends the front end's own processes, run as the desktop user (bash
+# -c SCRIPT bash SIGNAL "PID STARTTIME"...): it reads each start time
+# again and signals in the same breath.
+# shellcheck disable=SC2016
+_UI_FRONT_KILL_SCRIPT='sig=$1; shift
+for p in "$@"; do
+    pid=${p% *}; s=""
+    { read -r -d "" s < "/proc/$pid/stat"; } 2>/dev/null
+    s=${s##*) }
+    read -r -a f <<< "$s"
+    if [[ ${#f[@]} -ge 20 && "${f[19]}" == "${p#* }" ]]; then kill -s "$sig" "$pid" 2>/dev/null; fi
+done
+exit 0'
+
+# _ui_front_signal SIGNAL "PID STARTTIME KIND"... — signal what is left of
+# a front end (the rules are above ui_front_stop).
+_ui_front_signal() {
+    local sig="$1" p pid st k
+    local -a users=()
+    shift
+    for p in "$@"; do
+        read -r pid st k <<< "$p"
+        case "$k" in
+            user) users+=("$pid $st") ;;
+            own)
+                # Root's own, unless it has become the front end since the
+                # list was made (runuser's child, before it changes account).
+                if ! _kill_same "$sig" "$pid" "$st" \
+                   && [[ "$EUID" != "${DESKTOP_UID:-}" ]] && _proc_uid "$pid" \
+                   && [[ "$_PS_UID" == "${DESKTOP_UID:-}" ]]; then
+                    users+=("$pid $st")
+                fi
+                ;;
+        esac
+    done
+    if (( ${#users[@]} )); then
+        _as_desktop_user bash -c "$_UI_FRONT_KILL_SCRIPT" bash "$sig" "${users[@]}" \
+            > /dev/null 2>&1 < /dev/null || true
+    fi
+    return 0
+}
+
+# _ui_front_reap "PID STARTTIME KIND"... — the processes of a front end
+# that was told to leave: wait two seconds for them to end by themselves
+# (they do, normally at once), then end them (TERM, a second later KILL: a
+# stopped process only reacts to that). When only this tool's own helpers
+# are left after a moment, the wait is over: they have nothing to finish,
+# and stay only because some program holds a copy of a pipe.
+_ui_front_reap() {
+    local -a left=("$@") still=()
+    local sig p i pid st k mine
+    for sig in "" TERM KILL; do
+        [[ -z "$sig" ]] || _ui_front_signal "$sig" "${left[@]}"
+        for (( i = 0; i < ( ${#sig} ? 50 : 100 ); i++ )); do
+            still=(); mine=1
+            for p in "${left[@]}"; do
+                read -r pid st k <<< "$p"
+                if _proc_stat "$pid" && [[ "$_PS_START" == "$st" ]]; then
+                    still+=("$p")
+                    [[ "$k" == own ]] || mine=0
+                fi
+            done
+            left=("${still[@]}")
             (( ${#left[@]} )) || return 0
-            sleep 0.1
+            if [[ -z "$sig" ]] && (( mine && i >= 10 )); then break; fi
+            sleep 0.02
         done
     done
     return 0
@@ -244,24 +369,48 @@ _ui_front_reap() {
 # the log reader) really has ended, and do not use it again in this run.
 # Called when the tool ends, and when the front end failed. In a subshell
 # the pipes stay open for the main shell; the file tells it.
+#
+# Ending processes is done by root, on behalf of processes of a less
+# trusted account, so it must never hit a process that is not ours. A
+# process id alone does not say that: once a process has ended and been
+# collected its id is free, and the front end decides when its own
+# processes end. So:
+#   1. A process is named by its id and its start time together. The
+#      helper's are recorded when it is started.
+#   2. The list of what belongs to the front end is made first, while this
+#      shell still holds the pipes. The helper reads one of them to the
+#      end, so until they are closed here it cannot have ended, and the
+#      list starts from a process that is certainly the right one.
+#   3. No signal without a check. Root signals only processes that run as
+#      root with nothing of the desktop user's above them, and reads the
+#      start time again directly before each signal (_kill_same).
+#   4. The front end's processes run as the desktop user and are signalled
+#      as the desktop user (_UI_FRONT_KILL_SCRIPT, through runuser), again
+#      with the start time read directly before. The kernel then refuses
+#      a signal to anything that is not that account's, so whatever
+#      happens to ids in between, root's signal cannot reach a process of
+#      root or of a third account. A setuid program the front end started
+#      is nobody's here and is left alone.
+#   5. Normally nothing is signalled at all: the processes end by
+#      themselves within a fraction of a second and this only watches them
+#      go. Signals are for a front end that hangs (TERM after two seconds,
+#      KILL a second later), and for root's helpers when some program still
+#      holds a copy of a pipe and nothing of the front end's is left.
 ui_front_stop() {
     [[ -n "$_UI_FRONT_W" ]] || return 0
     _ui_front_send '{"quit":true}' || true
     if [[ -n "${RUN_TMP:-}" && -d "$RUN_TMP" ]]; then : > "$RUN_TMP/ui-front-gone"; fi
     [[ "$BASHPID" == "$_UI_FRONT_OWNER" ]] || return 0
+    # The list, while the pipes are still open here (rule 2). The front end
+    # is already leaving meanwhile, which is what keeps this short.
+    local -a procs=()
+    if [[ -n "$_UI_FRONT_PID" && -n "$_UI_FRONT_START" ]]; then
+        mapfile -t procs < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START")
+    fi
     exec {_UI_FRONT_W}>&- {_UI_FRONT_R}<&-
     _UI_FRONT_W=""; _UI_FRONT_R=""
-    if [[ -n "$_UI_FRONT_PID" ]]; then
-        # Found before the helper is ended: afterwards they are no longer
-        # below it. The helper (which throws away late writes) would wait
-        # for ever if a program started by a fix still held a copy of the
-        # pipe; a front end that hangs would stay behind.
-        local -a procs=()
-        mapfile -t procs < <(_proc_tree "$_UI_FRONT_PID")
-        kill "$_UI_FRONT_PID" 2>/dev/null
-        (( ${#procs[@]} )) && _ui_front_reap "${procs[@]}"
-    fi
-    _UI_FRONT_PID=""
+    (( ${#procs[@]} )) && _ui_front_reap "${procs[@]}"
+    _UI_FRONT_PID=""; _UI_FRONT_START=""
     return 0
 }
 

@@ -10,6 +10,13 @@ function esc(s) {
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
+// Text from the PC as the text of a tool tip. A tool tip shows its text as
+// rich text whenever it looks like markup, so the text is escaped, and
+// marked as rich text so that the escapes are always read as such.
+function tip(s) {
+    return "<span>" + esc(s).replace(/\n/g, "<br>") + "</span>"
+}
+
 // TEMPLATE with %1, %2, ... replaced by VALUES in one pass. For texts from
 // the PC: unlike a chain of .arg(), a "%2" inside one value is left alone.
 function fill(template, values) {
@@ -46,6 +53,33 @@ function reveal(flickable, item, gap) {
         flickable.contentY = Math.max(0, Math.min(last, top - g))
     else if (top + item.height + g > flickable.contentY + flickable.height)
         flickable.contentY = Math.max(0, Math.min(last, top + item.height + g - flickable.height))
+}
+
+// ---- how much is dimmed, and how strong a tint is ----------------------------
+// Opacity of text that is not the main thing where it stands.
+var dimSentence = 0.85  // a sentence that still has to be read
+var dimText = 0.8       // descriptions, explanations, hints
+var dimLabel = 0.75     // the name of a value, a count, a small line
+var dimQuiet = 0.7      // what needs no attention: a check without findings
+var dimMark = 0.6       // a mark that only decorates (the arrow of a row)
+// A card that can be ticked (Choose): the share of its colour in the fill
+// and in the frame.
+var tintHover = 0.05    // not ticked, under the pointer
+var tintOn = 0.10       // ticked
+var tintOnHover = 0.16  // ticked, under the pointer
+var tintEdge = 0.15     // the frame
+var tintEdgeOn = 0.6    // the frame when ticked
+
+// The colour of a check's summary on the dashboard. A check with problems
+// is red, but one with medium problems only is orange, as the count in the
+// header is. The root side sends no field for "has a high problem": the
+// only place that says it is the summary it wrote ("1 high, 2 medium"),
+// so this reads that English text. It is the one place that does; when the
+// root side sends the highest severity of a check, use that here instead.
+function summaryColor(theme, state, summary) {
+    if (state === "ok" || state === "na") return theme.textColor
+    if (state === "bad" && String(summary || "").indexOf(" high") < 0) return theme.neutralTextColor
+    return stateColor(theme, state)
 }
 
 // ---- the state of a check or an area ---------------------------------------
