@@ -998,7 +998,7 @@ $1"; }
         (cd "$R/dl" && sha256sum bazzite-sec-audit-9.9.9.tar.gz > SHA256SUMS)
         ssh-keygen -q -Y sign -f "$R/k/key" -n bazzite-sec-audit-release "$R/dl/SHA256SUMS"
         RELEASE_SIGNERS="$R/k/signers"
-        update_verify "$R/dl" 9.9.9 && src=$(update_extract "$R/dl" 9.9.9) && [[ -f "$src/ui/app.py" ]] \
+        update_verify "$R/dl" 9.9.9 && src=$(update_extract "$R/dl" 9.9.9) && [[ -f "$src/ui/app.py" && -f "$src/ui/qml/Shell.qml" ]] \
             && _version_newer 1.10.0 1.9.2 && ! _version_newer 1.1.0 1.1.0 && ! _version_newer 1.0.9 1.1.0 && echo "update-verified"
         # Tampered archive, wrong key, path outside the tool's folder.
         cp "$R/dl/bazzite-sec-audit-9.9.9.tar.gz" "$R/good.tgz"
@@ -1596,6 +1596,132 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked kept-no-date-no-since; do
     expect "$W/t6.out" "$m" "$m"
 done
+
+# One window for the whole run: ui_app talks to one long-lived front end
+# over two pipes. A stand-in that speaks the same protocol (no Qt here)
+# shows that it is one process for every page, that it works from $(...),
+# and that a front end that fails or goes away means "use kdialog" (3), not
+# a hang and not "cancelled".
+cat > "$W/fake-front.py" <<'PYEOF'
+import json, sys
+log = open(sys.argv[1], "a")
+def note(*a):
+    print(*a, file=log, flush=True)
+def send(rid, status, answer):
+    sys.stdout.write('{"id":%s,"status":%d,"answer":%s}\n' % (json.dumps(rid), status, json.dumps(answer)))
+    sys.stdout.flush()
+if sys.argv[2] != "serve":
+    note("oneshot", sys.argv[2])
+    print(json.dumps({"oneshot": sys.argv[2]}))
+    sys.exit(0)
+n = 0
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("quit"):
+        note("quit")
+        break
+    if "mode" not in m:
+        note(json.dumps(m, sort_keys=True))
+        continue
+    n += 1
+    d = m["data"]
+    if d.get("die"):
+        sys.exit(7)
+    if d.get("stale"):
+        send("an-earlier-request", 0, {"wrong": True})
+    if d.get("garbage"):
+        sys.stdout.write("not an answer\n")
+        sys.stdout.flush()
+    elif d.get("fail"):
+        send(m["id"], 3, None)
+    elif d.get("cancel"):
+        send(m["id"], 1, None)
+    else:
+        send(m["id"], 0, {"mode": m["mode"], "say": d.get("say"), "n": n})
+PYEOF
+(
+    # shellcheck disable=SC1090
+    source "$TOOL"
+    RUN_LOG="$W/front-run.log"; : > "$RUN_LOG"
+    FL="$W/front.log"
+    _ui_app_cmd() { python3 -I "$W/fake-front.py" "$FL" "$@"; }
+    ui_theme_prepare() { :; }
+    new_run() { ui_front_stop; RUN_TMP=$(mktemp -d "$W/front-rt.XXXXXX"); UI_MODE=kde; _QML_OK=yes; : > "$FL"; }
+
+    new_run; ui_front_start
+    [[ -n "$_UI_FRONT_W" && -z "$(ls -A "$RUN_TMP")" ]] && echo "front-started"
+    a=$(ui_app wizard '{"say":"one"}'); rc=$?
+    [[ $rc -eq 0 && "$a" == '{"mode": "wizard", "say": "one", "n": 1}' ]] && echo "front-answer-in-subshell"
+    a=$(ui_app dialog '{"say":"two } \"x\""}'); rc=$?
+    ui_app check '{"say":"three"}' > "$W/front-a3"
+    [[ $rc -eq 0 && "$a" == *'"n": 2}' && "$(cat "$W/front-a3")" == *'"n": 3}' ]] && ! grep -q oneshot "$FL" && echo "front-one-process"
+    a=$(ui_app confirm '{"cancel":true}'); rc=$?
+    [[ $rc -eq 1 && -z "$a" ]] && echo "front-cancelled-is-1"
+    a=$(ui_app confirm '{"stale":true,"say":"s"}'); rc=$?
+    [[ $rc -eq 0 && "$a" == *'"say": "s"'* ]] && echo "front-stale-answer-skipped"
+    a=$(ui_app dashboard "$(python3 -I -c 'import json; print(json.dumps({"say": "x" * 200000}))')"); rc=$?
+    [[ $rc -eq 0 && ${#a} -gt 200000 ]] && echo "front-large-answer"
+    # A fix being applied: the window's spinner. The scan: its progress window.
+    ui_busy_start 'Applying: "Firewall"'; ui_busy_stop
+    ui_progress_start "Checking your PC…" 4; ui_progress_set 2 "Firewall"; ui_progress_set 4 "Malware" slow; ui_progress_stop
+    UI_THEME=light; ui_theme_changed; UI_THEME=system
+    a=$(ui_app wizard '{"say":"after"}')
+    [[ "$a" == *'"n": 7}' ]] && grep -qxF '{"busy": "Applying: \"Firewall\""}' "$FL" && grep -qxF '{"busy": ""}' "$FL" \
+        && [[ -z "$_PROGRESS_FD" && -z "$_PROGRESS_REF" ]] && echo "front-busy-in-window"
+    [[ "$(grep -c '"progress"' "$FL")" -eq 6 ]] && grep -qF '"line": "22\t0\tFirewall\t"' "$FL" && grep -qF '"line": "90\t1\tMalware\t' "$FL" \
+        && grep -qF '"line": "100\t0\tDone\t"' "$FL" && grep -qxF '{"progress": "stop"}' "$FL" && echo "front-progress-lines"
+    grep -qxF '{"theme": "light"}' "$FL" && echo "front-theme-sent"
+
+    # It dies while a page is asked from $(...): 3 there, and the main
+    # shell learns it from the file.
+    a=$(ui_app wizard '{"die":true}'); rc=$?
+    [[ $rc -eq 3 && -z "$a" && "$_QML_OK" == yes ]] && ! _qml_ok && [[ "$_QML_OK" == no && -z "$_UI_FRONT_W" ]] && echo "front-died-falls-back"
+    ui_app wizard '{}' > /dev/null; [[ $? -eq 4 ]] && echo "front-not-used-again"
+    # With the front end gone, a question is asked with kdialog.
+    _as_desktop_user() { echo "kdialog" >> "$W/front-kd"; return 0; }
+    ui_yesno "Continue?" && [[ -s "$W/front-kd" ]] && echo "front-gone-kdialog-asks"
+
+    new_run; ui_front_start
+    a=$(ui_app wizard '{"fail":true}'); rc=$?
+    for _ in 1 2 3 4 5 6 7 8 9 10; do grep -qx quit "$FL" && break; sleep 0.1; done
+    [[ $rc -eq 3 ]] && grep -qx quit "$FL" && ! _qml_ok && echo "front-page-failure-is-3"
+    new_run; ui_front_start
+    a=$(ui_app wizard '{"garbage":true}'); rc=$?
+    [[ $rc -eq 3 && -z "$a" ]] && echo "front-bad-answer-is-3"
+    new_run
+    _ui_app_cmd() { return 3; }
+    ui_front_start
+    a=$(ui_app wizard '{"say":"x"}'); rc=$?
+    [[ ( $rc -eq 3 || $rc -eq 4 ) && -z "$a" ]] && ! _qml_ok && echo "front-cannot-start"
+    _ui_app_cmd() { python3 -I "$W/fake-front.py" "$FL" "$@"; }
+
+    # The tool's exit: quit is sent, nothing is left running.
+    new_run; ui_front_start
+    a=$(ui_app wizard '{"say":"x"}'); pid="$_UI_FRONT_PID"
+    _cleanup
+    for _ in 1 2 3 4 5 6 7 8 9 10; do grep -qx quit "$FL" && ! kill -0 "$pid" 2>/dev/null && break; sleep 0.1; done
+    grep -qx quit "$FL" && ! kill -0 "$pid" 2>/dev/null && [[ -z "$_UI_FRONT_W" && ! -d "$RUN_TMP" ]] && echo "front-stopped-on-exit"
+
+    # Not running (no private folder for the pipes): one page, one window.
+    UI_MODE=kde; _QML_OK=yes; RUN_TMP=""; : > "$FL"
+    ui_app wizard '{"say":"x"}' > "$W/front-a9"; rc=$?
+    [[ $rc -eq 0 && "$(cat "$W/front-a9")" == '{"oneshot": "wizard"}' && -z "$_UI_FRONT_W" ]] && echo "front-one-shot-without-folder"
+) > "$W/front.out" 2>&1
+for m in front-started front-answer-in-subshell front-one-process front-cancelled-is-1 front-stale-answer-skipped front-large-answer \
+         front-busy-in-window front-progress-lines front-theme-sent front-died-falls-back front-not-used-again front-gone-kdialog-asks \
+         front-page-failure-is-3 front-bad-answer-is-3 front-cannot-start front-stopped-on-exit front-one-shot-without-folder; do
+    expect "$W/front.out" "$m" "$m"
+done
+
+# The front end itself: every page the root side can ask for has its file
+miss=""
+for f in $(python3 -I -c 'import ast, sys
+for node in ast.walk(ast.parse(open(sys.argv[1]).read())):
+    if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "PAGES":
+        print(" ".join(ast.literal_eval(node.value).values()))' "$HERE/../ui/app.py") Shell.qml Progress.qml; do
+    [[ -f "$HERE/../ui/qml/$f" ]] || miss+=" $f"
+done
+if [[ -z "$miss" ]] && grep -q '"serve"' "$HERE/../ui/app.py"; then ok "every page file of the front end is there"; else bad "front end: missing page files:${miss:- (or no serve mode)}"; fi
 
 # Reports go into the user's folder as the user: a symlink there to a
 # root-owned folder must not make root create files in it.

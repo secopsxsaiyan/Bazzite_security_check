@@ -320,6 +320,8 @@ _init_state() {
 }
 
 _cleanup() {
+    # The window closes with the tool.
+    declare -F ui_front_stop >/dev/null && ui_front_stop
     [[ -n "$RUN_TMP" && -d "$RUN_TMP" ]] && rm -rf -- "$RUN_TMP"
     return 0
 }
@@ -369,6 +371,7 @@ main() {
     load_settings
     ui_init
     ui_theme_prepare
+    ui_front_start
     gather_facts
     log "bazzite-sec-audit ${SCRIPT_VERSION}; user=${DESKTOP_USER:-none}; ui=${UI_MODE}; os=${OS_PRETTY}; bazzite=${IS_BAZZITE}; image=${IMAGE_NAME:-?}"
 

@@ -423,7 +423,12 @@ _user_env() {
 # its controlling terminal: a program running as another account must not
 # be able to type into the administrator's terminal (TIOCSTI).
 _no_tty() {
-    if _have setsid; then setsid --wait "$@"; else "$@"; fi
+    (
+        # CMD (a fix, a program of another account) must not keep the
+        # window's two pipes: the window would never see this tool end.
+        if [[ -n "${_UI_FRONT_W:-}" ]]; then exec {_UI_FRONT_W}>&- {_UI_FRONT_R}<&-; fi
+        if _have setsid; then setsid --wait "$@"; else "$@"; fi
+    )
 }
 
 # _as_user USER CMD... — run CMD as USER in USER's session environment.

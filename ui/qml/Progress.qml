@@ -1,7 +1,8 @@
-// Security Check - progress while checks (or a fix) run. The root side
-// sends progress lines; ui/app.py sets these properties. Closing the
-// window never stops the work: it hides the window when a tray icon can
-// bring it back (the icon keeps the progress), else minimises it.
+// Security Check - progress while the checks run: the one window besides
+// the main one (Shell.qml), which is hidden meanwhile. The root side sends
+// progress lines; ui/app.py sets these properties. Closing the window never
+// stops the work: it hides the window when a tray icon can bring it back
+// (the icon keeps the progress), else minimises it.
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
@@ -9,15 +10,16 @@ import org.kde.kirigami as Kirigami
 
 Kirigami.ApplicationWindow {
     id: root
-    title: "Security Check"
+    title: qsTr("Security Check")
     width: Kirigami.Units.gridUnit * 30
     height: Kirigami.Units.gridUnit * 10
     minimumWidth: Kirigami.Units.gridUnit * 24
     minimumHeight: Kirigami.Units.gridUnit * 9
     pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
 
-    property string heading: (bridge.input && bridge.input.heading) || "Checking your PC"
-    property string label: "Starting…"
+    property string iconSource: ""     // file URL of the app icon
+    property string heading: qsTr("Checking your PC")
+    property string label: qsTr("Starting…")
     property string detail: ""
     property int percent: -1          // -1: no steps (a fix being applied)
     property bool slow: false          // a long step (malware scan): spinner
@@ -38,20 +40,28 @@ Kirigami.ApplicationWindow {
             RowLayout {
                 spacing: Kirigami.Units.largeSpacing
                 Kirigami.Icon {
-                    source: bridge.iconSource
+                    source: root.iconSource
                     implicitWidth: Kirigami.Units.iconSizes.huge
                     implicitHeight: implicitWidth
+                    Accessible.ignored: true      // decoration; the heading says it
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: Kirigami.Units.smallSpacing
-                    Kirigami.Heading { text: root.heading; level: 2; textFormat: Text.PlainText }
+                    Kirigami.Heading {
+                        Layout.fillWidth: true
+                        text: root.heading
+                        level: 2
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                    }
                     RowLayout {
                         QQC2.BusyIndicator {
                             visible: root.slow || root.percent < 0
                             running: visible
                             implicitWidth: Kirigami.Units.iconSizes.smallMedium
                             implicitHeight: implicitWidth
+                            Accessible.name: qsTr("Working")
                         }
                         QQC2.Label {
                             Layout.fillWidth: true
@@ -81,6 +91,8 @@ Kirigami.ApplicationWindow {
                     from: 0; to: 100
                     value: Math.max(0, root.percent)
                     indeterminate: root.percent < 0
+                    Accessible.name: root.percent >= 0 ? qsTr("Progress: %1%").arg(root.percent) : qsTr("Working")
+                    Accessible.description: root.label
                     // A solid accent fill, so 40% and 90% are easy to tell
                     // apart in the light theme too.
                     background: Rectangle {
@@ -111,7 +123,8 @@ Kirigami.ApplicationWindow {
                 }
                 QQC2.Label {
                     visible: root.percent >= 0
-                    text: root.percent + "%"
+                    text: qsTr("%1%").arg(root.percent)
+                    Accessible.ignored: true      // the bar already says it
                     font.bold: true
                     Layout.minimumWidth: Kirigami.Units.gridUnit * 2.5
                     horizontalAlignment: Text.AlignRight
@@ -124,16 +137,17 @@ Kirigami.ApplicationWindow {
                 Layout.fillWidth: true
                 QQC2.Label {
                     Layout.fillWidth: true
-                    text: root.percent >= 0 ? "Nothing on this PC is changed while it checks." : ""
+                    text: root.percent >= 0 ? qsTr("Nothing on this PC is changed while it checks.") : ""
                     opacity: 0.7
                     wrapMode: Text.Wrap
                 }
                 QQC2.Button {
                     visible: root.canHide
-                    text: "Hide"
+                    text: qsTr("Hide")
                     icon.name: "window-minimize"
                     onClicked: root.hide()
-                    QQC2.ToolTip.text: "Keep working; the progress stays in the system tray."
+                    QQC2.ToolTip.text: qsTr("Keep working; the progress stays in the system tray.")
+                    Accessible.description: QQC2.ToolTip.text
                     QQC2.ToolTip.visible: hovered
                 }
             }

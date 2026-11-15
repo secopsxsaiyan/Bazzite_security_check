@@ -65,7 +65,9 @@ _ui_app_cmd() {
 }
 
 # _qml_ok — the Kirigami front end can run here: KDE dialogs are in use,
-# and PySide6 and Kirigami are installed (checked once).
+# and PySide6 and Kirigami are installed (checked once), and the front end
+# has not failed in this run. Once it is not to be used, its window is
+# closed too: the kdialog windows take over.
 _qml_ok() {
     if [[ -z "$_QML_OK" ]]; then
         _QML_OK=no
@@ -75,15 +77,134 @@ _qml_ok() {
             _QML_OK=yes
         fi
     fi
-    [[ "$_QML_OK" == yes ]]
+    if [[ "$_QML_OK" == yes && -n "${RUN_TMP:-}" && -e "${RUN_TMP}/ui-front-gone" ]]; then
+        _QML_OK=no
+    fi
+    [[ "$_QML_OK" == yes ]] && return 0
+    ui_front_stop
+    return 1
 }
 
-# ui_app MODE JSON — show the Kirigami front end (wizard or settings) with
-# JSON as its input; prints its answer. Status 0 answered, 1 cancelled,
-# 3 it could not run, 4 not available here. The caller validates the answer.
+# ====================== THE ONE WINDOW ======================
+# Every Kirigami page is shown by one front-end process ("ui/app.py serve",
+# run as the desktop user) in one window, which stays open for the whole
+# run. This side writes one JSON line per request to its input and reads
+# one JSON line per answer (the protocol is described in ui/app.py).
+#
+# It is started here, in the main shell, so that the two pipes are open in
+# every $(...) subshell a page is asked from. Until the first request it is
+# an idle process: no Qt, no window. What a subshell learns is lost when it
+# ends, so "the front end has gone" is a file in RUN_TMP (as for kdialog).
+_UI_FRONT_W=""         # file descriptor: requests to the front end
+_UI_FRONT_R=""         # file descriptor: its answers
+_UI_FRONT_PID=""
+_UI_FRONT_ANSWER=""
+_UI_FRONT_OWNER="$BASHPID"     # the shell that may start it and holds the pipes
+
+# _ui_front_up — the front end was started and has not gone away.
+_ui_front_up() {
+    [[ -n "$_UI_FRONT_W" && ! -e "${RUN_TMP:-}/ui-front-gone" ]]
+}
+
+# ui_front_start — start the front end (once; does nothing in a subshell,
+# without a private folder for the pipes, or where it cannot run).
+ui_front_start() {
+    [[ -z "$_UI_FRONT_W" && "$BASHPID" == "$_UI_FRONT_OWNER" ]] || return 0
+    [[ -n "${RUN_TMP:-}" && -d "$RUN_TMP" && ! -e "$RUN_TMP/ui-front-gone" ]] || return 0
+    _qml_ok || return 0
+    local d="$RUN_TMP/ui-front"
+    if ! mkdir -- "$d" 2>/dev/null || ! mkfifo -- "$d/req" "$d/rep" 2>/dev/null; then
+        rm -rf -- "$d"
+        return 0
+    fi
+    # When the front end ends (or cannot start), its answer pipe is closed,
+    # so a waiting ui_app sees the end at once; then the file says it has
+    # gone, and what is still written to it is thrown away: writing to it
+    # never fails and never blocks. 9>&-: it must not hold the run's lock.
+    (
+        _ui_app_cmd serve 2>>"${RUN_LOG:-/dev/null}"
+        exec >&-
+        : 2>/dev/null > "$RUN_TMP/ui-front-gone"
+        exec cat > /dev/null
+    ) < "$d/req" > "$d/rep" 9>&- &
+    _UI_FRONT_PID=$!
+    disown "$_UI_FRONT_PID" 2>/dev/null || true
+    exec {_UI_FRONT_W}> "$d/req" {_UI_FRONT_R}< "$d/rep"
+    rm -rf -- "$d"
+    return 0
+}
+
+# ui_front_stop — tell the front end to leave (its window closes) and do
+# not use it again in this run. Called when the tool ends, and when the
+# front end failed. In a subshell the pipes stay open for the main shell;
+# the file tells it.
+ui_front_stop() {
+    [[ -n "$_UI_FRONT_W" ]] || return 0
+    _ui_front_send '{"quit":true}' || true
+    if [[ -n "${RUN_TMP:-}" && -d "$RUN_TMP" ]]; then : > "$RUN_TMP/ui-front-gone"; fi
+    [[ "$BASHPID" == "$_UI_FRONT_OWNER" ]] || return 0
+    exec {_UI_FRONT_W}>&- {_UI_FRONT_R}<&-
+    _UI_FRONT_W=""; _UI_FRONT_R=""
+    # The helper that throws away late writes: it would wait for ever if a
+    # program started by a fix still held a copy of the pipe.
+    [[ -n "$_UI_FRONT_PID" ]] && kill "$_UI_FRONT_PID" 2>/dev/null
+    _UI_FRONT_PID=""
+    return 0
+}
+
+# _ui_front_send LINE — one line to the front end (1: it is not there).
+_ui_front_send() {
+    _ui_front_up || return 1
+    printf '%s\n' "${1//$'\n'/ }" 2>/dev/null 1>&"$_UI_FRONT_W" || return 1
+}
+
+# _ui_front_ask MODE JSON — show a page and wait for the answer, which is
+# left in _UI_FRONT_ANSWER. Status 0 answered, 1 cancelled, 3 the front end
+# failed or went away (it is then not used again). The answer line has one
+# fixed form, so it is taken apart here without a JSON parser; the caller
+# validates what is in it.
+_ui_front_ask() {
+    local id="${BASHPID}-${RANDOM}${RANDOM}" data="${2//$'\n'/ }" line
+    local re='^\{"id":"([^"]*)","status":([0-9]+),"answer":(.*)\}$'
+    _UI_FRONT_ANSWER=""
+    [[ -n "$data" ]] || data='{}'
+    if _ui_front_send "{\"id\":\"${id}\",\"mode\":\"${1}\",\"data\":${data}}"; then
+        while IFS= read -r -u "$_UI_FRONT_R" line; do
+            [[ "$line" =~ $re ]] || break
+            if [[ "${BASH_REMATCH[1]}" != "$id" ]]; then
+                # No id: the request could not be read. Another id: the
+                # answer to an earlier request that was given up.
+                [[ -n "${BASH_REMATCH[1]}" ]] || break
+                continue
+            fi
+            case "${BASH_REMATCH[2]}" in
+                0) _UI_FRONT_ANSWER="${BASH_REMATCH[3]}"; return 0 ;;
+                1) return 1 ;;
+            esac
+            break
+        done
+    fi
+    log "The Security Check window failed or went away (${1}); using KDE dialogs from here on"
+    ui_front_stop
+    return 3
+}
+
+# ui_app MODE JSON — show a Kirigami page (wizard, settings, dashboard,
+# check, choose, confirm or dialog) with JSON as its input, in the one
+# window; prints its answer. Status 0 answered, 1 cancelled, 3 it could not
+# run, 4 not available here. The caller validates the answer. Works inside
+# $(...) too. Where the long-lived front end is not running (no private
+# folder for its pipes), the page gets a window of its own.
 ui_app() {
     _qml_ok || return 4
     local out rc=0
+    ui_front_start
+    if _ui_front_up; then
+        _ui_front_ask "$1" "$2" || rc=$?
+        [[ $rc -eq 3 ]] && _QML_OK=no
+        printf '%s' "$_UI_FRONT_ANSWER"
+        return "$rc"
+    fi
     out=$(_ui_app_cmd "$1" <<< "$2" 2>>"${RUN_LOG:-/dev/null}") || rc=$?
     [[ $rc -eq 3 ]] && _QML_OK=no
     printf '%s' "$out"
@@ -101,6 +222,16 @@ ui_theme_prepare() {
     home=$(_home_of "$DESKTOP_USER")
     # Only a folder in that person's home is used.
     [[ -n "$home" && "$d" == "$home"/* && "$d" != *$'\n'* && "$d" != *..* ]] && _UI_THEME_DIR="$d"
+    return 0
+}
+
+# ui_theme_changed — Settings changed the theme: the window that is open
+# switches too.
+ui_theme_changed() {
+    ui_theme_prepare
+    case "${UI_THEME:-system}" in
+        system|light|dark) _ui_front_send "{\"theme\":\"${UI_THEME:-system}\"}" || true ;;
+    esac
     return 0
 }
 
@@ -681,20 +812,36 @@ ui_notify() {
 }
 
 # ====================== PROGRESS ======================
-# A kdialog progress bar, driven over the user's D-Bus session (best effort:
-# if it cannot be driven it is simply closed at the end).
-# Progress while checks (or a fix) run: the Kirigami progress window with
-# a tray icon when it can run, else a kdialog progress bar. _PROGRESS_FD is
-# the Kirigami window's input; _PROGRESS_REF the kdialog bar.
+# Progress while the checks run: the front end's small progress window with
+# a tray icon (the main window is hidden meanwhile), else a kdialog progress
+# bar, driven over the user's D-Bus session (best effort: if it cannot be
+# driven it is simply closed at the end). Without steps (a fix being
+# applied, a download): a spinner and the text in the main window.
+# _PROGRESS_FRONT: 1 the front end shows the steps, 2 its spinner;
+# _PROGRESS_FD: the input of a progress window started on its own (no
+# long-lived front end); _PROGRESS_REF: the kdialog bar.
 _PROGRESS_FD=""
+_PROGRESS_FRONT=0
 _PROGRESS_STEPS=0
 
 # ui_progress_start TEXT STEPS — STEPS 0: no steps (a busy indicator).
 ui_progress_start() {
     local text="$1" steps="$2"
-    _PROGRESS_REF=""; _PROGRESS_STEPS="$steps"
+    _PROGRESS_REF=""; _PROGRESS_STEPS="$steps"; _PROGRESS_FRONT=0
     [[ "$UI_MODE" == "kde" ]] || return 0
     if _qml_ok; then
+        ui_front_start
+        if _ui_front_up; then
+            if [[ $steps -gt 0 ]]; then
+                _PROGRESS_FRONT=1
+                _ui_front_send '{"progress":"start","heading":"Checking your PC"}' || true
+                _progress_line "0	0	${text}	"
+            else
+                _PROGRESS_FRONT=2
+                _ui_front_send "{\"busy\":$(_json_str "$text")}" || true
+            fi
+            return 0
+        fi
         # The reader keeps draining its input even if the window could not
         # be shown, so writing progress never fails.
         exec {_PROGRESS_FD}> >(_ui_app_cmd progress > /dev/null 2>&1; cat > /dev/null)
@@ -711,6 +858,10 @@ ui_progress_start() {
 }
 
 _progress_line() {
+    if [[ "$_PROGRESS_FRONT" -eq 1 ]]; then
+        _ui_front_send "{\"progress\":\"set\",\"line\":$(_json_str "${1//$'\n'/ }")}" || true
+        return 0
+    fi
     [[ -n "$_PROGRESS_FD" ]] || return 0
     printf '%s\n' "${1//$'\n'/ }" 2>/dev/null 1>&"$_PROGRESS_FD" || true
 }
@@ -748,7 +899,8 @@ ui_progress_set() {
 }
 
 # ui_busy_start TEXT / ui_busy_stop — a busy indicator while a fix runs
-# (a kdialog progress bar without steps, or a line on the terminal).
+# (the main window's spinner with TEXT, else a kdialog progress bar without
+# steps, or a line on the terminal).
 ui_busy_start() {
     if [[ "$UI_MODE" == "kde" ]]; then
         ui_progress_start "$1" 0
@@ -763,6 +915,13 @@ ui_busy_stop() { ui_progress_stop; }
 # ui_progress_stop — every step has finished: 100%, then the window closes.
 ui_progress_stop() {
     [[ -t 2 && "${QUIET:-0}" -eq 0 ]] && printf '\r%-80s\r' '' >&2
+    case "$_PROGRESS_FRONT" in
+        1)  # The progress window stays at "Done" until the next page shows.
+            [[ "${_PROGRESS_STEPS:-0}" -gt 0 ]] && _progress_line "100	0	Done	"
+            _ui_front_send '{"progress":"stop"}' || true ;;
+        2)  _ui_front_send '{"busy":""}' || true ;;
+    esac
+    _PROGRESS_FRONT=0
     if [[ -n "$_PROGRESS_FD" ]]; then
         [[ "${_PROGRESS_STEPS:-0}" -gt 0 ]] && _progress_line "100	0	Done	"
         # An explicit end: the window closes even if a child process still

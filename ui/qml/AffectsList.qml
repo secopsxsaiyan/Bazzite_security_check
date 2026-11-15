@@ -1,0 +1,58 @@
+// Security Check - what a fix affects on Bazzite: one row per feature with
+// an icon for how it is touched, whether this PC uses it, and a sentence.
+// model: [{name, how, where, status, mark, stops, sentence}]
+import QtQuick
+import QtQuick.Controls as QQC2
+import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
+
+Section {
+    id: list
+    property var model: []
+    title: qsTr("What this affects on Bazzite")
+    visible: (model || []).length > 0
+    Repeater {
+        model: list.model || []
+        delegate: RowLayout {
+            id: row
+            required property var modelData
+            readonly property bool inUse: modelData.stops === true && modelData.status === "in"
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.smallSpacing
+            Accessible.role: Accessible.ListItem
+            Accessible.name: modelData.name + ": " + modelData.how + " (" + modelData.where + "). " + modelData.sentence
+            Kirigami.Icon {
+                source: row.inUse ? "dialog-warning" : row.modelData.mark === "+" ? "dialog-ok-apply" : "dialog-information"
+                implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
+                Layout.alignment: Qt.AlignTop
+                Layout.topMargin: Kirigami.Units.smallSpacing / 2
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+                    QQC2.Label {
+                        textFormat: Text.PlainText; font.weight: Font.DemiBold
+                                                text: row.modelData.name
+                    }
+                    StatusChip {
+                        text: row.modelData.how
+                        tint: row.inUse ? Kirigami.Theme.negativeTextColor
+                            : row.modelData.mark === "+" ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+                QQC2.Label {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                    opacity: 0.75; text: row.modelData.where
+                }
+                QQC2.Label {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                    opacity: 0.85; text: row.modelData.sentence
+                }
+            }
+        }
+    }
+}

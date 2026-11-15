@@ -8,6 +8,33 @@ All notable changes to this project are listed here. The format follows
 
 ### Changed
 
+- Security Check now has one window for the whole run. The setup wizard, the
+  dashboard, a check's page, the lists of fixes, the "Apply this fix?" page
+  and Settings are pages of that window, and questions, messages and errors
+  appear over the current page. Before, every page was a new window and the
+  app went away between them. While the tool works between two pages (a fix
+  being applied, a download) the last page stays, dimmed, with a spinner and
+  what is being done. Only the scan's progress bar is still a small window of
+  its own, with its tray icon.
+- Every page was reworked to one layout: a header, the content, and a bar at
+  the bottom with one main button that stands out. Enter presses it and Esc
+  goes back or cancels; every control can be reached with the keyboard and
+  has a name for screen readers. The wizard has four steps (the report folder
+  moved into Options), the check and "Apply this fix?" pages show what a fix
+  affects in the same way, and texts are marked for translation (no
+  translations ship yet).
+- A question or message that comes before any page (for example from
+  "Install", "Uninstall" or "Update" in the menu) shows as a small window of
+  its own size, which grows into the main window when the first page comes.
+- Closing the window answers the current page as "cancelled", as before. It
+  never stops a fix that is being applied.
+- Esc goes back or cancels and Enter does the page's main action on every
+  page. Enter in a text field stays with that field, and Enter on a focused
+  button presses that button.
+- The pages were reworked to one layout: a header, the content, and a footer
+  with one main button; they can be used with the keyboard alone and name
+  their controls for screen readers.
+- Changing the theme in Settings switches the open window at once.
 - CI uploads ShellCheck and Scorecard results to code scanning on pull
   requests, so the `Protect main` ruleset can pass without an administrator
   bypass. The ruleset and its thresholds are unchanged.
