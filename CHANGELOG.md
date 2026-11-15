@@ -10,6 +10,8 @@ All notable changes to this project are listed here. The format follows
 
 - OpenSSF Scorecard workflow (weekly, on pushes to `main` and on demand) with a
   README badge. Every action is pinned to a commit.
+- Releases carry a build provenance attestation (`.intoto.jsonl`) for the
+  source archive, which `gh attestation verify` can check.
 
 ## [1.4.0] - 2026-11-12
 

@@ -1,8 +1,9 @@
 name: Release
 
 # A tag vX.Y.Z publishes Security Check X.Y.Z: the source archive, its
-# SHA256SUMS, and SHA256SUMS.sig, an SSH signature made with the release
-# key (secret RELEASE_SIGNING_KEY). The tool's updater installs a release
+# SHA256SUMS, SHA256SUMS.sig, an SSH signature made with the release
+# key (secret RELEASE_SIGNING_KEY), and a build provenance attestation
+# (.intoto.jsonl). The tool's updater installs a release
 # only when that signature verifies against release-signers and the
 # archive matches its checksum.
 on:
@@ -23,6 +24,9 @@ jobs:
     environment: release
     permissions:
       contents: write
+      # Build provenance: a Sigstore-signed attestation for the archive.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,6 +72,18 @@ jobs:
           # The same check the tool makes before installing.
           ssh-keygen -Y verify -f release-signers -I release@bazzite-sec-audit \
             -n bazzite-sec-audit-release -s dist/SHA256SUMS.sig < dist/SHA256SUMS
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Add the provenance to the release files
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          test -s "$BUNDLE"
+          cp "$BUNDLE" "dist/bazzite-sec-audit-${v}.intoto.jsonl"
       - name: Release notes
         run: |
           v="${GITHUB_REF_NAME#v}"

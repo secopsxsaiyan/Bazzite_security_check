@@ -128,6 +128,12 @@ tar -xzf bazzite-sec-audit-$v.tar.gz && bazzite-sec-audit-$v/bazzite-sec-audit.s
 
 Installed copies update themselves the same way from Settings → Updates.
 
+Releases after 1.4.0 also carry a build provenance attestation (`bazzite-sec-audit-$v.intoto.jsonl`), which shows the archive was built by this repository's release workflow:
+
+```bash
+gh attestation verify bazzite-sec-audit-$v.tar.gz --repo secopsxsaiyan/Bazzite_security_check
+```
+
 ## Privacy and report sharing
 
 Reports can contain hostnames, usernames, filesystem paths, service names, firewall rules, and other sensitive local details. Before you post a report or attach it to an issue, review it and redact anything you do not want to share publicly.
