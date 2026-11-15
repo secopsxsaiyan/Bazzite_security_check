@@ -917,11 +917,15 @@ $1"; }
         # a service only when the fix got to it.
         printf 'services:\n  ollama:\n    ports:\n      - "11434:11434"\n  web:\n    ports:\n      - 8080:80\n' > "$W/ctr/proj/compose.yml"
         printf 'services: {}\n' > "$W/ctr/proj/override.yml"
-        apply_change() { printf '%s\n--\n%s\n' "$1" "$2" > "$W/ctr/two.txt"; }
+        apply_change() { printf '%s\n--\n%s\n' "$1" "$2" > "$W/ctr/two.txt"; printf '%s\n' "${CHANGE_WARN[@]}" > "$W/ctr/two-warn.txt"; }
         CTR_JSON=compose fix_containers_localhost 0 "podman|ollama" "podman|web"
         [[ $(grep -c "compose.yml.absent" "$W/ctr/two.txt") -eq 2 ]] \
             && [[ $(grep -n 'sed -E -i' "$W/ctr/two.txt" | tail -1 | cut -d: -f1) -lt $(grep -n "compose-up -p" "$W/ctr/two.txt" | head -1 | cut -d: -f1) ]] \
             && [[ $(grep -c '^if \[ -e .*compose-up-' "$W/ctr/two.txt") -eq 2 ]] && echo "ctr-compose-shared-file"
+        # The compose files are a normal account's and root starts what
+        # they say: the confirmation says so, naming the account.
+        grep -q "^runs another account's files|" "$W/ctr/two-warn.txt" \
+            && grep -qF "files of ${U} in $W/ctr/proj" "$W/ctr/two-warn.txt" && echo "ctr-other-account-warned"
     )
 
     # Flatpak: apps graded by how likely a restriction breaks them; the
@@ -1434,10 +1438,92 @@ assert f[1]["fixable"] is False' "$(_check_input check_firewall)" && echo "check
     fix_strip_suid "4777|$W/swapped"
     fix_remove_world_write "root|666|$W/swapped" "${U}|666|$W/swapped"
     fix_home_mode "$U" "$W/swapped" 777
-    bash "$W/undo-swap.sh"
-    [[ "$(stat -c %a "$W/swap-target")" == 600 && "$(grep -c . "$W/undo-swap.sh")" -eq 4 ]] \
+    bash "$W/undo-swap.sh" 2> /dev/null
+    # (Root's own two are not even offered here: $W is under /tmp, which is
+    # not root's alone. Below, the same swap on a path that is.)
+    [[ "$(stat -c %a "$W/swap-target")" == 600 && "$(grep -c swapped "$W/undo-swap.sh")" -eq 2 ]] \
         && echo "undo-ignores-swapped-symlink"
+
+    # The same for the folders above a file. As root, a mode is changed
+    # only where root alone can change every folder on the way; a file
+    # elsewhere is left to the person, and an undo recorded earlier does
+    # nothing once a folder on its path has been swapped for a link.
+    (
+        RO=$(mktemp -d /var/lib/bda-ro.XXXXXX); chmod 755 "$RO"
+        mkdir -p "$RO/keep" "$RO/later"; install -d -o "$U" "$RO/theirs"
+        printf 'x\n' > "$RO/keep/f"; chmod 666 "$RO/keep/f"
+        apply_change() { printf '%s\n' "$1" > "$W/rc-fix.sh"; printf '%s\n' "$2" > "$W/rc-undo.sh"; return 1; }
+        fix_remove_world_write "root|666|$RO/keep/f"
+        bash "$W/rc-fix.sh"; m1=$(stat -c %a "$RO/keep/f")
+        bash "$W/rc-undo.sh"; m2=$(stat -c %a "$RO/keep/f")
+        [[ "$m1" == 664 && "$m2" == 666 ]] && echo "root-chmod-on-root-path"
+
+        printf 'x\n' > "$RO/theirs/f"; chmod 666 "$RO/theirs/f"
+        : > "$W/rc-fix.sh"
+        ui_msg() { printf '%s\n' "$1" > "$W/rc-msg.txt"; }
+        fix_remove_world_write "root|666|$RO/theirs/f"
+        [[ ! -s "$W/rc-fix.sh" && "$(stat -c %a "$RO/theirs/f")" == 666 ]] \
+            && grep -qF "$RO/theirs/f" "$W/rc-msg.txt" && grep -q "by hand" "$W/rc-msg.txt" && echo "chmod-by-hand-left-out"
+
+        printf 'x\n' > "$RO/later/f"; chmod 4755 "$RO/later/f"; chmod 600 "$RO/keep/f"
+        fix_strip_suid "4755|$RO/later/f"
+        mv "$RO/later" "$RO/later2"; ln -s "$RO/keep" "$RO/later"
+        bash "$W/rc-undo.sh" 2> "$W/rc-undo.err"
+        [[ "$(stat -c %a "$RO/keep/f")" == 600 ]] && grep -q "not changed" "$W/rc-undo.err" && echo "undo-ignores-swapped-folder"
+
+        printf 'x\n' > "$RO/keep/g"; chmod 4755 "$RO/keep/g"
+        fix_strip_suid "4755|$RO/keep/g"
+        rm -f "$RO/keep/g"; ln -s "$RO/keep/f" "$RO/keep/g"
+        bash "$W/rc-undo.sh" 2> "$W/rc-undo.err"
+        [[ "$(stat -c %a "$RO/keep/f")" == 600 ]] && grep -q "is a link now" "$W/rc-undo.err" && echo "undo-ignores-swapped-file"
+        rm -rf "$RO"
+    )
     unset -f apply_change
+
+    # A fix runs in its own session and is not stopped by a signal to the
+    # tool: the tool waits for it and writes its undo step before it stops.
+    RUN_TMP=$(mktemp -d "$W/runtmp.XXXXXX")
+    (
+        RUN_ID="t6int"
+        trap _on_signal INT TERM HUP
+        echo "$BASHPID" > "$W/int.pid"
+        _run_change "t6 slow" "sleep 2; touch $W/int-done" "rm -f $W/int-done" > /dev/null 2>&1
+        : > "$W/int-reached"
+    ) &
+    sleep 0.7; kill -TERM "$(cat "$W/int.pid")"; wait $! 2> /dev/null
+    [[ -e "$W/int-done" && ! -e "$W/int-reached" && -f "$STATE_DIR/undo/t6int/01-undo.sh" ]] && echo "interrupt-keeps-undo"
+    RUN_TMP=""
+
+    # A new password is one line: a line break in the dialog's answer would
+    # hand chpasswd a second account.
+    (
+        ui_yesno() { return 0; }
+        ui_error() { printf '%s\n' "$1" > "$W/pw-err.txt"; }
+        chpasswd() { cat > "$W/pw-called"; }
+        ui_newpassword() { printf 'x\nroot:evil'; }
+        rc=0; fix_set_password "$U" > /dev/null || rc=$?
+        [[ $rc -eq 1 && ! -e "$W/pw-called" ]] && grep -q "line break" "$W/pw-err.txt" || exit 0
+        ui_newpassword() { printf 'a good one'; }
+        fix_set_password "$U" > /dev/null
+        [[ "$(cat "$W/pw-called")" == "${U}:a good one" ]] && echo "password-line-break-refused"
+    )
+
+    # Text quoted in the Markdown report stays text in a viewer that
+    # renders it: no HTML, link, image or code span - and a plain [name] is
+    # left alone.
+    [[ "$(_md '<img src=x> `a` ![i](u) [l](u) [copr:x] [r]: u \<')" == '\<img src=x> \`a\` !\[i]\(u) [l]\(u) [copr:x] [r]\: u \\\<' \
+       && "$(_md_fence 'a ``` b')" == '````' && "$(_md_fence 'plain')" == '```' ]] && echo "md-text-not-markup"
+
+    # Run from a folder that an account other than root owns, the tool says
+    # so when it asks for administrator rights (not when installing).
+    (
+        ACTION=audit; SCRIPT_DIR="$UH"; SCRIPT_PATH="$UH/.config"
+        _copy_changeable || exit 0
+        SCRIPT_DIR=/usr/bin; SCRIPT_PATH=/usr/bin/env
+        _copy_changeable && exit 0
+        SCRIPT_DIR="$UH"; ACTION=install
+        _copy_changeable || echo "copy-changeable-noted"
+    )
 
     # A fix gets its arguments exactly as the check gave them, spaces,
     # bars and line breaks included.
@@ -1502,7 +1588,9 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          firewall-extras-named protocol-counts-as-open sysctl-source-order undo-all-ok \
          choice3-tty-default dashboard-answer-checked dashboard-input-json dashboard-input-one-line dashboard-actions-offered-only progress-90-until-done busy-no-percent update-verified update-tamper-rejected settings-answer-checked settings-saved-and-loaded wizard-answer-checked wizard-input-json front-end-not-without-kde anticheat-lockdown-with-secure-boot anticheat-pending-and-gaming-only anticheat-fix-and-undo ctr-unsafe-cases-manual ctr-run-kept-old ctr-compose-all-files ctr-compose-manual-forms ctr-rollback-touches-nothing ctr-docker-undo-gated ctr-compose-shared-file flatpak-host-forms flatpak-risk-graded flatpak-low-preset exposed-port-fix-offered service-port-not-closable close-ports-fix-and-undo app-installed app-removed-copy-kept copy-removed-when-unused runtime-only-port-and-bad-zone firewall-extras-blank-lines sysctl-mask-honoured sysctl-conf-in-place \
          avc-count-sources rootless-by-protocol-no-docker-fix pkexec-error-shown \
-         undo-ignores-swapped-symlink fix-args-kept repo-section-not-run fix-umask-022 \
+         undo-ignores-swapped-symlink root-chmod-on-root-path chmod-by-hand-left-out undo-ignores-swapped-folder undo-ignores-swapped-file \
+         interrupt-keeps-undo password-line-break-refused md-text-not-markup copy-changeable-noted ctr-other-account-warned \
+         fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
          kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked kept-no-date-no-since; do

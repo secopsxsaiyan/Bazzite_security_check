@@ -16,6 +16,96 @@ declare -ga SESSION_DONE=()     # findings reviewed in the current fix session
 CHANGE_AFTER=""
 declare -ga CHANGE_WARN=()
 
+# ====================== INTERRUPTIONS ======================
+# A fix runs in its own session (see _no_tty), so Ctrl-C, a closed terminal
+# or a kill of this tool does not stop it: it runs to its end. The tool must
+# then still be there to write the undo step. Between _signals_hold and
+# _signals_release a signal is only noted; it takes effect at the release.
+_SIGNALS_HELD=0
+_SIGNAL_PENDING=0
+
+_on_signal() {
+    if [[ $_SIGNALS_HELD -gt 0 ]]; then
+        _SIGNAL_PENDING=1
+        return 0
+    fi
+    _PROGRESS_STEPS=0
+    ui_progress_stop
+    echo
+    print_status "WARN" "Interrupted."
+    exit 130
+}
+
+_signals_hold() { _SIGNALS_HELD=$((_SIGNALS_HELD + 1)); }
+
+_signals_release() {
+    [[ $_SIGNALS_HELD -gt 0 ]] && _SIGNALS_HELD=$((_SIGNALS_HELD - 1))
+    if [[ $_SIGNALS_HELD -eq 0 && $_SIGNAL_PENDING -eq 1 ]]; then
+        _SIGNAL_PENDING=0
+        _on_signal
+    fi
+    return 0
+}
+
+# ====================== CHMOD AS ROOT ======================
+# Shell functions for fix and undo scripts that change a file's mode as
+# root. A path is only as fixed as the folders above it: an account that
+# owns one of them can swap it for a link, and the chmod (or, days later,
+# its undo) would then land on a file of that account's choosing.
+# _root_chmod MODE PATH therefore changes PATH only when every folder above
+# it is a real folder that root alone can change (a shared folder like /tmp
+# does not count: the file's owner can replace the file there).
+readonly _ROOT_CHMOD_FN='# chmod as administrator, only where no other account can swap the file.
+_root_only_above() {
+    local d="" rest s
+    case "$1" in /*) rest="${1#/}" ;; *) return 1 ;; esac
+    while :; do
+        s=$(stat -c "%u %a %F" -- "${d:-/}" 2>/dev/null) || s=""
+        case "$s" in
+            "0 "*" directory")
+                s="${s#0 }"; s="0${s%% *}"
+                [ $(( s & 022 )) -eq 0 ] || s="" ;;
+            *) s="" ;;
+        esac
+        [ -n "$s" ] || { echo "not changed: $1 (the folder ${d:-/} can be changed by another account; do it by hand)" >&2; return 1; }
+        case "$rest" in */*) d="$d/${rest%%/*}"; rest="${rest#*/}" ;; *) return 0 ;; esac
+    done
+}
+_root_chmod() {
+    _root_only_above "$2" || return 1
+    [ ! -L "$2" ] || { echo "not changed: $2 (it is a link now)" >&2; return 1; }
+    chmod "$1" -- "$2"
+}'
+# The tool itself uses _root_only_above to leave such files out of a fix.
+eval "$_ROOT_CHMOD_FN"
+
+# _chmod_lines OWNER NEWMODE OLDMODE PATH — set _CL_FIX and _CL_UNDO to the
+# lines that change PATH's mode and put it back: as the owner for a file of
+# a normal account (which can then do no more than that account could), as
+# root through _root_chmod otherwise. _CL_ROOT is 1 when the lines need
+# _ROOT_CHMOD_FN in front of the script.
+_chmod_lines() {
+    local u="$1" new="$2" old="$3" p="$4"
+    if [[ -n "$u" && "$u" != "root" && "$u" != "UNKNOWN" ]]; then
+        _CL_FIX="[ -L $(_q "$p") ] || runuser -u $(_q "$u") -- chmod $(_q "$new") -- $(_q "$p")"
+        _CL_UNDO="[ -L $(_q "$p") ] || runuser -u $(_q "$u") -- chmod $(_q "$old") -- $(_q "$p")"
+        _CL_ROOT=0
+    else
+        _CL_FIX="_root_chmod $(_q "$new") $(_q "$p")"
+        _CL_UNDO="_root_chmod $(_q "$old") $(_q "$p")"
+        _CL_ROOT=1
+    fi
+}
+
+# _chmod_by_hand OWNER PATH — PATH exists and its mode would be changed as
+# root, but an account other than root can change a folder above it: the
+# tool leaves it to the person.
+_chmod_by_hand() {
+    [[ -n "$1" && "$1" != "root" && "$1" != "UNKNOWN" ]] && return 1
+    [[ -e "$2" || -L "$2" ]] || return 1
+    ! _root_only_above "$2" 2>/dev/null
+}
+
 # ====================== BACKUPS ======================
 # _bk_path FILE — where this run keeps the backup of FILE for the fix under
 # review (one folder per finding, so two fixes touching the same file each
@@ -202,12 +292,23 @@ _run_change() {
     # umask 022: files the fix creates (drop-ins, Flatpak data) must stay
     # readable by the services and accounts that use them. _no_tty: programs
     # the fix runs as another account get no access to this terminal.
+    # An interruption waits until the fix has ended and its undo step is
+    # on record: the fix itself is not stopped by one.
+    _signals_hold
     out=$(_no_tty bash "$tmpfile" 2>&1 < /dev/null) || rc=$?
     rm -f -- "$tmpfile"
-    ui_busy_stop
     log "--- output (exit ${rc}) ---"$'\n'"${out}"
     if [[ $rc -eq 0 ]]; then
         [[ -n "$undo" ]] && _undo_record "$title" "$undo"
+    elif [[ $_SIGNAL_PENDING -eq 1 && -n "$undo" ]]; then
+        # Failed, and the tool is about to stop: nobody is asked about a
+        # rollback now, so keep the undo step for --undo.
+        _undo_record "${title} (did not complete)" "$undo"
+        log "interrupted after a failed fix: its undo step was kept"
+    fi
+    ui_busy_stop
+    _signals_release
+    if [[ $rc -eq 0 ]]; then
         if [[ -n "$reboot" ]]; then
             NEEDS_REBOOT=1
             REBOOT_REASONS+=("$reboot")
@@ -648,11 +749,16 @@ Undo this older run anyway?" "Undo anyway" "Cancel" "n"; then
             1) continue ;;
             *) break ;;
         esac
+        # As with a fix: an interruption waits until the step has ended
+        # and is marked as done (it would be offered, and run, again).
+        _signals_hold
         if _no_tty bash "$f" >> "$RUN_LOG" 2>&1 < /dev/null; then
             mv -f -- "$f" "${f%.sh}.done"
+            _signals_release
             undone=$((undone + 1))
             print_status "OK" "Undone: ${title}"
         else
+            _signals_release
             failed=$((failed + 1))
             ui_error "Undoing \"${title}\" failed - see ${RUN_LOG}"
         fi

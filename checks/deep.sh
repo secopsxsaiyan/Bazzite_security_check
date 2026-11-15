@@ -80,18 +80,47 @@ fix_strip_suid() {
     done
     mapfile -t pick < <(ui_checklist "Remove the SUID/SGID bit from which files?" "${list[@]}") || return 1
     [[ ${#pick[@]} -gt 0 && -n "${pick[0]}" ]] || return 1
-    local script="" undo=""
-    local -a names=()
+    local script="" undo="" u root=0
+    local -a names=() byhand=()
     for e in "${pick[@]}"; do
         IFS='|' read -r m p <<< "$e"
-        script+="[ -L $(_q "$p") ] || chmod u-s,g-s -- $(_q "$p")"$'\n'
-        # The undo runs as root later: a path swapped for a symlink since
-        # must not pass the old mode on to the file it points to.
-        undo+="[ -L $(_q "$p") ] || chmod $(_q "$m") -- $(_q "$p")"$'\n'
+        # As its owner for a normal account's file; as root only where no
+        # other account can swap the file or a folder above it - also in
+        # the undo, which runs as root later.
+        u=$(_owner "$p")
+        if _chmod_by_hand "$u" "$p"; then byhand+=("$p"); continue; fi
+        _chmod_lines "$u" u-s,g-s "$m" "$p"
+        script+="${_CL_FIX}"$'\n'
+        undo+="${_CL_UNDO}"$'\n'
+        [[ $_CL_ROOT -eq 1 ]] && root=1
         names+=("$p")
     done
-    CHANGE_AFTER="no SUID/SGID bit: $(_join ', ' "${names[@]}")"
-    apply_change "${script%$'\n'}" "${undo%$'\n'}"
+    _deep_chmod_apply "no SUID/SGID bit" "$script" "$undo" "$root" "${#names[@]}" "${names[@]}" "${byhand[@]}"
+}
+
+# _deep_chmod_apply AFTER SCRIPT UNDO ROOT N NAME... BYHAND... — offer the
+# chmod lines of a deep-check fix (AFTER, when given, heads the list of
+# files in the "after" row). The first N of the names are changed;
+# the rest are files the tool will not change as root (see _chmod_by_hand).
+_deep_chmod_apply() {
+    local after="$1" script="$2" undo="$3" root="$4" n="$5" note=""
+    shift 5
+    local -a names=("${@:1:n}") byhand=("${@:n+1}")
+    if [[ ${#byhand[@]} -gt 0 ]]; then
+        note="Not changed by this tool, because another account can change a folder above them (it could point the change at a different file): $(_join ', ' "${byhand[@]}"). Change these by hand if they should be changed."
+    fi
+    if [[ ${#names[@]} -eq 0 ]]; then
+        [[ -n "$note" ]] && ui_msg "$note"
+        return 1
+    fi
+    if [[ "$root" -eq 1 ]]; then
+        # The changes first, the helper they use after them: the
+        # confirmation shows the start of the script.
+        script="changes() {"$'\n'"${script}}"$'\n'"${_ROOT_CHMOD_FN}"$'\n'"changes"$'\n'
+        undo="changes() {"$'\n'"${undo}}"$'\n'"${_ROOT_CHMOD_FN}"$'\n'"changes"$'\n'
+    fi
+    [[ -n "$after" ]] && CHANGE_AFTER="${after}: $(_join ', ' "${names[@]}")"
+    apply_change "${script%$'\n'}" "${undo%$'\n'}" "$note"
 }
 
 # ====================== WORLD-WRITABLE ======================
@@ -126,20 +155,20 @@ $(printf -- '- %s\n' "${dirs[@]}")" \
 }
 
 fix_remove_world_write() {
-    local e u m p script="" undo=""
+    local e u m p script="" undo="" root=0
+    local -a names=() byhand=()
     for e in "$@"; do
         IFS='|' read -r u m p <<< "$e"
-        # The undo is guarded like the fix: as the owner, and never through
-        # a path that was swapped for a symlink in the meantime.
-        if [[ "$u" != "root" && "$u" != "UNKNOWN" && -n "$u" ]]; then
-            script+="[ -L $(_q "$p") ] || runuser -u $(_q "$u") -- chmod o-w -- $(_q "$p")"$'\n'
-            undo+="[ -L $(_q "$p") ] || runuser -u $(_q "$u") -- chmod $(_q "$m") -- $(_q "$p")"$'\n'
-        else
-            script+="[ -L $(_q "$p") ] || chmod o-w -- $(_q "$p")"$'\n'
-            undo+="[ -L $(_q "$p") ] || chmod $(_q "$m") -- $(_q "$p")"$'\n'
-        fi
+        # As in fix_strip_suid: as the owner, or as root only on a path
+        # that no other account can swap - now and when it is undone.
+        if _chmod_by_hand "$u" "$p"; then byhand+=("$p"); continue; fi
+        _chmod_lines "$u" o-w "$m" "$p"
+        script+="${_CL_FIX}"$'\n'
+        undo+="${_CL_UNDO}"$'\n'
+        [[ $_CL_ROOT -eq 1 ]] && root=1
+        names+=("$p")
     done
-    apply_change "${script%$'\n'}" "${undo%$'\n'}"
+    _deep_chmod_apply "" "$script" "$undo" "$root" "${#names[@]}" "${names[@]}" "${byhand[@]}"
 }
 
 # ====================== AUTOSTART / PERSISTENCE ======================

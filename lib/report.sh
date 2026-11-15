@@ -116,9 +116,34 @@ _write_as_desktop_user() {
     _as_desktop_user sh -c 'umask 077; cat > "$1"' sh "$1"
 }
 
+# _md TEXT — TEXT as plain text in the Markdown report. Findings quote file
+# names, settings and command output that other accounts and programs
+# choose; a viewer that renders Markdown must show them, not act on them:
+# no HTML (which could run a script or load a page), no links or images
+# (a plain [name] stays as it is), no code span that swallows the rest of
+# the line.
+_md() {
+    local s="$1" bs='\'
+    s=${s//"$bs"/"$bs$bs"}
+    s=${s//"<"/"$bs<"}
+    s=${s//'`'/"$bs"'`'}
+    s=${s//"!["/"!${bs}["}
+    s=${s//"]("/"]${bs}("}
+    s=${s//"]:"/"]${bs}:"}
+    printf '%s' "$s"
+}
+
+# _md_fence TEXT — a code fence longer than any run of backticks in TEXT, so
+# nothing in TEXT can close the block.
+_md_fence() {
+    local s="$1" fence='```'
+    while [[ "$s" == *"$fence"* ]]; do fence+='`'; done
+    printf '%s' "$fence"
+}
+
 _write_markdown() {
-    local i sev w
-    printf '# Bazzite Security Check - %s\n\n' "$(hostname 2>/dev/null)"
+    local i sev w fence
+    printf '# Bazzite Security Check - %s\n\n' "$(_md "$(hostname 2>/dev/null)")"
     printf '| | |\n|---|---|\n'
     printf '| Date | %s |\n' "$(date '+%Y-%m-%d %H:%M')"
     printf '| System | %s%s |\n' "${OS_PRETTY:-unknown}" "${IMAGE_NAME:+ (image ${IMAGE_NAME}:${IMAGE_TAG:-?}${IMAGE_VERSION:+, ${IMAGE_VERSION}})}"
@@ -137,8 +162,8 @@ _write_markdown() {
     printf '\n'
     if [[ "${HAD_PREVIOUS_RUN:-0}" -eq 1 ]]; then
         printf '## Since the last check\n\n'
-        [[ ${#DELTA_GONE[@]} -gt 0 ]] && printf -- '- Resolved: %s\n' "${DELTA_GONE[@]}"
-        [[ ${#DELTA_NEW[@]} -gt 0 ]] && printf -- '- New: %s\n' "${DELTA_NEW[@]}"
+        for w in "${DELTA_GONE[@]}"; do printf -- '- Resolved: %s\n' "$(_md "$w")"; done
+        for w in "${DELTA_NEW[@]}"; do printf -- '- New: %s\n' "$(_md "$w")"; done
         [[ ${#DELTA_GONE[@]} -eq 0 && ${#DELTA_NEW[@]} -eq 0 ]] && printf -- '- No changes.\n'
         printf '\n'
     fi
@@ -153,28 +178,29 @@ _write_markdown() {
     while IFS= read -r i; do
         [[ -n "$i" ]] || continue
         sev=$(_sev_label "${F_SEV[$i]}")
-        printf '### [%s] %s\n\n' "$sev" "${F_TITLE[$i]}"
+        printf '### [%s] %s\n\n' "$sev" "$(_md "${F_TITLE[$i]}")"
         printf '*%s* · %s\n\n' "${CHECK_TITLE[${F_CHECK[$i]}]:-${F_CHECK[$i]}}" "$(_finding_state_label "$i")"
-        [[ -n "${F_NOW[$i]}" ]] && printf -- '- **Now:** %s\n' "${F_NOW[$i]}"
-        [[ -n "${F_AFTER[$i]}" ]] && printf -- '- **%s:** %s\n' "$([[ -n ${F_FIX[$i]} ]] && echo "After the fix" || echo "Goal")" "${F_AFTER[$i]}"
+        [[ -n "${F_NOW[$i]}" ]] && printf -- '- **Now:** %s\n' "$(_md "${F_NOW[$i]}")"
+        [[ -n "${F_AFTER[$i]}" ]] && printf -- '- **%s:** %s\n' "$([[ -n ${F_FIX[$i]} ]] && echo "After the fix" || echo "Goal")" "$(_md "${F_AFTER[$i]}")"
         [[ -n "${F_NOW[$i]}${F_AFTER[$i]}" ]] && printf '\n'
-        printf '%s\n\n' "${F_DETAIL[$i]}"
+        printf '%s\n\n' "$(_md "${F_DETAIL[$i]}")"
         if [[ -n "${F_AFFECT[$i]:-}" ]] && _still_open "$i"; then
             printf '**What this affects on Bazzite:**\n\n'
             while IFS= read -r w; do
-                [[ -n "$w" ]] && printf -- '- %s\n' "$w"
+                [[ -n "$w" ]] && printf -- '- %s\n' "$(_md "$w")"
             done < <(affects_text "$i")
             printf '\n'
         fi
         if [[ -n "${F_FIX[$i]}" && "${F_STATE[$i]}" != "fixed" && -n "${F_WARN[$i]}" ]]; then
             printf '**Before applying the fix:**\n\n'
             while IFS= read -r w; do
-                [[ -n "$w" ]] && printf -- '- %s: %s\n' "$(_warn_tag "$w")" "$(_warn_text "$w")"
+                [[ -n "$w" ]] && printf -- '- %s: %s\n' "$(_md "$(_warn_tag "$w")")" "$(_md "$(_warn_text "$w")")"
             done <<< "${F_WARN[$i]}"
             printf '\n'
         fi
         if [[ -n "${F_MANUAL[$i]}" && "${F_STATE[$i]}" != "fixed" ]]; then
-            printf '**How to fix it yourself:**\n\n```\n%s\n```\n\n' "${F_MANUAL[$i]}"
+            fence=$(_md_fence "${F_MANUAL[$i]}")
+            printf '**How to fix it yourself:**\n\n%s\n%s\n%s\n\n' "$fence" "${F_MANUAL[$i]}" "$fence"
         fi
     done < <(_sorted_findings)
 
@@ -183,6 +209,7 @@ _write_markdown() {
     for id in "${CHECK_ORDER[@]}"; do
         note="${CHECK_NOTE[$id]:-}${CHECK_NA[$id]:-}${CHECK_SKIPPED[$id]:-}"
         note="${note//$'\n'/; }"
+        note=$(_md "$note")
         note="${note//|/\\|}"
         printf '| %s | %s | %s |\n' "${CHECK_TITLE[$id]}" "$(_status_label "${CHECK_STATUS[$id]:-}")" "$note"
     done

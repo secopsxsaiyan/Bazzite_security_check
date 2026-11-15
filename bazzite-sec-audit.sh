@@ -215,6 +215,16 @@ _user_dialog() {
     kdialog --title "Bazzite Security Check" --icon "$icon" "$@" 2>/dev/null
 }
 
+# _copy_changeable — this copy of the tool is in a folder that an account
+# other than root owns (a clone in a home folder, say). Asked for
+# administrator rights, it runs as root from there: a program running as
+# that account could have changed it first. The installed app (--install)
+# is a copy that only root can change.
+_copy_changeable() {
+    case "$ACTION" in install|uninstall) return 1 ;; esac
+    [[ "$(stat -c %u -- "$SCRIPT_DIR" 2>/dev/null)" != 0 || "$(stat -c %u -- "$SCRIPT_PATH" 2>/dev/null)" != 0 ]]
+}
+
 # _explain_pkexec — say why the password dialog comes and what it shows,
 # before it appears. An information dialog, so "don't show again" stores
 # only that (a yes/no dialog would also remember a Cancel and then quit
@@ -232,8 +242,10 @@ _explain_pkexec() {
     case "$ACTION" in
         install|uninstall|update|settings|install-timer|remove-timer) promise="Nothing is installed or removed until you confirm it in the next window." ;;
     esac
+    local tip=""
+    _copy_changeable && tip="<p><b>Tip:</b> this copy of Security Check is in a folder that your account can change, so a program running as you could alter what then runs as administrator. Install it as an app (<tt>--install</tt>): the app is a copy that only an administrator can change.</p>"
     _user_dialog --dontagain "bazzite-sec-audit:explain-admin" --msgbox \
-"<html><p>${what}</p><p>KDE asks for your password next (cancel there to stop). That dialog names <tt>/usr/bin/env</tt>: this is how the tool restarts itself as administrator while keeping your desktop session, so its windows still appear on your screen.</p><p>You are asked once. ${promise}</p></html>" || true
+"<html><p>${what}</p><p>KDE asks for your password next (cancel there to stop). That dialog names <tt>/usr/bin/env</tt>: this is how the tool restarts itself as administrator while keeping your desktop session, so its windows still appear on your screen.</p><p>You are asked once. ${promise}</p>${tip}</html>" || true
     return 0
 }
 
@@ -257,6 +269,10 @@ _elevate() {
     if [[ -t 0 ]] && command -v sudo >/dev/null 2>&1; then
         echo "Administrator rights are needed to read the system settings (firewall, accounts, SSH, sudo rules, ...)."
         echo "sudo asks for your password once; nothing is changed until you confirm each change."
+        if _copy_changeable; then
+            echo "Note: this copy is in a folder your account can change (${SCRIPT_DIR}), so a program running as you"
+            echo "could alter what runs as administrator. Install it as an app with --install: that copy is root's alone."
+        fi
         exec sudo /usr/bin/env "${envs[@]}" "$SCRIPT_PATH" "$@"
     elif command -v pkexec >/dev/null 2>&1; then
         _explain_pkexec
@@ -339,7 +355,9 @@ main() {
         _elevate "$@"
     fi
 
-    trap '_PROGRESS_STEPS=0; ui_progress_stop; echo; print_status "WARN" "Interrupted."; exit 130' INT TERM
+    # HUP too (the terminal was closed): the tool then stops in order, and
+    # not in the middle of recording a fix (see _signals_hold).
+    trap _on_signal INT TERM HUP
     trap _cleanup EXIT
     _init_state
     # Test hooks change what is read and where state is kept; never silently.

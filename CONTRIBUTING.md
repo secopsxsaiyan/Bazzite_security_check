@@ -22,6 +22,10 @@ This project is focused on Bazzite desktop and related Fedora Atomic images. Con
    - `make test` only in a disposable VM/container, because the smoke test creates a throwaway user and needs root.
 4. If you add or change reporting output, check that it remains readable and safe to share.
 
+## Tests
+
+New functionality comes with tests. A change that adds a check, a fix, an option or a window, or that changes what one of them does, adds or updates tests in `tests/smoke.sh` in the same pull request. A bug fix adds a test that fails without the fix. Pull requests without them are not merged, unless the change cannot be tested there (documentation, CI configuration), and then the pull request says so.
+
 ## Issue reports
 
 Use the issue templates when filing bug reports. Please include:
