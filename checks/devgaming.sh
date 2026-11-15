@@ -517,7 +517,7 @@ Each one is created again from the same image and settings, with
 
     local pre="" dflt="" edits="" ups="" runs="" u_dflt="" u_files="" u_ups="" u_runs=""
     local up cmp file home old mark ownarg dcfg
-    local -a names=() fl=() edit=() runlist=()
+    local -a names=() fl=() edit=() runlist=() otherfiles=()
     local -A backed=()
     for e in "${pick[@]}"; do
         if [[ "$e" == docker-default ]]; then
@@ -564,6 +564,13 @@ Each one is created again from the same image and settings, with
             ups+="( ${up} )"$'\n'"$(_ctr_verify_cmd "$engine" "$f8")"$'\n'
             u_ups+="if [ -e $(_q "$mark") ]; then ( ${up} ); fi"$'\n'
             names+=("$f8")
+            # The compose files are another account's (and that account is
+            # not already as good as root through the docker group): root
+            # starts whatever they say now. Say so before it is applied.
+            if [[ "$f1" != root ]] \
+               && ! { [[ "$engine" == docker ]] && id -nG "$f1" 2>/dev/null | tr ' ' '\n' | grep -qx docker; }; then
+                otherfiles+=("${f8} (files of ${f1} in ${f2})")
+            fi
         else
             # f1 name, f2 original command, f3 new command, f4 restart policy,
             # f5 container ID
@@ -588,6 +595,7 @@ Each one is created again from the same image and settings, with
     undo+='[ "$undo_failed" -eq 0 ]'$'\n'
     CHANGE_AFTER="published on 127.0.0.1 only: $(_join ', ' "${names[@]}")"
     [[ ${#runlist[@]} -gt 0 ]] && CHANGE_WARN+=("new container|$(_join ', ' "${runlist[@]}") start as new containers: anything the old ones wrote outside a volume or bind mount is not in the new ones. The old containers are kept, stopped, as NAME-before-fix (undo puts them back); remove them with 'podman rm' once all is well.")
+    [[ ${#otherfiles[@]} -gt 0 ]] && CHANGE_WARN+=("runs another account's files|Recreating these containers starts them, as administrator, from compose files that an account other than root can change: $(_join '; ' "${otherfiles[@]}"). Whatever those files say now is what starts (image, command, mounts, privileged mode), also when this is undone. Read them first unless that account is yours and you trust what runs in it.")
     apply_change "${script%$'\n'}" "${undo%$'\n'}" \
         "Named volumes and bind mounts are kept. To let other devices in again later, publish the port on 0.0.0.0 (or undo this)."
 }

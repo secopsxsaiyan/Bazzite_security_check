@@ -57,6 +57,11 @@ git clone https://github.com/secopsxsaiyan/Bazzite_security_check.git ~/bazzite-
 ~/bazzite-sec-audit/bazzite-sec-audit.sh --install
 ```
 
+Recommended once you have tried it. Run from the clone, the tool runs as
+administrator from a folder your account can change, so a program running as
+you could alter it first; the tool says so when it asks for administrator
+rights. The installed app does not have that weakness.
+
 This adds **Security Check** to the application menu (System) and the
 `bazzite-sec-audit` command for every user on the PC. When you start it, KDE
 asks for your administrator password, then the check-up runs as usual. The app

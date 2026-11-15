@@ -13,6 +13,27 @@ All notable changes to this project are listed here. The format follows
 - Releases carry a build provenance attestation (`.intoto.jsonl`) for the
   source archive, which `gh attestation verify` can check.
 
+### Security
+
+- Deep check fixes for SUID/SGID and world-writable files change a mode as
+  administrator only where root alone can change every folder above the
+  file. Files of a normal account are changed as that account; a root-owned
+  file in a folder another account can change is left to you and named.
+  Before, an account that owned a folder above a file could swap it for a
+  link, and the fix or its undo would set the mode on a file of its choosing.
+- A fix that is interrupted (Ctrl-C, a closed terminal, the tool killed)
+  still gets its undo step: the fix runs to its end either way, and the tool
+  now waits for it. The same holds for an undo step being marked as done.
+- Setting a password refuses an answer with a line break, which would have
+  handed `chpasswd` a second account.
+- The Markdown report shows file names, settings and command output as plain
+  text: no HTML, links, images or code spans from them.
+- Recreating a container from compose files that a normal account can
+  change warns before you apply: those files decide what starts as
+  administrator.
+- Started from a folder that an account other than root owns, the tool says
+  so when it asks for administrator rights and points to `--install`.
+
 ## [1.4.0] - 2026-11-12
 
 ### Changed

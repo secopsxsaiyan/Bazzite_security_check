@@ -73,6 +73,14 @@ fix_set_password() {
 You will be asked for it twice. It is passed to chpasswd directly and never written to a file or log." \
         "Set a password" "Skip" "y" || return 1
     pw=$(ui_newpassword "New password for ${u}") || return 1
+    # chpasswd reads one "account:password" per line, and the answer comes
+    # from a dialog that runs as the desktop user: a line break in it would
+    # set a second account's password (root's, say).
+    if [[ "$pw" == *$'\n'* || "$pw" == *$'\r'* ]]; then
+        unset pw
+        ui_error "The password was not set: it contains a line break."
+        return 1
+    fi
     if printf '%s:%s\n' "$u" "$pw" | chpasswd 2>>"$RUN_LOG"; then
         unset pw
         print_status "OK" "Password set for ${u}"
