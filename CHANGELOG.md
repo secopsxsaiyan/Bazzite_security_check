@@ -6,6 +6,12 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- CI uploads ShellCheck and Scorecard results to code scanning on pull
+  requests, so the `Protect main` ruleset can pass without an administrator
+  bypass. The ruleset and its thresholds are unchanged.
+
 ## [1.5.0] - 2026-11-14
 
 ### Added
