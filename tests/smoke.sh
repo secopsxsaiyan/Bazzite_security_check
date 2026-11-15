@@ -1703,6 +1703,16 @@ rc=$?
 [[ $rc -ne 0 ]] && grep -q "nothing was checked" "$W/run7c.out" \
     && ok "non-interactive run on another system says why it stops" || bad "non-Atomic system: exit $rc, no reason given"
 
+# One published version: --version, SCRIPT_VERSION and the changelog section.
+ver=$(sed -n 's/^readonly SCRIPT_VERSION="\(.*\)"/\1/p' "$TOOL")
+got=$("$TOOL" --version 2>/dev/null || true)
+if [[ "$got" == "bazzite-sec-audit $ver" && "$ver" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] \
+    && grep -q "^## \[${ver}\]" "$HERE/../CHANGELOG.md"; then
+    ok "version string is ${ver}"
+else
+    bad "version string: declared '${ver:-}', --version '${got:-}', changelog section missing"
+fi
+
 echo
 echo "passed: $PASS  failed: $FAIL   (work dir: $W)"
 [[ $FAIL -eq 0 ]]
