@@ -82,6 +82,7 @@ jobs:
         env:
           INPUT_REPO_TOKEN: ${{ secrets.SCORECARD_TOKEN || github.token }}
           INPUT_INTERNAL_DEFAULT_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # ghcr.io/ossf/scorecard-action:v2.5.0
           SCORECARD_IMAGE: ghcr.io/ossf/scorecard-action@sha256:1e1481c65fc2407d3fd6ab18a23c741eb4d1c0d9359ebafc4b3ab13aa61d8627
         run: |
@@ -89,7 +90,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:/github/workspace" -w /github/workspace \
             -v "$GITHUB_EVENT_PATH:/github/event.json:ro" \
             -e GITHUB_EVENT_NAME=push \
-            -e GITHUB_REF="refs/heads/${{ github.event.repository.default_branch }}" \
+            -e GITHUB_REF="refs/heads/$DEFAULT_BRANCH" \
             -e GITHUB_EVENT_PATH=/github/event.json \
             -e GITHUB_WORKSPACE=/github/workspace \
             -e GITHUB_REPOSITORY -e GITHUB_API_URL \
