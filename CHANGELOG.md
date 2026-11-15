@@ -6,6 +6,11 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- OpenSSF Scorecard workflow (weekly, on pushes to `main` and on demand) with a
+  README badge. Every action is pinned to a commit.
+
 ## [1.4.0] - 2026-11-12
 
 ### Changed
