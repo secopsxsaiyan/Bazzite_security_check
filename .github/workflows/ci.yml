@@ -15,6 +15,10 @@ jobs:
     name: ShellCheck
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # Needed to upload the ShellCheck results to code scanning.
+      security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -25,6 +29,24 @@ jobs:
         run: |
           shellcheck --version
           make lint
+      # The "Protect main" ruleset waits for a ShellCheck code-scanning result
+      # on every pull request, so upload one even when lint found nothing.
+      # Tags have no code-scanning ref, and a fork's token cannot upload.
+      - name: ShellCheck results as SARIF
+        if: >-
+          !cancelled() && github.ref_type != 'tag' &&
+          (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository)
+        run: make shellcheck.sarif
+      - name: Upload to code scanning
+        if: >-
+          !cancelled() && github.ref_type != 'tag' &&
+          (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: shellcheck.sarif
+          category: shellcheck
 
   smoke:
     name: Smoke test

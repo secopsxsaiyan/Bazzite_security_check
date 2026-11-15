@@ -13,6 +13,10 @@ on:
     - cron: '21 11 * * 1'
   push:
     branches: [ "main" ]
+  # The "Protect main" ruleset waits for a Scorecard code-scanning result on
+  # every pull request.
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 # Declare default permissions as read only.
@@ -22,8 +26,14 @@ jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
-    # `publish_results: true` only works when run from the default branch. conditional can be removed if disabled.
-    if: github.event.repository.default_branch == github.ref_name || github.event_name == 'workflow_dispatch'
+    # `publish_results: true` only works when run from the default branch, so
+    # pull requests upload to code scanning without publishing. A fork's token
+    # cannot upload, so pull requests from forks are skipped.
+    if: >-
+      github.event.repository.default_branch == github.ref_name ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository)
     permissions:
       # Needed to upload the results to code-scanning dashboard.
       security-events: write
@@ -57,10 +67,44 @@ jobs:
           # For private repositories:
           #   - `publish_results` will always be set to `false`, regardless
           #     of the value entered here.
-          publish_results: true
+          publish_results: ${{ github.event_name != 'pull_request' }}
 
           # (Optional) Uncomment file_mode if you have a .gitattributes with files marked export-ignore
           # file_mode: git
+
+      # On a pull request the action above only scores the checked-out files
+      # (supply-chain/local). The "Protect main" ruleset also expects the two
+      # repository-level result sets that main has (supply-chain/online-scm
+      # and supply-chain/branch-protection), so run the same image the action
+      # uses in repository mode and add those two to the results.
+      - name: "Run repository-level checks (pull requests)"
+        if: github.event_name == 'pull_request'
+        env:
+          INPUT_REPO_TOKEN: ${{ secrets.SCORECARD_TOKEN || github.token }}
+          INPUT_INTERNAL_DEFAULT_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # ghcr.io/ossf/scorecard-action:v2.5.0
+          SCORECARD_IMAGE: ghcr.io/ossf/scorecard-action@sha256:1e1481c65fc2407d3fd6ab18a23c741eb4d1c0d9359ebafc4b3ab13aa61d8627
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/github/workspace" -w /github/workspace \
+            -v "$GITHUB_EVENT_PATH:/github/event.json:ro" \
+            -e GITHUB_EVENT_NAME=push \
+            -e GITHUB_REF="refs/heads/$DEFAULT_BRANCH" \
+            -e GITHUB_EVENT_PATH=/github/event.json \
+            -e GITHUB_WORKSPACE=/github/workspace \
+            -e GITHUB_REPOSITORY -e GITHUB_API_URL \
+            -e INPUT_REPO_TOKEN -e INPUT_INTERNAL_DEFAULT_TOKEN \
+            -e INPUT_RESULTS_FILE=repo-results.sarif \
+            -e INPUT_RESULTS_FORMAT=sarif \
+            -e INPUT_PUBLISH_RESULTS=false \
+            -e INPUT_FILE_MODE=archive \
+            "$SCORECARD_IMAGE" > /dev/null
+          jq -s '.[0].runs += [.[1].runs[] | select(.automationDetails.id | startswith("supply-chain/local/") | not)] | .[0]' \
+            results.sarif repo-results.sarif > merged.sarif
+          jq -r '.runs[].automationDetails.id' merged.sarif
+          test "$(jq '.runs | length' merged.sarif)" -eq 3
+          sudo mv merged.sarif results.sarif
 
       # Upload the results as artifacts (optional). Commenting out will disable uploads of run results in SARIF
       # format to the repository Actions tab.
