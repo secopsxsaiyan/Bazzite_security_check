@@ -8,6 +8,7 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 Item {
     id: page
@@ -34,68 +35,23 @@ Item {
         finished({ "action": "fix", "ids": fixable.filter(function (f) { return picked[f.id] === true }).map(function (f) { return f.id }) })
     }
     function back() { finished({ "action": "back" }) }
-    function primary() { if (fixable.length > 0 && count > 0) fix(); else back() }
+    // Enter is the main button: "Fix selected", which does nothing while
+    // nothing is ticked, or "Back" when nothing here can be fixed.
+    function primary() { if (fixable.length === 0) back(); else if (count > 0) fix() }
     // Esc goes back to the list of checks, it does not end the run.
     function dismiss() { back() }
-
-    function sevColor(s) {
-        return s === "high" ? Kirigami.Theme.negativeTextColor : s === "medium" ? Kirigami.Theme.neutralTextColor
-             : s === "low" ? Kirigami.Theme.linkColor : Kirigami.Theme.disabledTextColor
-    }
-    function sevName(s) {
-        return s === "high" ? qsTr("High severity") : s === "medium" ? qsTr("Medium severity")
-             : s === "low" ? qsTr("Low severity") : qsTr("Information")
-    }
-    function stateIcon(s) {
-        return s === "bad" ? "dialog-error" : s === "warn" ? "dialog-information"
-             : s === "reboot" ? "system-reboot" : (s === "ok" || s === "fixed") ? "dialog-ok-apply"
-             : s === "note" ? "dialog-information" : s === "error" ? "dialog-error" : "dialog-cancel"
-    }
-    // The state in words, for screen readers: the icon says it only to the eye.
-    function stateName(s) {
-        return s === "bad" ? qsTr("Problems found") : s === "warn" ? qsTr("Minor findings")
-             : s === "reboot" ? qsTr("Needs a reboot") : s === "ok" ? qsTr("No problems")
-             : s === "fixed" ? qsTr("Fixed") : s === "note" ? qsTr("Has notes")
-             : s === "error" ? qsTr("Could not be checked") : s === "skipped" ? qsTr("Skipped")
-             : qsTr("Does not apply")
-    }
-
-    // Descriptions are wrapped at about 78 columns in the checks: join
-    // those lines again (list lines and blank lines stay).
-    function reflow(s) {
-        var out = [], lines = String(s === undefined ? "" : s).split("\n")
-        for (var n = 0; n < lines.length; n++) {
-            var l = lines[n], prev = out.length ? out[out.length - 1] : ""
-            if (out.length && l.trim() !== "" && prev.trim() !== "" && !/^\s*[-•*]\s/.test(l) && !/^\s*[-•*]\s/.test(prev))
-                out[out.length - 1] = prev + " " + l.trim()
-            else
-                out.push(l)
-        }
-        return out.join("\n")
+    // The main button, or while it cannot be used the first tick box (Space
+    // ticks it): not Back, where Enter would leave the page.
+    function initialFocus() {
+        if (mainButton.enabled) return mainButton
+        if (selectAll.visible) return selectAll
+        for (var n = 0; n < cards.count; n++)
+            if (cards.itemAt(n).canFix) return cards.itemAt(n).tickBox
+        return null
     }
 
     // Scroll so that an item that got keyboard focus is in view.
-    function reveal(item) {
-        var top = item.mapToItem(flick.contentItem, 0, 0).y, gap = Kirigami.Units.gridUnit
-        if (top - gap < flick.contentY)
-            flick.contentY = Math.max(0, top - gap)
-        else if (top + item.height + gap > flick.contentY + flick.height)
-            flick.contentY = Math.max(0, Math.min(top + item.height + gap, flick.contentHeight) - flick.height)
-    }
-
-    // A button that is not the page's main one. Enter presses the button
-    // that has the keyboard focus instead of the page's main button.
-    component PlainButton: QQC2.Button {
-        Keys.onShortcutOverride: function (event) { event.accepted = event.key === Qt.Key_Return || event.key === Qt.Key_Enter }
-        Keys.onReturnPressed: clicked()
-        Keys.onEnterPressed: clicked()
-    }
-    // The same inside the scrolling part: comes into view with the focus.
-    component InlineButton: PlainButton {
-        flat: true
-        Layout.leftMargin: -leftPadding      // its icon lines up with the text above
-        onActiveFocusChanged: if (activeFocus && visualFocus) page.reveal(this)
-    }
+    function reveal(item) { Util.reveal(flick, item, Kirigami.Units.gridUnit) }
 
     ColumnLayout {
         anchors.fill: parent
@@ -105,10 +61,10 @@ Item {
             title: page.d.title || ""
             subtitle: [page.d.area || "", page.d.summary || ""].filter(function (s) { return s !== "" }).join(" · ")
             leading: Kirigami.Icon {
-                source: page.stateIcon(page.d.state || "")
+                source: Util.stateIcon(page.d.state || "")
                 width: Kirigami.Units.iconSizes.large; height: width
                 Accessible.role: Accessible.Graphic
-                Accessible.name: page.stateName(page.d.state || "")
+                Accessible.name: Util.stateName(page.d.state || "")
             }
         }
 
@@ -160,6 +116,7 @@ Item {
                             text: qsTr("Nothing to report.")
                         }
                         QQC2.CheckBox {
+                            id: selectAll
                             visible: page.fixable.length > 1
                             text: qsTr("Select all %1 that can be fixed here").arg(page.fixable.length)
                             // Some but not all ticked shows as a partial tick.
@@ -172,16 +129,16 @@ Item {
                     }
 
                     Repeater {
+                        id: cards
                         model: page.findings
                         delegate: Rectangle {
                             id: card
                             required property var modelData
+                            property alias tickBox: tick
                             readonly property var f: modelData
                             readonly property bool canFix: f.fixable === true
                             readonly property bool on: canFix && page.picked[f.id] === true
-                            readonly property color tint: page.sevColor(f.sev)
-                            readonly property bool longDetail: (f.detail || "").split("\n").length > 6 || (f.detail || "").length > 600
-                            property bool more: false
+                            readonly property color tint: Util.sevColor(Kirigami.Theme, f.sev)
                             property bool manualOpen: false
                             Layout.fillWidth: true
                             implicitHeight: cardBody.implicitHeight + Kirigami.Units.largeSpacing * 2
@@ -196,7 +153,7 @@ Item {
                             border.color: on ? Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.highlightColor, 0.55)
                                              : Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.2)
                             Accessible.role: Accessible.Grouping
-                            Accessible.name: qsTr("%1: %2").arg(page.sevName(f.sev)).arg(f.title || "")
+                            Accessible.name: qsTr("%1: %2").arg(Util.sevName(f.sev)).arg(f.title || "")
 
                             Rectangle {
                                 id: strip
@@ -250,7 +207,6 @@ Item {
                                     StatusChip {
                                         Layout.alignment: Qt.AlignTop
                                         sev: card.f.sev || "info"
-                                        text: page.sevName(card.f.sev)
                                     }
                                 }
 
@@ -261,23 +217,7 @@ Item {
                                 }
 
                                 // ---- description: the first lines, the rest on request
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    visible: (card.f.detail || "") !== ""
-                                    spacing: 0
-                                    QQC2.Label {
-                                        Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                        text: page.reflow(card.f.detail)
-                                        maximumLineCount: card.more ? 100000 : 6
-                                        elide: Text.ElideRight
-                                    }
-                                    InlineButton {
-                                        visible: card.longDetail
-                                        text: card.more ? qsTr("Show less") : qsTr("Show all details")
-                                        icon.name: card.more ? "go-up" : "go-down"
-                                        onClicked: card.more = !card.more
-                                    }
-                                }
+                                ExpandableText { text: card.f.detail || ""; flickable: flick }
 
                                 AffectsList { model: card.f.affects || [] }
 
@@ -288,7 +228,10 @@ Item {
                                     Layout.fillWidth: true
                                     visible: !!card.f.manual
                                     spacing: Kirigami.Units.smallSpacing
-                                    InlineButton {
+                                    QQC2.Button {
+                                        flat: true
+                                        Layout.leftMargin: -leftPadding      // its icon lines up with the text above
+                                        onActiveFocusChanged: if (activeFocus && visualFocus) page.reveal(this)
                                         text: qsTr("How to fix it yourself")
                                         icon.name: card.manualOpen ? "go-down" : "go-next"
                                         // The steps open below the button: bring them into view.
@@ -300,7 +243,8 @@ Item {
                                         // Set by the button; the scroll waits for the layout to give the block its height.
                                         property bool justOpened: false
                                         onHeightChanged: if (justOpened && height > 0) { justOpened = false; page.reveal(steps) }
-                                        visible: card.manualOpen; text: card.f.manual || "" }
+                                        visible: card.manualOpen; text: card.f.manual || ""; flickable: flick
+                                    }
                                 }
                             }
                         }
@@ -314,8 +258,9 @@ Item {
                 ? qsTr("Each selected fix is shown again with its exact commands, and runs only when you press Apply.")
                 : ""
             // Back is the main button only when nothing can be fixed here.
-            PlainButton { visible: page.fixable.length > 0; text: qsTr("Back"); icon.name: "go-previous"; onClicked: page.back() }
+            QQC2.Button { visible: page.fixable.length > 0; text: qsTr("Back"); icon.name: "go-previous"; onClicked: page.back() }
             PrimaryButton {
+                id: mainButton
                 text: page.fixable.length > 0 ? qsTr("Fix selected (%1)").arg(page.count) : qsTr("Back")
                 icon.name: page.fixable.length > 0 ? "tools-wizard" : "go-previous"
                 enabled: page.fixable.length === 0 || page.count > 0

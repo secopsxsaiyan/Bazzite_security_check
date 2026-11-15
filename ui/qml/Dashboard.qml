@@ -6,6 +6,7 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 Item {
     id: page
@@ -26,45 +27,15 @@ Item {
     readonly property bool canFix: (d.nfix || 0) > 0 && d.report_only !== true
 
     function primary() { act(canFix ? "fix" : "finish") }
-    function dismiss() { cancelled() }
+    // Esc does nothing here: this is where Esc on a check comes back to, and
+    // a second Esc must not end the run. Finish (or closing the window) does.
+    function dismiss() {}
+    function initialFocus() { return mainButton }
 
-    // Values from the PC (host names, finding titles, paths) are text, never
-    // markup: escaped where a label mixes them with bold labels.
-    function esc(s) { return String(s === undefined ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
     function act(a, check) { finished(check ? { "action": a, "check": check } : { "action": a }) }
-    function stateColor(s) {
-        return s === "bad" ? Kirigami.Theme.negativeTextColor
-             : s === "warn" ? Kirigami.Theme.linkColor
-             : s === "reboot" ? Kirigami.Theme.linkColor
-             : (s === "ok" || s === "fixed") ? Kirigami.Theme.positiveTextColor
-             : Kirigami.Theme.disabledTextColor
-    }
-    function stateIcon(s) {
-        // Low findings (warn) read as blue information everywhere: icon,
-        // chip, summary and the header's "low" count.
-        return s === "bad" ? "dialog-error" : s === "warn" ? "dialog-information"
-             : s === "reboot" ? "system-reboot" : (s === "ok" || s === "fixed") ? "dialog-ok-apply"
-             : s === "note" ? "dialog-information" : s === "error" ? "dialog-error"
-             : "dialog-cancel"
-    }
-    // The state in words, for screen readers: the icon and the colour say
-    // it only to the eye.
-    function stateName(s) {
-        return s === "bad" ? qsTr("problems found") : s === "warn" ? qsTr("minor findings")
-             : s === "reboot" ? qsTr("needs a reboot") : s === "ok" ? qsTr("no problems")
-             : s === "fixed" ? qsTr("fixed") : s === "note" ? qsTr("has notes")
-             : s === "error" ? qsTr("could not be checked") : s === "skipped" ? qsTr("skipped")
-             : qsTr("does not apply")
-    }
 
     // Scroll so that an item that got keyboard focus is in view.
-    function reveal(item) {
-        var top = item.mapToItem(flick.contentItem, 0, 0).y, gap = Kirigami.Units.largeSpacing
-        if (top - gap < flick.contentY)
-            scrollTo(top - gap)
-        else if (top + item.height + gap > flick.contentY + flick.height)
-            scrollTo(top + item.height + gap - flick.height)
-    }
+    function reveal(item) { Util.reveal(flick, item, Kirigami.Units.largeSpacing) }
     function scrollTo(y) { flick.contentY = Math.max(0, Math.min(y, flick.contentHeight - flick.height)) }
     // An area chip was used: show that area's checks, and when it was used
     // with the keyboard carry on from its first check.
@@ -77,13 +48,9 @@ Item {
             block.firstRow.forceActiveFocus(Qt.TabFocusReason)
     }
 
-    // A button that is not the page's main one. Enter presses the button
-    // that has the keyboard focus instead of the page's main button.
-    component PlainButton: QQC2.Button {
-        Keys.onShortcutOverride: function (event) { event.accepted = event.key === Qt.Key_Return || event.key === Qt.Key_Enter }
-        Keys.onReturnPressed: clicked()
-        Keys.onEnterPressed: clicked()
-        onActiveFocusChanged: if (activeFocus && visualFocus && parent === actions) page.reveal(this)
+    // One of the side doors: comes into view with the keyboard focus.
+    component ActionButton: QQC2.Button {
+        onActiveFocusChanged: if (activeFocus && visualFocus) page.reveal(this)
     }
 
     ColumnLayout {
@@ -106,7 +73,7 @@ Item {
                     anchors.fill: parent
                     readonly property real frac: Math.max(0, Math.min(1, page.score / 100))
                     readonly property real line: Kirigami.Units.smallSpacing * 2
-                    readonly property color track: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.18)
+                    readonly property color track: Qt.alpha(Kirigami.Theme.textColor, 0.18)
                     onWidthChanged: requestPaint()
                     onTrackChanged: requestPaint()
                     onFracChanged: requestPaint()
@@ -211,7 +178,7 @@ Item {
                         Layout.fillWidth: true
                         visible: !!page.d.reboot_reasons
                         type: Kirigami.MessageType.Warning
-                        text: qsTr("<b>Reboot to finish:</b> %1").arg(page.esc(page.d.reboot_reasons || ""))
+                        text: qsTr("<b>Reboot to finish:</b> %1").arg(Util.esc(page.d.reboot_reasons || ""))
                     }
                     Kirigami.InlineMessage {
                         Layout.fillWidth: true
@@ -230,7 +197,7 @@ Item {
                         text: (page.d.gone || 0) + (page.d["new"] || 0) === 0 ? qsTr("<b>Since the last check:</b> no changes.")
                             : page.d.new_titles
                                 ? qsTr("<b>Since the last check:</b> %1 resolved, %2 new - %3")
-                                    .arg(page.d.gone || 0).arg(page.d["new"] || 0).arg(page.esc(page.d.new_titles))
+                                    .arg(page.d.gone || 0).arg(page.d["new"] || 0).arg(Util.esc(page.d.new_titles))
                                 : qsTr("<b>Since the last check:</b> %1 resolved, %2 new").arg(page.d.gone || 0).arg(page.d["new"] || 0)
                     }
                     Kirigami.InlineMessage {
@@ -243,7 +210,7 @@ Item {
                         Layout.fillWidth: true
                         visible: !!page.d.report_note
                         type: Kirigami.MessageType.Warning
-                        text: qsTr("<b>Report:</b> %1").arg(page.esc(page.d.report_note || ""))
+                        text: qsTr("<b>Report:</b> %1").arg(Util.esc(page.d.report_note || ""))
                     }
 
                     // ---- other things to do -------------------------------
@@ -253,9 +220,9 @@ Item {
                         id: actions
                         Layout.fillWidth: true
                         spacing: Kirigami.Units.smallSpacing
-                        PlainButton { text: qsTr("Open the full report"); icon.name: "document-preview"; onClicked: page.act("report") }
-                        PlainButton { visible: page.d.undo === true; text: qsTr("Undo changes…"); icon.name: "edit-undo"; onClicked: page.act("undo") }
-                        PlainButton {
+                        ActionButton { text: qsTr("Open the full report"); icon.name: "document-preview"; onClicked: page.act("report") }
+                        ActionButton { visible: page.d.undo === true; text: qsTr("Undo changes…"); icon.name: "edit-undo"; onClicked: page.act("undo") }
+                        ActionButton {
                             visible: page.d.keep === true
                             text: (page.d.kept || 0) > 0 ? qsTr("Kept on purpose… (%1)").arg(page.d.kept) : qsTr("Kept on purpose…")
                             icon.name: "starred-symbolic"
@@ -265,7 +232,7 @@ Item {
                             QQC2.ToolTip.text: qsTr("Keep problems you accept because you use the feature they are there for (Steam Remote Play, Sunshine, SSH, ...).")
                             Accessible.description: QQC2.ToolTip.text
                         }
-                        PlainButton { text: qsTr("Settings"); icon.name: "configure"; onClicked: page.act("settings") }
+                        ActionButton { text: qsTr("Settings"); icon.name: "configure"; onClicked: page.act("settings") }
                     }
 
                     // ---- checks, by area ----------------------------------
@@ -292,7 +259,7 @@ Item {
                                     id: chip
                                     required property var modelData
                                     required property int index
-                                    readonly property color tint: page.stateColor(modelData.state)
+                                    readonly property color tint: Util.stateColor(Kirigami.Theme, modelData.state)
                                     // A long area name is cut instead of running off the page.
                                     width: Math.min(implicitWidth, chips.width)
                                     focusPolicy: Qt.StrongFocus
@@ -300,37 +267,28 @@ Item {
                                     leftPadding: Kirigami.Units.largeSpacing; rightPadding: Kirigami.Units.largeSpacing
                                     topPadding: Kirigami.Units.smallSpacing; bottomPadding: Kirigami.Units.smallSpacing
                                     Accessible.role: Accessible.Button
-                                    Accessible.name: qsTr("%1: %2").arg(modelData.name).arg(page.stateName(modelData.state))
+                                    Accessible.name: qsTr("%1: %2").arg(modelData.name).arg(Util.stateName(modelData.state))
                                     Accessible.description: qsTr("Jump to this area in the list of checks")
+                                    // Used with the keyboard when the focus came by Tab.
                                     onClicked: page.jumpTo(index, visualFocus)
-                                    Keys.onShortcutOverride: function (event) { event.accepted = event.key === Qt.Key_Return || event.key === Qt.Key_Enter }
-                                    Keys.onReturnPressed: page.jumpTo(index, true)
-                                    Keys.onEnterPressed: page.jumpTo(index, true)
                                     onActiveFocusChanged: if (activeFocus && visualFocus) page.reveal(chip)
                                     QQC2.ToolTip.visible: hovered
                                     QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
-                                    QQC2.ToolTip.text: qsTr("%1: %2").arg(modelData.name).arg(page.stateName(modelData.state))
+                                    QQC2.ToolTip.text: qsTr("%1: %2").arg(modelData.name).arg(Util.stateName(modelData.state))
                                     contentItem: RowLayout {
                                         spacing: Kirigami.Units.smallSpacing
                                         Kirigami.Icon {
-                                            source: page.stateIcon(chip.modelData.state)
+                                            source: Util.stateIcon(chip.modelData.state)
                                             implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
+                                            Accessible.ignored: true    // the chip's name says it
                                         }
                                         QQC2.Label { Layout.fillWidth: true; text: chip.modelData.name; textFormat: Text.PlainText; elide: Text.ElideRight }
                                     }
                                     background: Rectangle {
                                         radius: height / 2
-                                        color: Qt.rgba(chip.tint.r, chip.tint.g, chip.tint.b, chip.down ? 0.4 : chip.hovered ? 0.28 : 0.14)
-                                        border.color: Qt.rgba(chip.tint.r, chip.tint.g, chip.tint.b, 0.5)
-                                        // Keyboard focus ring.
-                                        Rectangle {
-                                            anchors.fill: parent; anchors.margins: -border.width
-                                            radius: height / 2
-                                            color: "transparent"
-                                            border.width: Math.max(2, Kirigami.Units.smallSpacing / 2)
-                                            border.color: Kirigami.Theme.focusColor
-                                            visible: chip.visualFocus
-                                        }
+                                        color: Qt.alpha(chip.tint, chip.down ? 0.4 : chip.hovered ? 0.28 : 0.14)
+                                        border.color: Qt.alpha(chip.tint, 0.5)
+                                        FocusRing { target: chip; cornerRadius: parent.radius }
                                     }
                                 }
                             }
@@ -350,7 +308,7 @@ Item {
                             Kirigami.ListSectionHeader {
                                 Layout.fillWidth: true; text: areaBlock.area
                                 Accessible.role: Accessible.Heading
-                                Accessible.name: qsTr("%1: %2").arg(areaBlock.area).arg(page.stateName(areaBlock.modelData.state))
+                                Accessible.name: qsTr("%1: %2").arg(areaBlock.area).arg(Util.stateName(areaBlock.modelData.state))
                                 contentItem: QQC2.Label { text: areaBlock.area; textFormat: Text.PlainText; font.weight: Font.DemiBold; elide: Text.ElideRight }
                             }
                             Repeater {
@@ -363,20 +321,20 @@ Item {
                                     Layout.fillWidth: true
                                     focusPolicy: Qt.StrongFocus
                                     onClicked: page.act("check", modelData.id)
-                                    Keys.onShortcutOverride: function (event) { event.accepted = event.key === Qt.Key_Return || event.key === Qt.Key_Enter }
-                                    Keys.onReturnPressed: clicked()
-                                    Keys.onEnterPressed: clicked()
                                     onActiveFocusChanged: if (activeFocus && visualFocus) page.reveal(row)
                                     Accessible.role: Accessible.Button
                                     Accessible.name: (modelData.affects || "") !== ""
-                                        ? qsTr("%1, %2: %3. %4").arg(modelData.title).arg(page.stateName(state_)).arg(modelData.summary || "").arg(modelData.affects)
-                                        : qsTr("%1, %2: %3").arg(modelData.title).arg(page.stateName(state_)).arg(modelData.summary || "")
+                                        ? qsTr("%1, %2: %3. %4").arg(modelData.title).arg(Util.stateName(state_)).arg(modelData.summary || "").arg(modelData.affects)
+                                        : qsTr("%1, %2: %3").arg(modelData.title).arg(Util.stateName(state_)).arg(modelData.summary || "")
                                     Accessible.description: qsTr("Opens this check")
+                                    // Inside the row: the rows touch each other.
+                                    FocusRing { target: row; outset: 0; z: 1 }
                                     contentItem: RowLayout {
                                         spacing: Kirigami.Units.largeSpacing
                                         Kirigami.Icon {
-                                            source: page.stateIcon(row.state_)
+                                            source: Util.stateIcon(row.state_)
                                             implicitWidth: Kirigami.Units.iconSizes.smallMedium; implicitHeight: implicitWidth
+                                            Accessible.ignored: true    // the row's name says it
                                         }
                                         ColumnLayout {
                                             Layout.fillWidth: true
@@ -408,14 +366,14 @@ Item {
                                             // Medium only (no high) reads orange, like the header's count.
                                             color: (row.state_ === "ok" || row.state_ === "na") ? Kirigami.Theme.textColor
                                                  : row.state_ === "bad" && text.indexOf(" high") < 0 ? Kirigami.Theme.neutralTextColor
-                                                 : page.stateColor(row.state_)
+                                                 : Util.stateColor(Kirigami.Theme, row.state_)
                                             opacity: (row.state_ === "ok" || row.state_ === "na") ? 0.7 : 1
                                             font.weight: row.state_ === "bad" || row.state_ === "warn" ? Font.DemiBold : Font.Normal
                                             horizontalAlignment: Text.AlignRight
                                             wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
                                             Layout.maximumWidth: Math.min(Kirigami.Units.gridUnit * 18, content.width * 0.38)
                                         }
-                                        Kirigami.Icon { source: "go-next"; implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth; opacity: 0.6 }
+                                        Kirigami.Icon { source: "go-next"; implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth; opacity: 0.6; Accessible.ignored: true }
                                     }
                                 }
                             }
@@ -430,8 +388,9 @@ Item {
                 : page.openTotal === 0 ? qsTr("No open problems. The report is saved.")
                 : qsTr("The report is saved.")
             // Finish is the main button only when there is nothing to fix.
-            PlainButton { visible: page.canFix; text: qsTr("Finish"); icon.name: "dialog-ok"; onClicked: page.act("finish") }
+            QQC2.Button { visible: page.canFix; text: qsTr("Finish"); icon.name: "dialog-ok"; onClicked: page.act("finish") }
             PrimaryButton {
+                id: mainButton
                 text: page.canFix ? qsTr("Review and fix problems (%1)").arg(page.d.nfix || 0) : qsTr("Finish")
                 icon.name: page.canFix ? "tools-wizard" : "dialog-ok"
                 onClicked: page.primary()

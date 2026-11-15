@@ -326,7 +326,12 @@ _run_change() {
 Output:
 $(tail -n 15 <<< "$out")"
     if [[ -n "$undo" ]] && ui_yesno "Put back what this fix may already have changed?" "Roll back" "Leave it" "y"; then
-        if _no_tty bash -c "$undo" >> "$RUN_LOG" 2>&1 < /dev/null; then
+        # Its output goes to the log through this shell, not by handing it
+        # the log file: an undo step can run a program as another account.
+        local undo_out undo_rc=0
+        undo_out=$(_no_tty bash -c "$undo" 2>&1 < /dev/null) || undo_rc=$?
+        _log_foreign "undo: " "$undo_out"
+        if [[ $undo_rc -eq 0 ]]; then
             print_status "OK" "Rolled back: ${title}"
         else
             ui_error "Rolling back \"${title}\" failed too - see the run log: ${RUN_LOG}"
@@ -705,7 +710,7 @@ _sync_undone() {
 run_undo() {
     local base="$STATE_DIR/undo" r count label choice f title
     local -a items=() runs=()
-    local d i
+    local d i undo_out undo_rc
     for d in "$base"/*/; do [[ -d "$d" ]] && runs+=("$(basename "$d")"); done
     for (( i = ${#runs[@]} - 1; i >= 0; i-- )); do
         r="${runs[$i]}"
@@ -752,7 +757,11 @@ Undo this older run anyway?" "Undo anyway" "Cancel" "n"; then
         # As with a fix: an interruption waits until the step has ended
         # and is marked as done (it would be offered, and run, again).
         _signals_hold
-        if _no_tty bash "$f" >> "$RUN_LOG" 2>&1 < /dev/null; then
+        # (Output: see the roll-back in _run_change.)
+        undo_rc=0
+        undo_out=$(_no_tty bash "$f" 2>&1 < /dev/null) || undo_rc=$?
+        _log_foreign "undo: " "$undo_out"
+        if [[ $undo_rc -eq 0 ]]; then
             mv -f -- "$f" "${f%.sh}.done"
             _signals_release
             undone=$((undone + 1))

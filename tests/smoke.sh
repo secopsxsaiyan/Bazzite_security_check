@@ -1301,14 +1301,14 @@ assert f[1]["fixable"] is False' "$(_check_input check_firewall)" && echo "check
     # reads 100% while a check still runs; the slow malware scan holds at
     # 90% with a note; 100% comes only when everything is done.
     (
-        exec {_PROGRESS_FD}> "$W/progress.txt"; _PROGRESS_STEPS=10; QUIET=1
+        exec {_PROGRESS_FD}> "$W/progress.txt"; _PROGRESS_BACKEND=window; _PROGRESS_STEPS=10; QUIET=1
         ui_progress_set 1 "First"; ui_progress_set 10 "Last"; ui_progress_set 10 "Malware scan (ClamAV)" slow
         ui_progress_stop
         mapfile -t pl < "$W/progress.txt"
         [[ "${pl[0]%%$'\t'*}" == 0 && "${pl[1]%%$'\t'*}" == 81 && "${pl[2]}" == $'90\t1\tMalware scan (ClamAV)\tThis can take several minutes. The bar moves on when it is done.' \
            && "${pl[3]}" == $'100\t0\tDone\t' && "${pl[4]}" == QUIT && ${#pl[@]} -eq 5 ]] && echo "progress-90-until-done"
         # A busy indicator (a fix being applied): no steps, no 100%.
-        exec {_PROGRESS_FD}> "$W/busy.txt"; _PROGRESS_STEPS=0; ui_progress_stop
+        exec {_PROGRESS_FD}> "$W/busy.txt"; _PROGRESS_BACKEND=window; _PROGRESS_STEPS=0; ui_progress_stop
         [[ "$(cat "$W/busy.txt")" == QUIT ]] && echo "busy-no-percent"
     )
 
@@ -1603,7 +1603,7 @@ done
 # and that a front end that fails or goes away means "use kdialog" (3), not
 # a hang and not "cancelled".
 cat > "$W/fake-front.py" <<'PYEOF'
-import json, sys
+import json, os, signal, sys, time
 log = open(sys.argv[1], "a")
 def note(*a):
     print(*a, file=log, flush=True)
@@ -1615,8 +1615,15 @@ if sys.argv[2] != "serve":
     print(json.dumps({"oneshot": sys.argv[2]}))
     sys.exit(0)
 n = 0
+note("pid", os.getpid())
 for line in sys.stdin:
     m = json.loads(line)
+    if m.get("hang"):
+        # Stuck: deaf to "quit", to the end of its input and to SIGTERM.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        note("hanging")
+        while True:
+            time.sleep(1000)
     if m.get("quit"):
         note("quit")
         break
@@ -1627,6 +1634,28 @@ for line in sys.stdin:
     d = m["data"]
     if d.get("die"):
         sys.exit(7)
+    if d.get("fds"):
+        # What this process has open: {descriptor: what it is}.
+        fds = {}
+        for fd in os.listdir("/proc/self/fd"):
+            try:
+                fds[fd] = os.readlink("/proc/self/fd/" + fd)
+            except OSError:
+                pass
+        send(m["id"], 0, fds)
+        continue
+    try:
+        if d.get("stderr"):
+            sys.stderr.write(d["stderr"])
+        for _ in range(d.get("flood", 0) // 100):
+            sys.stderr.write("f" * 99 + "\n")
+        sys.stderr.flush()
+    except OSError:
+        pass                    # the other side stopped reading
+    if d.get("long"):
+        sys.stdout.write("x" * d["long"])
+        sys.stdout.flush()
+        continue
     if d.get("stale"):
         send("an-earlier-request", 0, {"wrong": True})
     if d.get("garbage"):
@@ -1695,6 +1724,59 @@ PYEOF
     [[ ( $rc -eq 3 || $rc -eq 4 ) && -z "$a" ]] && ! _qml_ok && echo "front-cannot-start"
     _ui_app_cmd() { python3 -I "$W/fake-front.py" "$FL" "$@"; }
 
+    # The front end is a program of a less trusted account. It never gets
+    # the run log itself: its stderr is a pipe, which this side copies into
+    # the log line by line, cut to size, cleaned and marked "ui: ".
+    _UI_LOG_MAX=20000
+    new_run; : > "$RUN_LOG"; ui_front_start
+    a=$(ui_app wizard '{"fds":true}'); rc=$?
+    [[ $rc -eq 0 && "$a" == *'"2": "pipe:'* && "$a" == *"/front.log"* && "$a" != *"front-run.log"* ]] && echo "front-no-log-descriptor"
+    a=$(ui_app wizard "$(python3 -I -c 'import json; print(json.dumps({"say": "e", "stderr": "plain line\n12:00:00 [OK] forged\x1b[31m\ttab\r\n\x00caf\u00e9\n" + "y" * 4500 + "\n"}))')")
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [[ "$(grep -c 'ui: yyy' "$RUN_LOG")" -eq 3 ]] && break; sleep 0.1; done
+    [[ "$a" == *'"say": "e"'* ]] && grep -qE '^[0-9:]{8} ui: plain line$' "$RUN_LOG" \
+        && grep -qE '^[0-9:]{8} ui: 12:00:00 \[OK\] forged\[31m tab$' "$RUN_LOG" && grep -qE '^[0-9:]{8} ui: caf\?\?$' "$RUN_LOG" \
+        && ! grep -qvE '^[0-9:]{8} ui: ' "$RUN_LOG" && ! LC_ALL=C grep -q '[^ -~]' "$RUN_LOG" && echo "front-stderr-marked-and-cleaned"
+    [[ "$(grep -c 'ui: yyy' "$RUN_LOG")" -eq 3 && "$(awk '{ if (length($0) > m) m = length($0) } END { print m }' "$RUN_LOG")" -eq 2013 ]] \
+        && echo "front-stderr-line-capped"
+    a=$(ui_app wizard '{"say":"f","flood":300000}'); rc=$?
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -q 'the rest is not recorded' "$RUN_LOG" && break; sleep 0.1; done
+    sleep 0.3
+    b=$(ui_app wizard '{"say":"g","stderr":"after the cap\n"}')
+    [[ $rc -eq 0 && "$a" == *'"say": "f"'* && "$b" == *'"say": "g"'* && "$(stat -c %s "$RUN_LOG")" -lt 30000 ]] \
+        && grep -q 'ui: (the window wrote more than 20000 bytes' "$RUN_LOG" && ! grep -q 'after the cap' "$RUN_LOG" && echo "front-stderr-total-capped"
+
+    # A program started through _no_tty (a fix, another account's program)
+    # does not get the window's two pipes; any other child does. Its exit
+    # status comes through.
+    probe='for f in "$@"; do [[ -e /proc/self/fd/$f ]] && printf "has-%s " "$f"; done; exit 7'
+    plain=$(bash -c "$probe" _ "$_UI_FRONT_W" "$_UI_FRONT_R"); prc=$?
+    quiet=$(_no_tty bash -c "$probe" _ "$_UI_FRONT_W" "$_UI_FRONT_R"); qrc=$?
+    [[ -n "$_UI_FRONT_W" && "$plain" == "has-${_UI_FRONT_W} has-${_UI_FRONT_R} " && -z "$quiet" && $prc -eq 7 && $qrc -eq 7 ]] \
+        && echo "no-tty-drops-window-pipes"
+
+    # ui_front_stop ends the front end's processes (the helper subshell,
+    # the front end, the log reader) and nothing else - also a front end
+    # that is stuck.
+    fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID")
+    sleep 300 & other=$!
+    ui_front_stop
+    [[ -n "$fpid" && ${#tree[@]} -ge 2 && " ${tree[*]%% *} " == *" $fpid "* && -z "$(_procs_left "${tree[@]}")" ]] \
+        && ! kill -0 "$fpid" 2>/dev/null && kill -0 "$other" 2>/dev/null && echo "front-processes-gone-after-stop"
+    new_run; ui_front_start; _ui_front_send '{"hang":true}'
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -qx hanging "$FL" && break; sleep 0.1; done
+    fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID")
+    ui_front_stop
+    grep -qx hanging "$FL" && [[ -n "$fpid" && ${#tree[@]} -ge 3 && -z "$(_procs_left "${tree[@]}")" ]] && ! kill -0 "$fpid" 2>/dev/null \
+        && kill -0 "$other" 2>/dev/null && echo "front-stuck-process-ended"
+    kill "$other" 2>/dev/null
+    _UI_LOG_MAX=262144
+
+    # An answer that never ends (no line end within the limit) is a failed
+    # front end, not memory without end.
+    new_run; ui_front_start
+    a=$(ui_app wizard '{"long":1200000}'); rc=$?
+    [[ $rc -eq 3 && -z "$a" ]] && ! _qml_ok && echo "front-endless-answer-is-3"
+
     # The tool's exit: quit is sent, nothing is left running.
     new_run; ui_front_start
     a=$(ui_app wizard '{"say":"x"}'); pid="$_UI_FRONT_PID"
@@ -1709,8 +1791,73 @@ PYEOF
 ) > "$W/front.out" 2>&1
 for m in front-started front-answer-in-subshell front-one-process front-cancelled-is-1 front-stale-answer-skipped front-large-answer \
          front-busy-in-window front-progress-lines front-theme-sent front-died-falls-back front-not-used-again front-gone-kdialog-asks \
-         front-page-failure-is-3 front-bad-answer-is-3 front-cannot-start front-stopped-on-exit front-one-shot-without-folder; do
+         front-page-failure-is-3 front-bad-answer-is-3 front-cannot-start front-stopped-on-exit front-one-shot-without-folder \
+         front-no-log-descriptor front-stderr-marked-and-cleaned front-stderr-line-capped front-stderr-total-capped \
+         no-tty-drops-window-pipes front-processes-gone-after-stop front-stuck-process-ended front-endless-answer-is-3; do
     expect "$W/front.out" "$m" "$m"
+done
+
+# The real front end, started the real way (as the desktop user, through
+# runuser, in a session of its own). Until the first request it needs no
+# Qt, so this runs here: it has no descriptor on the run log, it is ended by
+# ui_front_stop, and it leaves by itself when the root side is killed while
+# another child of the root side still holds the pipes (so there is no EOF).
+install -d -m 755 -o "$U" "$UH/bsa-front" "$UH/bsa-front/ui"
+install -m 644 "$HERE/../ui/app.py" "$UH/bsa-front/ui/app.py"
+cat > "$W/owner.sh" <<'OWNEREOF'
+# shellcheck disable=SC1090
+source "$TOOL"
+RUN_LOG="$W/owner-run.log"; : > "$RUN_LOG"; RUN_TMP=$(mktemp -d "$W/owner-rt.XXXXXX")
+DESKTOP_USER="$U"; DESKTOP_UID=$(id -u "$U"); UI_MODE=kde; _QML_OK=yes; SCRIPT_DIR="$UH/bsa-front"
+ui_front_start
+sleep 300 &
+echo "$!" > "$W/owner.sleep"
+sleep 0.5
+_proc_tree "$_UI_FRONT_PID" > "$W/owner.tree"
+if [[ "${1:-}" == stop ]]; then
+    ui_front_stop
+    mapfile -t tree < "$W/owner.tree"
+    _procs_left "${tree[@]}" > "$W/owner.left"
+    kill "$(cat "$W/owner.sleep")"
+    exit 0
+fi
+: > "$W/owner.ready"
+while :; do sleep 1; done
+OWNEREOF
+(
+    # shellcheck disable=SC1090
+    source "$TOOL"
+    # front_pid — the process in owner.tree that is app.py and runs as $U.
+    front_pid() {
+        local p _
+        while read -r p _; do
+            [[ "$(tr '\0' ' ' 2>/dev/null < "/proc/$p/cmdline")" == *"app.py serve"* && "$(stat -c %U "/proc/$p" 2>/dev/null)" == "$U" ]] && echo "$p"
+        done < "$W/owner.tree"
+        return 0
+    }
+    env TOOL="$TOOL" W="$W" U="$U" UH="$UH" bash "$W/owner.sh" stop
+    [[ "$(wc -l < "$W/owner.tree")" -ge 4 && ! -s "$W/owner.left" ]] && echo "real-front-stopped"
+
+    rm -f "$W/owner.ready"
+    env TOOL="$TOOL" W="$W" U="$U" UH="$UH" bash "$W/owner.sh" & owner=$!
+    for _ in $(seq 1 50); do [[ -e "$W/owner.ready" ]] && break; sleep 0.1; done
+    py=$(front_pid)
+    if [[ -n "$py" && -d "/proc/$py" ]]; then
+        echo "real-front-runs-as-user"
+        # Read as that user: root in a container may not look at them.
+        # shellcheck disable=SC2016
+        fds=$(runuser -u "$U" -- sh -c 'for f in "/proc/$1/fd"/*; do printf "%s=%s\n" "${f##*/}" "$(readlink "$f")"; done' sh "$py" 2>/dev/null)
+        [[ "$fds" == *$'\n'* && "$fds" != *owner-run.log* && "$fds" == *"2=pipe:"* ]] && echo "real-front-no-log-descriptor"
+        kill -9 "$owner"; wait "$owner" 2>/dev/null
+        kill -0 "$(cat "$W/owner.sleep")" 2>/dev/null && echo "pipes-still-held"
+        for _ in $(seq 1 80); do [[ -d "/proc/$py" ]] || break; sleep 0.1; done
+        [[ ! -d "/proc/$py" ]] && echo "real-front-leaves-when-root-side-is-killed"
+    fi
+    kill "$(cat "$W/owner.sleep")" 2>/dev/null
+    mapfile -t tree < "$W/owner.tree"; _ui_front_reap "${tree[@]}"
+) > "$W/owner.out" 2>&1
+for m in real-front-stopped real-front-runs-as-user real-front-no-log-descriptor pipes-still-held real-front-leaves-when-root-side-is-killed; do
+    expect "$W/owner.out" "$m" "$m"
 done
 
 # The front end itself: every page the root side can ask for has its file

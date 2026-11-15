@@ -1,6 +1,7 @@
-// Security Check - setup wizard page (Kirigami): Welcome, Your PC, Options,
-// Review. Answers go back through finished(); the root side of the tool
-// validates them.
+// Security Check - the setup wizard, a page of the main window: Welcome,
+// Your PC, Options, Review. finished({use, fix, deep, report_dir, action})
+// answers, with action "start" or "settings"; the root side of the tool
+// validates it.
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
@@ -25,6 +26,8 @@ Item {
     readonly property bool compact: width < Kirigami.Units.gridUnit * 38
     readonly property real sideMargin: Kirigami.Units.gridUnit
     readonly property real maxTextWidth: Kirigami.Units.gridUnit * 48
+    // The width of a thin line or frame: one pixel, as Kirigami.Separator.
+    readonly property int hairline: 1
 
     // What the band at the top says on each step.
     readonly property var headings: [
@@ -69,10 +72,27 @@ Item {
         else if (!answers.report_dir) step = 2
         else finish("start")
     }
+    // Esc is Back; on the first step it leaves the wizard.
     function dismiss() { if (step > 0) step--; else page.cancelled() }
+    function initialFocus() { return mainButton }
 
     // A new step starts at its top.
-    onStepChanged: scroll.QQC2.ScrollBar.vertical.position = 0
+    onStepChanged: {
+        scroll.QQC2.ScrollBar.vertical.position = 0
+        Qt.callLater(page.refocus)      // once the step's controls are shown
+    }
+    // The control with the keyboard focus may have gone with the step that
+    // was left (Back, Settings, a Change button) or stopped being a button
+    // (the step that is now the current one). A hidden control would still
+    // take Space and Enter, so the focus moves to the main button, with a
+    // focus ring when the control that had it was reached with the keyboard.
+    function refocus() {
+        var f = page.Window.activeFocusItem, inside = false
+        for (var p = f; p && !inside; p = p.parent) inside = p === page
+        if (!inside || (f.visible && f.enabled && f.focusPolicy !== Qt.NoFocus))
+            return
+        mainButton.forceActiveFocus(f.visualFocus ? Qt.TabFocusReason : Qt.OtherFocusReason)
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -109,7 +129,7 @@ Item {
                             Layout.preferredWidth: Kirigami.Units.gridUnit * 2
                             Layout.leftMargin: Kirigami.Units.smallSpacing
                             Layout.rightMargin: Kirigami.Units.smallSpacing
-                            implicitHeight: 1
+                            implicitHeight: page.hairline
                             color: stepItem.index <= page.step ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
                         }
                         StepButton { number: stepItem.index; name: stepItem.modelData }
@@ -357,6 +377,7 @@ Item {
             ]
             QQC2.Button { text: qsTr("Back"); icon.name: "go-previous"; visible: page.step > 0; onClicked: page.dismiss() }
             PrimaryButton {
+                id: mainButton
                 text: page.step === 0 ? qsTr("Get started") : page.step === page.lastStep ? qsTr("Start the check") : qsTr("Next")
                 icon.name: page.step === page.lastStep ? "security-high" : "go-next"
                 onClicked: page.primary()
@@ -382,7 +403,13 @@ Item {
         padding: Kirigami.Units.smallSpacing
         // Not "enabled: done": a disabled item would get the greyed-out colours.
         focusPolicy: done ? Qt.StrongFocus : Qt.NoFocus
-        onClicked: if (done) page.step = number
+        // It stops being a button when its step is the current one, which
+        // it cannot with the keyboard focus on it: that goes to the main
+        // button first.
+        onClicked: if (done) {
+            if (activeFocus) mainButton.forceActiveFocus(visualFocus ? Qt.TabFocusReason : Qt.OtherFocusReason)
+            page.step = number
+        }
         Accessible.role: done ? Accessible.Button : Accessible.StaticText
         Accessible.name: done ? qsTr("Back to step %1 of %2: %3").arg(number + 1).arg(page.steps.length).arg(name)
                        : current ? qsTr("Step %1 of %2, current: %3").arg(number + 1).arg(page.steps.length).arg(name)
@@ -399,7 +426,7 @@ Item {
                 color: stepButton.done ? Kirigami.Theme.positiveTextColor
                      : stepButton.current ? Kirigami.Theme.highlightColor : "transparent"
                 border.color: stepButton.done || stepButton.current ? color : Kirigami.Theme.disabledTextColor
-                border.width: 1
+                border.width: page.hairline
                 Kirigami.Icon {
                     anchors.centerIn: parent
                     width: parent.width * 0.7; height: width
@@ -428,8 +455,8 @@ Item {
         background: Rectangle {
             radius: Kirigami.Units.cornerRadius
             color: stepButton.done && stepButton.hovered ? Qt.alpha(Kirigami.Theme.highlightColor, 0.15) : "transparent"
-            border.width: stepButton.done && stepButton.visualFocus ? 2 : 0
-            border.color: Kirigami.Theme.focusColor
+            // Inside: the band it is on has no room around it.
+            FocusRing { target: stepButton; cornerRadius: parent.radius; outset: 0; visible: stepButton.done && stepButton.visualFocus }
         }
     }
 
@@ -442,7 +469,7 @@ Item {
         color: Kirigami.Theme.backgroundColor
         Kirigami.Theme.colorSet: Kirigami.Theme.View
         Kirigami.Theme.inherit: false
-        border.width: 1
+        border.width: page.hairline
         border.color: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, Kirigami.Theme.frameContrast)
         Item { id: inner; anchors.fill: parent; anchors.margins: parent.padding }
     }
@@ -467,7 +494,9 @@ Item {
     }
 
     // A card with an icon, a title, a description, an optional badge and a
-    // switch. The whole card is the control: click or Space toggles it.
+    // switch. The whole card is the control: a click, Space or Enter toggles
+    // it. Switched on shows as a highlighted frame; the keyboard focus as a
+    // ring around the card, so the two cannot be mixed up.
     component OptionCard: QQC2.AbstractButton {
         id: card
         property string title
@@ -498,6 +527,7 @@ Item {
                 source: card.iconName
                 implicitWidth: Kirigami.Units.iconSizes.medium; implicitHeight: implicitWidth
                 Layout.alignment: Qt.AlignTop
+                Accessible.ignored: true
             }
             ColumnLayout {
                 Layout.fillWidth: true
@@ -538,10 +568,10 @@ Item {
             color: card.down ? Qt.alpha(Kirigami.Theme.highlightColor, 0.2)
                  : card.hovered ? Qt.alpha(Kirigami.Theme.highlightColor, 0.1)
                  : Kirigami.Theme.backgroundColor
-            border.width: card.visualFocus ? 2 : 1
-            border.color: card.visualFocus ? Kirigami.Theme.focusColor
-                        : card.switchedOn ? Qt.alpha(Kirigami.Theme.highlightColor, 0.7)
+            border.width: page.hairline
+            border.color: card.switchedOn ? Qt.alpha(Kirigami.Theme.highlightColor, 0.7)
                         : Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, Kirigami.Theme.frameContrast)
+            FocusRing { target: card; cornerRadius: parent.radius }
         }
     }
 

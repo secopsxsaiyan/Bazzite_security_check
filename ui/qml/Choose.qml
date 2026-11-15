@@ -8,6 +8,7 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 Item {
     id: page
@@ -18,6 +19,8 @@ Item {
     signal cancelled()
     function primary() { if (canContinue) done() }
     function dismiss() { cancelled() }
+    // The main button, so that Enter continues (on a row it ticks the row).
+    function initialFocus() { return mainButton.enabled ? mainButton : rows.count > 0 ? rows.itemAt(currentRow) : cancelButton }
 
     readonly property var d: input || ({})
     readonly property var items: d.items || []
@@ -25,16 +28,10 @@ Item {
     property var picked: items.map(function (i) { return i.on === true })
     readonly property int count: picked.filter(function (p) { return p }).length
     readonly property bool canContinue: count > 0 || d.allow_none === true
+    // The list is one stop for Tab: it stops at this row, and the arrow
+    // keys, Home and End move between the rows.
+    property int currentRow: 0
 
-    function riskColor(r) {
-        return r === "high" ? Kirigami.Theme.negativeTextColor
-             : r === "medium" ? Kirigami.Theme.neutralTextColor
-             : r === "low" ? Kirigami.Theme.positiveTextColor
-             : Kirigami.Theme.disabledTextColor
-    }
-    function riskText(r) {
-        return r === "high" ? qsTr("High risk") : r === "medium" ? qsTr("Medium risk") : r === "low" ? qsTr("Low risk") : (r || "")
-    }
     function setAll(f) { picked = items.map(function (i, n) { return f(i, n) }) }
     function toggle(n, v) { var p = picked.slice(); p[n] = v; picked = p }
     function done() {
@@ -42,22 +39,9 @@ Item {
         for (var n = 0; n < items.length; n++) if (picked[n]) t.push(items[n].tag)
         finished({ "tags": t })
     }
-    // Keep the row that has the keyboard focus inside the visible part.
-    function reveal(item) {
-        var f = scroll.contentItem
-        var top = item.mapToItem(f.contentItem, 0, 0).y, m = Kirigami.Units.largeSpacing
-        if (top - m < f.contentY)
-            f.contentY = Math.max(0, top - m)
-        else if (top + item.height + m > f.contentY + f.height)
-            f.contentY = Math.min(Math.max(0, f.contentHeight - f.height), top + item.height + m - f.height)
-    }
-
-    // A button that is not the main one: when it has the keyboard focus,
-    // Enter presses it instead of the page's main button.
-    component PlainButton: QQC2.Button {
-        Keys.onShortcutOverride: function (event) { event.accepted = event.key === Qt.Key_Return || event.key === Qt.Key_Enter }
-        Keys.onReturnPressed: clicked()
-        Keys.onEnterPressed: clicked()
+    function goTo(n) {
+        var row = rows.itemAt(Math.max(0, Math.min(rows.count - 1, n)))
+        if (row) row.forceActiveFocus(Qt.TabFocusReason)
     }
 
     ColumnLayout {
@@ -76,9 +60,9 @@ Item {
             Layout.margins: Kirigami.Units.largeSpacing
             Layout.leftMargin: Kirigami.Units.gridUnit; Layout.rightMargin: Kirigami.Units.gridUnit
             spacing: Kirigami.Units.smallSpacing
-            PlainButton { text: qsTr("Select all"); icon.name: "edit-select-all"; onClicked: page.setAll(function () { return true }) }
-            PlainButton { text: qsTr("Select none"); icon.name: "edit-select-none"; onClicked: page.setAll(function () { return false }) }
-            PlainButton {
+            QQC2.Button { text: qsTr("Select all"); icon.name: "edit-select-all"; onClicked: page.setAll(function () { return true }) }
+            QQC2.Button { text: qsTr("Select none"); icon.name: "edit-select-none"; onClicked: page.setAll(function () { return false }) }
+            QQC2.Button {
                 // Not where a tick keeps something (the firewall list):
                 // there, unticking is the risky part.
                 visible: page.graded && page.d.low_only !== false && page.items.some(function (i) { return i.risk === "low" })
@@ -105,13 +89,13 @@ Item {
                 spacing: Kirigami.Units.smallSpacing
 
                 // Room for the focus ring of the first item.
-                Item { implicitHeight: Kirigami.Units.smallSpacing / 2 }
+                Item { implicitHeight: Kirigami.Units.smallSpacing }
                 Repeater {
                     id: rows
                     model: page.items
                     // One item: a card that is a check box as a whole
-                    // (click anywhere, Tab to it, Space ticks it, Up and
-                    // Down move between the items).
+                    // (click anywhere; with the keyboard focus on it, Space
+                    // or Enter ticks it).
                     delegate: QQC2.AbstractButton {
                         id: row
                         required property var modelData
@@ -122,24 +106,25 @@ Item {
                         padding: Kirigami.Units.largeSpacing
                         hoverEnabled: true
                         onClicked: page.toggle(index, !on)
-                        onActiveFocusChanged: if (activeFocus) page.reveal(row)
-                        Keys.onShortcutOverride: function (event) { event.accepted = event.key === Qt.Key_Return || event.key === Qt.Key_Enter }
-                        Keys.onReturnPressed: clicked()
-                        Keys.onEnterPressed: clicked()
-                        Keys.onDownPressed: function (event) {
-                            var next = rows.itemAt(index + 1)
-                            if (next) next.forceActiveFocus(Qt.TabFocusReason); else event.accepted = false
+                        focusPolicy: index === page.currentRow ? Qt.StrongFocus : Qt.ClickFocus
+                        onActiveFocusChanged: if (activeFocus) {
+                            page.currentRow = index
+                            Util.reveal(scroll.contentItem, row, Kirigami.Units.largeSpacing)
                         }
-                        Keys.onUpPressed: function (event) {
-                            var prev = rows.itemAt(index - 1)
-                            if (prev) prev.forceActiveFocus(Qt.BacktabFocusReason); else event.accepted = false
+                        Keys.onDownPressed: page.goTo(index + 1)
+                        Keys.onUpPressed: page.goTo(index - 1)
+                        Keys.onPressed: function (event) {
+                            if (event.key === Qt.Key_Home) page.goTo(0)
+                            else if (event.key === Qt.Key_End) page.goTo(rows.count - 1)
+                            else return
+                            event.accepted = true
                         }
 
                         Accessible.role: Accessible.CheckBox
                         Accessible.checkable: true
                         Accessible.checked: on
-                        Accessible.name: modelData.risk ? qsTr("%1, %2").arg(modelData.label).arg(page.riskText(modelData.risk)) : modelData.label
-                        Accessible.description: [modelData.detail || "", modelData.warn || ""].filter(function (s) { return s !== "" }).join(". ")
+                        Accessible.name: Util.riskLabel(modelData.label, modelData.risk)
+                        Accessible.description: Util.describe(modelData.detail, modelData.warn)
                         Accessible.onPressAction: clicked()
                         Accessible.onToggleAction: clicked()
 
@@ -148,15 +133,7 @@ Item {
                             color: row.on ? Qt.rgba(row.edge.r, row.edge.g, row.edge.b, row.hovered ? 0.16 : 0.10)
                                  : row.hovered ? Qt.rgba(row.edge.r, row.edge.g, row.edge.b, 0.05) : Kirigami.Theme.backgroundColor
                             border.color: Qt.rgba(row.edge.r, row.edge.g, row.edge.b, row.on ? 0.6 : 0.15)
-                            // Keyboard focus ring.
-                            Rectangle {
-                                anchors.fill: parent; anchors.margins: -border.width
-                                radius: parent.radius + border.width
-                                color: "transparent"
-                                border.width: Math.max(2, Kirigami.Units.smallSpacing / 2)
-                                border.color: Kirigami.Theme.focusColor
-                                visible: row.visualFocus
-                            }
+                            FocusRing { target: row; cornerRadius: parent.radius }
                         }
 
                         contentItem: RowLayout {
@@ -183,8 +160,7 @@ Item {
                                     StatusChip {
                                         visible: !!row.modelData.risk
                                         Layout.alignment: Qt.AlignTop
-                                        text: page.riskText(row.modelData.risk)
-                                        tint: page.riskColor(row.modelData.risk)
+                                        risk: row.modelData.risk || ""
                                         Accessible.ignored: true
                                     }
                                 }
@@ -202,12 +178,12 @@ Item {
                                         source: row.modelData.risk === "high" ? "dialog-error"
                                               : row.modelData.risk === "medium" ? "dialog-warning" : "dialog-information"
                                         implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
+                                        Accessible.ignored: true
                                     }
                                     QQC2.Label {
                                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
                                         text: row.modelData.warn || ""
-                                        color: row.modelData.risk === "high" ? Kirigami.Theme.negativeTextColor
-                                             : row.modelData.risk === "medium" ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.textColor
+                                        color: Util.riskWarnColor(Kirigami.Theme, row.modelData.risk)
                                     }
                                 }
                             }
@@ -226,8 +202,9 @@ Item {
 
         FooterBar {
             hint: page.d.note_nothing_yet !== false ? qsTr("Nothing changes yet: each fix is shown with its commands before it runs.") : ""
-            PlainButton { text: qsTr("Cancel"); icon.name: "dialog-cancel"; onClicked: page.dismiss() }
+            QQC2.Button { id: cancelButton; text: qsTr("Cancel"); icon.name: "dialog-cancel"; onClicked: page.dismiss() }
             PrimaryButton {
+                id: mainButton
                 text: qsTr("%1 (%2)").arg(page.d.ok || qsTr("Continue")).arg(page.count)
                 icon.name: "go-next"
                 enabled: page.canContinue

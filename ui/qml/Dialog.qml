@@ -10,6 +10,7 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 Item {
     id: page
@@ -20,6 +21,14 @@ Item {
     signal cancelled()
     function primary() { if (primaryIndex >= 0 && primaryIndex < buttons.length) answer(primaryIndex) }
     function dismiss() { cancelled() }
+    // A pick-one list starts on the picked row (Up and Down work at once);
+    // without a list the main button has the focus, as in any dialog.
+    function initialFocus() {
+        for (var n = 0; n < radios.count; n++)
+            if (radios.itemAt(n).checked) return radios.itemAt(n)
+        var main = footerButtons.itemAt(primaryIndex)
+        return main ? main.item : null
+    }
 
     // The most room the dialog may take (set by the main window).
     property real maximumWidth: Kirigami.Units.gridUnit * 34
@@ -66,22 +75,6 @@ Item {
         return k === "error" ? qsTr("Error") : k === "warning" ? qsTr("Warning")
              : k === "question" ? qsTr("Question") : qsTr("Security Check")
     }
-    function riskColor(r) {
-        return r === "high" ? Kirigami.Theme.negativeTextColor : r === "medium" ? Kirigami.Theme.neutralTextColor
-             : r === "low" ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
-    }
-    function riskText(r) {
-        return r === "high" ? qsTr("High risk") : r === "medium" ? qsTr("Medium risk") : r === "low" ? qsTr("Low risk") : (r || "")
-    }
-    // Keep what has the keyboard focus inside the visible part.
-    function reveal(item) {
-        var f = scroll.contentItem
-        var top = item.mapToItem(f.contentItem, 0, 0).y
-        if (top < f.contentY)
-            f.contentY = Math.max(0, top)
-        else if (top + item.height > f.contentY + f.height)
-            f.contentY = Math.min(Math.max(0, f.contentHeight - f.height), top + item.height - f.height)
-    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -105,6 +98,9 @@ Item {
                     source: page.kindIcon(page.d.kind) || page.iconSource
                     Layout.alignment: Qt.AlignVCenter
                     implicitWidth: Kirigami.Units.iconSizes.medium; implicitHeight: implicitWidth
+                    // An error, warning or question icon says what kind of
+                    // dialog this is; the app's icon says nothing.
+                    Accessible.ignored: page.kindIcon(page.d.kind) === ""
                     Accessible.role: Accessible.Graphic
                     Accessible.name: page.kindName(page.d.kind)
                 }
@@ -153,15 +149,18 @@ Item {
                     Repeater {
                         id: radios
                         model: page.items
-                        // A delegate takes no keyboard focus by itself
-                        // (a list view would move through them), so each
-                        // row does: Tab stops at the picked one, Up and
-                        // Down pick the one before or after it.
+                        // The list is one stop for Tab, at the picked
+                        // row; Up and Down pick the row before or after
+                        // it, and Enter answers with the picked row (the
+                        // dialog's main button).
                         delegate: QQC2.RadioDelegate {
                             id: radio
                             required property var modelData
                             required property int index
-                            function pick() { checked = true; forceActiveFocus(Qt.TabFocusReason) }
+                            // The focus first: the row that is left stops
+                            // being a Tab stop, which it cannot while it
+                            // has the focus.
+                            function pick() { forceActiveFocus(Qt.TabFocusReason); checked = true }
                             focusPolicy: checked ? Qt.StrongFocus : Qt.ClickFocus
                             Keys.onDownPressed: function (event) {
                                 var next = radios.itemAt(index + 1)
@@ -173,15 +172,12 @@ Item {
                             }
                             Layout.fillWidth: true
                             leftPadding: radio.indicator.width + radio.spacing * 2
-                            // The one picked at the start has the keyboard
-                            // focus, so Up and Down work at once.
-                            focus: checked
                             Component.onCompleted: { checked = page.picked === modelData.tag; page.listWidth = Math.max(page.listWidth, implicitWidth) }
                             onImplicitWidthChanged: page.listWidth = Math.max(page.listWidth, implicitWidth)
                             onCheckedChanged: if (checked) page.picked = modelData.tag
-                            onActiveFocusChanged: if (activeFocus) page.reveal(radio)
-                            Accessible.name: modelData.risk ? qsTr("%1, %2").arg(modelData.label).arg(page.riskText(modelData.risk)) : modelData.label
-                            Accessible.description: [modelData.detail || "", modelData.warn || ""].filter(function (s) { return s !== "" }).join(". ")
+                            onActiveFocusChanged: if (activeFocus) Util.reveal(scroll.contentItem, radio, 0)
+                            Accessible.name: Util.riskLabel(modelData.label, modelData.risk)
+                            Accessible.description: Util.describe(modelData.detail, modelData.warn)
                             contentItem: ColumnLayout {
                                 spacing: 0
                                 RowLayout {
@@ -194,8 +190,7 @@ Item {
                                     StatusChip {
                                         visible: !!radio.modelData.risk
                                         Layout.alignment: Qt.AlignTop
-                                        text: page.riskText(radio.modelData.risk)
-                                        tint: page.riskColor(radio.modelData.risk)
+                                        risk: radio.modelData.risk || ""
                                         Accessible.ignored: true
                                     }
                                 }
@@ -208,8 +203,7 @@ Item {
                                     Layout.fillWidth: true; visible: !!radio.modelData.warn
                                     wrapMode: Text.Wrap; textFormat: Text.PlainText
                                     text: radio.modelData.warn || ""
-                                    color: radio.modelData.risk === "high" ? Kirigami.Theme.negativeTextColor
-                                         : radio.modelData.risk === "medium" ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.textColor
+                                    color: Util.riskWarnColor(Kirigami.Theme, radio.modelData.risk)
                                 }
                             }
                         }
@@ -223,13 +217,11 @@ Item {
                     text: page.showDetails ? qsTr("Hide details") : qsTr("Show details")
                     icon.name: page.showDetails ? "go-up" : "go-down"
                     onClicked: page.showDetails = !page.showDetails
-                    Keys.onShortcutOverride: function (event) { event.accepted = event.key === Qt.Key_Return || event.key === Qt.Key_Enter }
-                    Keys.onReturnPressed: clicked()
-                    Keys.onEnterPressed: clicked()
                 }
                 CodeBlock {
                     visible: page.showDetails && !!page.d.details
                     text: page.d.details || ""
+                    flickable: scroll.contentItem
                 }
 
                 Item { implicitHeight: Kirigami.Units.smallSpacing }
@@ -238,35 +230,32 @@ Item {
 
         FooterBar {
             id: footer
+            // One button per entry: the main one filled, the others plain.
+            // Enter presses the one with the keyboard focus (the window
+            // sees to it), else the main one.
             Repeater {
+                id: footerButtons
                 model: page.buttons
-                // Both kinds of button are declared; only the one that fits
-                // is there (the hidden one takes no room and no focus).
-                delegate: RowLayout {
+                delegate: Loader {
                     id: slot
                     required property var modelData
                     required property int index
-                    readonly property bool main: index === page.primaryIndex
-                    spacing: 0
-                    QQC2.Button {
-                        visible: !slot.main
-                        text: slot.modelData.label
-                        icon.name: slot.modelData.icon || ""
-                        onClicked: page.answer(slot.index)
-                        // With the keyboard focus on it, Enter presses this
-                        // button, not the main one.
-                        Keys.onShortcutOverride: function (event) { event.accepted = event.key === Qt.Key_Return || event.key === Qt.Key_Enter }
-                        Keys.onReturnPressed: clicked()
-                        Keys.onEnterPressed: clicked()
+                    sourceComponent: index === page.primaryIndex ? mainButton : plainButton
+                    Component {
+                        id: plainButton
+                        QQC2.Button {
+                            text: slot.modelData.label
+                            icon.name: slot.modelData.icon || ""
+                            onClicked: page.answer(slot.index)
+                        }
                     }
-                    PrimaryButton {
-                        visible: slot.main
-                        // No pick-one list: the main button starts with the
-                        // keyboard focus, as in any dialog.
-                        focus: slot.main && page.items.length === 0
-                        text: slot.modelData.label
-                        icon.name: slot.modelData.icon || ""
-                        onClicked: page.answer(slot.index)
+                    Component {
+                        id: mainButton
+                        PrimaryButton {
+                            text: slot.modelData.label
+                            icon.name: slot.modelData.icon || ""
+                            onClicked: page.answer(slot.index)
+                        }
                     }
                 }
             }

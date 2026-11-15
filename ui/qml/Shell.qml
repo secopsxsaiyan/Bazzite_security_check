@@ -2,9 +2,11 @@
 // tool and shows, one after the other, the pages the root side asks for
 // (ui/app.py passes each request on as host.request). A page is an Item
 // with: required property var input, property string iconSource, a title,
-// signals finished(answer) and cancelled(), and functions primary() and
-// dismiss(). Between two requests the last page stays, dimmed, under a
-// spinner, so the window never goes away while the tool works.
+// signals finished(answer) and cancelled(), and functions primary() (Enter)
+// and dismiss() (Esc). A page may also have initialFocus(), which returns
+// the item that gets the keyboard focus when the page is shown. Between two
+// requests the last page stays (dimmed, under a spinner, when the next one
+// takes a while), so the window never goes away while the tool works.
 // "dialog" requests (Dialog.qml, sized by its content) are shown over the
 // current page; when there is no page yet, the dialog is the whole content
 // of a small window, which grows when the first page arrives.
@@ -31,6 +33,11 @@ Kirigami.ApplicationWindow {
     property bool parked: false         // hidden: the scan's progress window shows
     property string busyLabel: ""       // what the root side says it is doing
     property bool busyShown: false      // dimmed, with the spinner
+    // A page or dialog that has just appeared takes no keys and no clicks
+    // for this long (ms): an Enter or a double click meant for the page
+    // before it must not answer it too (the next page may be "Apply").
+    readonly property int settleTime: 350
+    readonly property bool settling: settle.running
 
     readonly property Item current: dialogItem || pageItem
     readonly property real compactWidth: pageItem ? pageItem.implicitWidth : Kirigami.Units.gridUnit * 22
@@ -137,6 +144,7 @@ Kirigami.ApplicationWindow {
                 // The new page fades in over the old one, which then goes.
                 // No fade when the window changes its size with the page.
                 old.enabled = false
+                old.focus = false
                 old.z = -1
                 old.destroy(resized ? 0 : Kirigami.Units.longDuration + 50)
             }
@@ -148,7 +156,12 @@ Kirigami.ApplicationWindow {
         grace.stop()
         slot.item = item
         slot.shown = true
-        slot.forceActiveFocus()
+        // The keyboard focus stays with the window, away from the pages,
+        // until the new one has settled: see settleTime.
+        if (pageSlot) pageSlot.focus = false
+        if (dialogSlot) dialogSlot.focus = false
+        content.forceActiveFocus()
+        settle.restart()
         const hidden = !visible
         wanted = true
         if (hidden && visible) { raise(); requestActivate() }
@@ -184,6 +197,20 @@ Kirigami.ApplicationWindow {
         if (hidden && visible) { raise(); requestActivate() }
     }
 
+    // The page has settled: it gets the keyboard focus, on the control it
+    // names (or, without one, wherever its own "focus: true" says).
+    Timer {
+        id: settle
+        interval: root.settleTime
+        onTriggered: {
+            const slot = root.dialogSlot || root.pageSlot
+            if (!slot || root.pendingId === "") return
+            slot.forceActiveFocus()
+            const first = root.current && root.current.initialFocus ? root.current.initialFocus() : null
+            if (root.usable(first)) first.forceActiveFocus()
+        }
+    }
+
     Timer {
         id: grace
         interval: Kirigami.Units.veryLongDuration
@@ -192,27 +219,38 @@ Kirigami.ApplicationWindow {
 
     // ---- keys -------------------------------------------------------------
     // Esc and Enter reach this only when the control with the keyboard
-    // focus did not use them itself (a text area takes Enter, an open
-    // combo box Esc and Enter): then Esc is the page's dismiss() and Enter
-    // its primary(). Enter in a one-line text field stays with that field,
-    // and Enter on a button presses that button, whatever the desktop's
-    // settings say about buttons and Enter.
+    // focus did not use them itself (an open combo box takes both): then
+    // Esc is the page's dismiss() and Enter its primary(). Two exceptions
+    // for Enter: in a text field or text block it does nothing here, and on
+    // a button it presses that button, whatever the desktop's settings say
+    // about buttons and Enter. A tick box or a radio row is not a button in
+    // that sense: there Enter is primary(), as in any dialog.
+    // A key that is held down (auto-repeat) never answers anything, and a
+    // page that has just appeared takes no keys at all: see settleTime.
+    function usable(item) {
+        // A control hidden or switched off after it got the focus (a button
+        // of another wizard step) keeps it, but is not there for the user.
+        return !!item && item.visible && item.enabled && item.focusPolicy !== Qt.NoFocus
+    }
     function keyPressed(event) {
+        // Not even Tab: it would move the focus into the new page.
+        if (settling) { event.accepted = true; return }
         if (pendingId === "" || !current) return
         if (event.modifiers & ~Qt.KeypadModifier) return
-        if (event.key === Qt.Key_Escape) {
+        const esc = event.key === Qt.Key_Escape
+        const enter = event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+        if (!esc && !enter) return
+        const f = usable(root.activeFocusItem) ? root.activeFocusItem : null
+        if (enter && (f instanceof TextInput || f instanceof TextEdit)) return
+        event.accepted = true
+        if (event.isAutoRepeat) return
+        if (esc) {
             if (current.dismiss) current.dismiss()
-            event.accepted = true
-        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            const f = root.activeFocusItem
-            if (f instanceof TextInput || f instanceof TextEdit) return
-            event.accepted = true
-            if (f instanceof T.AbstractButton) {
-                if (typeof f.click === "function") f.click()
-                else { if (f.checkable) f.toggle(); f.clicked() }
-            } else if (current.primary) {
-                current.primary()
-            }
+        } else if (f instanceof T.AbstractButton && !f.checkable) {
+            if (typeof f.click === "function") f.click()
+            else f.clicked()
+        } else if (current.primary) {
+            current.primary()
         }
     }
 
@@ -220,7 +258,8 @@ Kirigami.ApplicationWindow {
     // there, Enter is the page's primary() as everywhere else.
     Shortcut {
         sequences: ["Return", "Enter"]
-        enabled: root.pendingId !== "" && root.activeFocusItem instanceof T.ComboBox
+        autoRepeat: false
+        enabled: root.pendingId !== "" && !root.settling && root.activeFocusItem instanceof T.ComboBox
                  && !(root.activeFocusItem.popup && root.activeFocusItem.popup.visible)
         onActivated: if (root.current && root.current.primary) root.current.primary()
     }
@@ -312,6 +351,13 @@ Kirigami.ApplicationWindow {
         Item {
             id: dialogLayer
             anchors.fill: parent
+        }
+        // A page or dialog that has just appeared takes no clicks yet.
+        MouseArea {
+            anchors.fill: parent
+            visible: root.settling
+            acceptedButtons: Qt.AllButtons
+            onWheel: (wheel) => { wheel.accepted = true }
         }
 
         // Busy: what the tool is doing, between two pages.

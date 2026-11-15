@@ -1,5 +1,7 @@
 // Security Check - the main button of a page: filled with the highlight
 // colour so it stands out from the other buttons in every Plasma style.
+// Enter presses it from anywhere on the page (Shell.qml: the page's
+// primary()), unless another button has the keyboard focus.
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
@@ -28,9 +30,11 @@ QQC2.Button {
             isMask: true
             color: Kirigami.Theme.highlightedTextColor
             implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
+            Accessible.ignored: true
         }
         QQC2.Label {
             text: control.text
+            textFormat: Text.PlainText
             font: control.font
             color: Kirigami.Theme.highlightedTextColor
         }
@@ -44,14 +48,6 @@ QQC2.Button {
              : control.down ? Qt.darker(control.fill, 1.25)
              : control.hovered ? Qt.lighter(control.fill, 1.12) : control.fill
         opacity: control.enabled ? 1 : 0.5
-        // Keyboard focus ring.
-        Rectangle {
-            anchors.fill: parent; anchors.margins: -3
-            radius: parent.radius + 3
-            color: "transparent"
-            border.width: 2
-            border.color: Kirigami.Theme.focusColor
-            visible: control.visualFocus
-        }
+        FocusRing { target: control; cornerRadius: parent.radius }
     }
 }

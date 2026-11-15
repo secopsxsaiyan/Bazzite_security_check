@@ -14,36 +14,14 @@ Item {
     readonly property string title: qsTr("Apply this fix?")
     signal finished(var answer)
     signal cancelled()
+    // Enter applies, unless another button has the keyboard focus (the
+    // window presses that one: a focused "Skip" never applies the fix).
     function primary() { answer("apply") }
     function dismiss() { cancelled() }
+    function initialFocus() { return applyButton }
 
     readonly property var d: input || ({})
-    readonly property string detail: reflow(d.detail)
-    property bool more: false
     function answer(c) { finished({ "choice": c }) }
-
-    // Descriptions are wrapped at about 78 columns in the checks: join
-    // those lines again (list lines and blank lines stay).
-    function reflow(s) {
-        var out = [], lines = String(s === undefined || s === null ? "" : s).split("\n")
-        for (var n = 0; n < lines.length; n++) {
-            var l = lines[n], prev = out.length ? out[out.length - 1] : ""
-            if (out.length && l.trim() !== "" && prev.trim() !== "" && !/^\s*[-•*]\s/.test(l) && !/^\s*[-•*]\s/.test(prev))
-                out[out.length - 1] = prev + " " + l.trim()
-            else
-                out.push(l)
-        }
-        return out.join("\n")
-    }
-
-    // A button that is not the main one: when it has the keyboard focus,
-    // Enter presses it instead of the page's main button (a focused "Skip"
-    // must never apply the fix).
-    component PlainButton: QQC2.Button {
-        Keys.onShortcutOverride: function (event) { event.accepted = event.key === Qt.Key_Return || event.key === Qt.Key_Enter }
-        Keys.onReturnPressed: clicked()
-        Keys.onEnterPressed: clicked()
-    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -53,11 +31,7 @@ Item {
             iconSource: page.iconSource
             eyebrow: qsTr("Apply this fix?")
             title: page.d.title || ""
-            StatusChip {
-                sev: page.d.sev || "info"
-                text: sev === "high" ? qsTr("High severity") : sev === "medium" ? qsTr("Medium severity")
-                    : sev === "low" ? qsTr("Low severity") : qsTr("Information")
-            }
+            StatusChip { sev: page.d.sev || "info" }
         }
 
         QQC2.ScrollView {
@@ -77,20 +51,7 @@ Item {
 
                 NowAfter { now: page.d.now || ""; after: page.d.after || "" }
 
-                QQC2.Label {
-                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                    visible: text !== ""
-                    text: page.detail
-                    maximumLineCount: page.more ? 100000 : 6
-                    elide: Text.ElideRight
-                }
-                PlainButton {
-                    visible: page.detail.split("\n").length > 6 || page.detail.length > 600
-                    flat: true
-                    text: page.more ? qsTr("Show less") : qsTr("Show all details")
-                    icon.name: page.more ? "go-up" : "go-down"
-                    onClicked: page.more = !page.more
-                }
+                ExpandableText { text: page.d.detail || ""; flickable: scroll.contentItem }
 
                 AffectsList { model: page.d.affects || [] }
 
@@ -104,7 +65,7 @@ Item {
                         opacity: 0.8
                         text: qsTr("These run as administrator. You are not asked for your password again.")
                     }
-                    CodeBlock { text: page.d.commands || "" }
+                    CodeBlock { text: page.d.commands || ""; flickable: scroll.contentItem }
                 }
 
                 Kirigami.InlineMessage {
@@ -126,9 +87,9 @@ Item {
 
         FooterBar {
             hint: qsTr("Nothing changes until you press Apply.")
-            leading: PlainButton { text: qsTr("Stop reviewing"); icon.name: "process-stop"; onClicked: page.answer("stop") }
-            PlainButton { text: qsTr("Skip"); icon.name: "go-next"; onClicked: page.answer("skip") }
-            PrimaryButton { text: qsTr("Apply"); icon.name: "dialog-ok-apply"; onClicked: page.primary() }
+            leading: QQC2.Button { text: qsTr("Stop reviewing"); icon.name: "process-stop"; onClicked: page.answer("stop") }
+            QQC2.Button { text: qsTr("Skip"); icon.name: "go-next"; onClicked: page.answer("skip") }
+            PrimaryButton { id: applyButton; text: qsTr("Apply"); icon.name: "dialog-ok-apply"; onClicked: page.primary() }
         }
     }
 }

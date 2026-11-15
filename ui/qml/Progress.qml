@@ -98,7 +98,7 @@ Kirigami.ApplicationWindow {
                     background: Rectangle {
                         implicitHeight: Kirigami.Units.gridUnit * 0.6
                         radius: height / 2
-                        color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.15)
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
                     }
                     contentItem: Item {
                         implicitHeight: Kirigami.Units.gridUnit * 0.6
@@ -110,13 +110,18 @@ Kirigami.ApplicationWindow {
                         }
                         Rectangle {
                             visible: bar.indeterminate
-                            width: parent.width * 0.3; height: parent.height
+                            id: sweep
+                            width: parent.width * share; height: parent.height
                             radius: height / 2
                             color: Kirigami.Theme.linkColor
+                            // One pass of the bar from side to side, in ms.
+                            readonly property int sweepTime: 900
+                            // How much of the track the moving bar covers.
+                            readonly property real share: 0.3
                             SequentialAnimation on x {
                                 running: bar.indeterminate; loops: Animation.Infinite
-                                NumberAnimation { from: 0; to: bar.width * 0.7; duration: 900; easing.type: Easing.InOutQuad }
-                                NumberAnimation { from: bar.width * 0.7; to: 0; duration: 900; easing.type: Easing.InOutQuad }
+                                NumberAnimation { from: 0; to: bar.width * (1 - sweep.share); duration: sweep.sweepTime; easing.type: Easing.InOutQuad }
+                                NumberAnimation { from: bar.width * (1 - sweep.share); to: 0; duration: sweep.sweepTime; easing.type: Easing.InOutQuad }
                             }
                         }
                     }

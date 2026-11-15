@@ -6,6 +6,15 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- An off-screen test of the real windows, `make test-ui`
+  (`tests/ui-offscreen.py`): it shows every page in the real front end,
+  answers it with the keyboard and checks each answer line; a QML warning
+  fails it. CI runs it as the new "UI test" job, in a Fedora container.
+- `docs/ui.md` describes the front end for developers: the protocol between
+  the root side and the window, what a page is, and how to add one.
+
 ### Changed
 
 - Security Check now has one window for the whole run. The setup wizard, the
@@ -17,23 +26,22 @@ All notable changes to this project are listed here. The format follows
   what is being done. Only the scan's progress bar is still a small window of
   its own, with its tray icon.
 - Every page was reworked to one layout: a header, the content, and a bar at
-  the bottom with one main button that stands out. Enter presses it and Esc
-  goes back or cancels; every control can be reached with the keyboard and
-  has a name for screen readers. The wizard has four steps (the report folder
-  moved into Options), the check and "Apply this fix?" pages show what a fix
-  affects in the same way, and texts are marked for translation (no
-  translations ship yet).
+  the bottom with one main button that stands out. Every control can be
+  reached with the keyboard and has a name for screen readers. The wizard
+  has four steps (the report folder moved into Options), the check and
+  "Apply this fix?" pages show what a fix affects in the same way, and texts
+  are marked for translation (no translations ship yet).
 - A question or message that comes before any page (for example from
   "Install", "Uninstall" or "Update" in the menu) shows as a small window of
   its own size, which grows into the main window when the first page comes.
 - Closing the window answers the current page as "cancelled", as before. It
   never stops a fix that is being applied.
-- Esc goes back or cancels and Enter does the page's main action on every
-  page. Enter in a text field stays with that field, and Enter on a focused
-  button presses that button.
-- The pages were reworked to one layout: a header, the content, and a footer
-  with one main button; they can be used with the keyboard alone and name
-  their controls for screen readers.
+- Enter does the page's main action and Esc goes back or cancels on every
+  page, except that Esc does nothing on the result page (going back from a
+  check must not end the run). Enter in a text field stays with that field,
+  and Enter on a focused button presses that button. A page that has just
+  appeared ignores keys and clicks for a moment, and a held-down key never
+  answers anything, so a key meant for one page cannot answer the next.
 - Changing the theme in Settings switches the open window at once.
 - CI uploads ShellCheck and Scorecard results to code scanning on pull
   requests, so the `Protect main` ruleset can pass without an administrator

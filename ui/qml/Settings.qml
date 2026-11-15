@@ -1,4 +1,6 @@
-// Security Check - settings page (Kirigami). The release check runs here, as
+// Security Check - settings, a page of the main window. finished({action,
+// theme, update_check}) answers, with action "save" or "update"; the root
+// side validates it. The release check runs here, as
 // the desktop user; installing an update is done by the root side of the
 // tool, which verifies the release's signature and checksums first.
 import QtQuick
@@ -57,6 +59,7 @@ Item {
     }
     function primary() { save("save") }
     function dismiss() { page.cancelled() }
+    function initialFocus() { return mainButton }
 
     Component.onCompleted: if (input.check_now) check()
 
@@ -238,7 +241,7 @@ Item {
 
         FooterBar {
             QQC2.Button { text: qsTr("Cancel"); icon.name: "dialog-cancel"; onClicked: page.dismiss() }
-            PrimaryButton { text: qsTr("Save"); icon.name: "document-save"; onClicked: page.primary() }
+            PrimaryButton { id: mainButton; text: qsTr("Save"); icon.name: "document-save"; onClicked: page.primary() }
         }
     }
 

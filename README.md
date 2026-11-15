@@ -72,10 +72,11 @@ install updates from Settings → Updates (or `--update`): a new release is
 installed only after its signature and checksums are verified. `--uninstall`
 removes the app; reports, history and undo steps are kept.
 
-The setup wizard, the dashboard and Settings are pages of one Kirigami
-(Plasma) window when PySide6 and Kirigami are installed, as on Bazzite's KDE
-images; Settings chooses the theme of Security Check's window (follow the
-system, light or dark).
+The setup wizard, the dashboard, the fixes and Settings are pages of one
+Kirigami (Plasma) window when PySide6 and Kirigami are installed, as on
+Bazzite's KDE images; without them, or if that window fails, the same
+questions come as kdialog windows or on the terminal. Settings chooses the
+theme of Security Check's window (follow the system, light or dark).
 
 For a background check once a week (report only, with a notification), add
 `--install-timer`.
@@ -98,7 +99,7 @@ For a background check once a week (report only, with a notification), add
 
 ## What a fix can affect
 
-Fixes that touch a Bazzite feature say so, in the fix list, the Apply dialog, each check's page and the report. For each one it says how the fix touches it (**stops it**, **changes it**, **you choose** in the fix, **helps it**, or **left as it is** when only the manual steps would change it) and whether this PC uses it, for example *"in use here: Steam is installed"*.
+Fixes that touch a Bazzite feature say so, in the fix list, the "Apply this fix?" page, each check's page and the report. For each one it says how the fix touches it (**stops it**, **changes it**, **you choose** in the fix, **helps it**, or **left as it is** when only the manual steps would change it) and whether this PC uses it, for example *"in use here: Steam is installed"*.
 
 | Feature | Checks that can touch it | How "in use" is detected |
 | --- | --- | --- |

@@ -33,6 +33,33 @@ log() {
     printf '%s %s\n' "$(date '+%H:%M:%S')" "$1" >> "$RUN_LOG" 2>/dev/null || true
 }
 
+# _log_foreign PREFIX TEXT — append what a program of another account wrote
+# (the window's stderr, the output of an undo step that runs as the user)
+# to the run log. Such a program never gets the log file itself: it could
+# cut it, fill the disk, or add lines that look like this tool's own. Every
+# line is cut to _LOG_FOREIGN_LINE bytes and starts with the time and
+# PREFIX; control characters are removed and bytes outside ASCII become
+# "?"; at most _LOG_FOREIGN_LINES lines of TEXT are taken.
+_LOG_FOREIGN_LINE=2000
+_LOG_FOREIGN_LINES=200
+_log_foreign() {
+    [[ -n "${RUN_LOG:-}" && -n "$2" ]] || return 0
+    local LC_ALL=C line n=0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if (( ++n > _LOG_FOREIGN_LINES )); then
+            printf '%(%H:%M:%S)T %s(more lines were dropped)\n' -1 "$1" >> "$RUN_LOG" 2>/dev/null || true
+            break
+        fi
+        line=${line:0:_LOG_FOREIGN_LINE}
+        line=${line//$'\t'/ }
+        line=${line//[[:cntrl:]]/}
+        line=${line//[^ -~]/?}
+        [[ -n "$line" ]] || continue
+        printf '%(%H:%M:%S)T %s%s\n' -1 "$1" "$line" >> "$RUN_LOG" 2>/dev/null || true
+    done <<< "$2"
+    return 0
+}
+
 # ====================== ESCAPING ======================
 # _json_str TEXT — TEXT as a JSON string literal (with quotes).
 _json_str() {

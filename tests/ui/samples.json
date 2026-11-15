@@ -1,0 +1,486 @@
+{
+ "wizard": {
+  "facts": {
+   "os": "Bazzite 45 (Kinoite)",
+   "image": "bazzite:stable",
+   "hardware": "Desktop, AMD Ryzen 7, Radeon RX 7800",
+   "disk": "no",
+   "last": "3 days ago · score 64 (D)"
+  },
+  "detected": {
+   "gaming": "Steam is installed",
+   "streaming": "Sunshine is installed"
+  },
+  "answers": {
+   "use": [
+    "gaming",
+    "streaming"
+   ],
+   "fix": true,
+   "deep": false,
+   "report_dir": "/home/player/Documents/bazzite-security-check"
+  }
+ },
+ "dashboard": {
+  "score": 72,
+  "score_was": 64,
+  "grade": "C",
+  "host": "living-room-pc",
+  "os": "Bazzite 45 (Kinoite)",
+  "image": "bazzite:stable",
+  "use": "Gaming, Game streaming",
+  "depth": "Standard",
+  "open": {
+   "high": 2,
+   "medium": 2,
+   "low": 4,
+   "info": 1
+  },
+  "fixed": 2,
+  "verified": 2,
+  "fixed_reboot": 1,
+  "reboot_reasons": "Sunshine autostart was removed",
+  "prev": true,
+  "gone": 3,
+  "new": 1,
+  "new_titles": "Flatpak app with full home access",
+  "nfix": 5,
+  "undo": true,
+  "keep": true,
+  "kept": 1,
+  "areas": [
+   {
+    "name": "System",
+    "state": "ok"
+   },
+   {
+    "name": "Apps",
+    "state": "warn"
+   },
+   {
+    "name": "Boot",
+    "state": "bad"
+   },
+   {
+    "name": "Kernel",
+    "state": "ok"
+   },
+   {
+    "name": "Network",
+    "state": "bad"
+   },
+   {
+    "name": "Accounts",
+    "state": "ok"
+   },
+   {
+    "name": "Desktop",
+    "state": "warn"
+   },
+   {
+    "name": "Dev & gaming",
+    "state": "ok"
+   }
+  ],
+  "checks": [
+   {
+    "id": "check_image",
+    "title": "Image signature",
+    "area": "System",
+    "state": "ok",
+    "affects": "",
+    "summary": "Signed image, verified"
+   },
+   {
+    "id": "check_updates",
+    "title": "System updates",
+    "area": "System",
+    "state": "ok",
+    "affects": "",
+    "summary": "Up to date"
+   },
+   {
+    "id": "check_layered",
+    "title": "Layered packages and overrides",
+    "area": "System",
+    "state": "ok",
+    "affects": "",
+    "summary": "None"
+   },
+   {
+    "id": "check_flatpak_updates",
+    "title": "Flatpak updates and remotes",
+    "area": "Apps",
+    "state": "ok",
+    "affects": "",
+    "summary": "Up to date"
+   },
+   {
+    "id": "check_flatpak_perms",
+    "title": "Flatpak app permissions",
+    "area": "Apps",
+    "state": "warn",
+    "affects": "Flatpak apps",
+    "summary": "2 low"
+   },
+   {
+    "id": "check_secureboot",
+    "title": "Secure Boot",
+    "area": "Boot",
+    "state": "bad",
+    "affects": "",
+    "summary": "1 high"
+   },
+   {
+    "id": "check_luks",
+    "title": "Disk encryption",
+    "area": "Boot",
+    "state": "bad",
+    "affects": "",
+    "summary": "1 medium"
+   },
+   {
+    "id": "check_selinux",
+    "title": "SELinux",
+    "area": "Kernel",
+    "state": "ok",
+    "affects": "",
+    "summary": "Enforcing"
+   },
+   {
+    "id": "check_firewall",
+    "title": "Firewall",
+    "area": "Network",
+    "state": "bad",
+    "affects": "Steam Remote Play, KDE Connect",
+    "summary": "1 high, 1 medium, 1 low"
+   },
+   {
+    "id": "check_listening",
+    "title": "Services reachable from the network",
+    "area": "Network",
+    "state": "warn",
+    "affects": "",
+    "summary": "1 low"
+   },
+   {
+    "id": "check_ssh",
+    "title": "SSH server",
+    "area": "Network",
+    "state": "na",
+    "affects": "",
+    "summary": "Not applicable: the SSH server is off"
+   },
+   {
+    "id": "check_accounts",
+    "title": "User accounts and passwords",
+    "area": "Accounts",
+    "state": "ok",
+    "affects": "",
+    "summary": "No problems"
+   },
+   {
+    "id": "check_sudo",
+    "title": "sudo rules",
+    "area": "Accounts",
+    "state": "fixed",
+    "affects": "",
+    "summary": "1 fixed"
+   },
+   {
+    "id": "check_lock",
+    "title": "Screen locking",
+    "area": "Desktop",
+    "state": "warn",
+    "affects": "Controller-only play and videos",
+    "summary": "1 low"
+   },
+   {
+    "id": "check_docker",
+    "title": "Docker and containers",
+    "area": "Dev & gaming",
+    "state": "ok",
+    "affects": "",
+    "summary": "No problems"
+   },
+   {
+    "id": "check_sunshine",
+    "title": "Game streaming (Sunshine)",
+    "area": "Dev & gaming",
+    "state": "reboot",
+    "affects": "",
+    "summary": "1 fixed, restart needed"
+   }
+  ]
+ },
+ "check": {
+  "id": "check_firewall",
+  "title": "Firewall",
+  "area": "Network",
+  "state": "bad",
+  "summary": "1 high, 1 medium, 1 low",
+  "notes": [
+   "firewalld is running; default zone: trusted",
+   "Open ports: 27036/tcp, 27037/tcp, 8080/tcp, 5353/udp"
+  ],
+  "findings": [
+   {
+    "id": "12",
+    "sev": "high",
+    "title": "The firewall zone accepts connections from any device on the network",
+    "status": "Open",
+    "now": "Zone: trusted (everything allowed)",
+    "after": "Zone: public (only chosen services)",
+    "after_label": "After the fix",
+    "detail": "The default zone is 'trusted', so every service on this PC can be\nreached from any device on the same network.\n\n- at home this is usually fine\n- on other networks it is not",
+    "affects": [
+     {
+      "name": "Steam Remote Play and LAN game transfers",
+      "how": "stops it",
+      "where": "can't be told: Steam is installed",
+      "status": "unknown",
+      "mark": "!",
+      "stops": true,
+      "sentence": "Other devices can no longer find this PC for Remote Play until the ports are opened again."
+     },
+     {
+      "name": "KDE Connect",
+      "how": "stops it",
+      "where": "in use here: KDE Connect is installed",
+      "status": "in",
+      "mark": "!",
+      "stops": true,
+      "sentence": "Phones can no longer pair with this PC."
+     },
+     {
+      "name": "Finding printers and devices (mDNS)",
+      "how": "left as it is",
+      "where": "not in use here",
+      "status": "out",
+      "mark": "=",
+      "stops": false,
+      "sentence": "Port 5353 stays open."
+     }
+    ],
+    "warnings": [
+     {
+      "tag": "Feature",
+      "text": "Stops KDE Connect, which this PC uses."
+     },
+     {
+      "tag": "Reboot",
+      "text": "Takes effect after a restart."
+     }
+    ],
+    "manual": "sudo firewall-cmd --set-default-zone=public\nsudo firewall-cmd --reload",
+    "fixable": true,
+    "on": false
+   },
+   {
+    "id": "13",
+    "sev": "medium",
+    "title": "3 ports are open that nothing listens on",
+    "status": "Open",
+    "now": "27036/tcp, 27037/tcp, 8080/tcp",
+    "after": "closed",
+    "after_label": "After the fix",
+    "detail": "Open ports that no program uses can be closed.",
+    "affects": [],
+    "warnings": [],
+    "manual": "sudo firewall-cmd --permanent --remove-port=8080/tcp",
+    "fixable": true,
+    "on": true
+   },
+   {
+    "id": "14",
+    "sev": "low",
+    "title": "LLMNR name lookups are on",
+    "status": "Kept on purpose",
+    "now": "LLMNR=yes",
+    "after": "LLMNR=no",
+    "after_label": "Goal",
+    "detail": "Windows PCs find this PC by name with LLMNR.",
+    "affects": [],
+    "warnings": [],
+    "manual": "",
+    "fixable": false,
+    "on": false
+   }
+  ]
+ },
+ "choose": {
+  "title": "Choose the Flatpak permissions to remove",
+  "intro": "Each app keeps working, but may ask for a file or folder when it needs one.",
+  "allow_none": true,
+  "note_nothing_yet": true,
+  "low_only": true,
+  "ok": "Continue",
+  "items": [
+   {
+    "tag": "a",
+    "label": "Discord",
+    "detail": "Full access to your home folder",
+    "risk": "low",
+    "warn": "",
+    "on": true
+   },
+   {
+    "tag": "b",
+    "label": "OBS Studio",
+    "detail": "Full access to all files",
+    "risk": "medium",
+    "warn": "Recordings saved outside Videos need the folder to be picked again.",
+    "on": true
+   },
+   {
+    "tag": "c",
+    "label": "Steam",
+    "detail": "Access to all devices",
+    "risk": "high",
+    "warn": "Controllers and VR headsets may stop working in games.",
+    "on": false
+   },
+   {
+    "tag": "d",
+    "label": "Lutris",
+    "detail": "Full access to your home folder",
+    "risk": "medium",
+    "warn": "",
+    "on": false
+   }
+  ]
+ },
+ "confirm": {
+  "sev": "high",
+  "title": "The firewall zone accepts connections from any device on the network",
+  "now": "Zone: trusted (everything allowed)",
+  "after": "Zone: public (only chosen services)",
+  "detail": "The default zone is 'trusted', so every service on this PC can be\nreached from any device on the same network.\n\n- at home this is usually fine\n- on other networks it is not",
+  "affects": [
+   {
+    "name": "Steam Remote Play and LAN game transfers",
+    "how": "stops it",
+    "where": "can't be told: Steam is installed",
+    "status": "unknown",
+    "mark": "!",
+    "stops": true,
+    "sentence": "Other devices can no longer find this PC for Remote Play until the ports are opened again."
+   },
+   {
+    "name": "KDE Connect",
+    "how": "stops it",
+    "where": "in use here: KDE Connect is installed",
+    "status": "in",
+    "mark": "!",
+    "stops": true,
+    "sentence": "Phones can no longer pair with this PC."
+   },
+   {
+    "name": "Finding printers and devices (mDNS)",
+    "how": "left as it is",
+    "where": "not in use here",
+    "status": "out",
+    "mark": "=",
+    "stops": false,
+    "sentence": "Port 5353 stays open."
+   }
+  ],
+  "warnings": [
+   {
+    "tag": "Feature",
+    "text": "Stops KDE Connect, which this PC uses."
+   },
+   {
+    "tag": "Reboot",
+    "text": "Takes effect after a restart."
+   }
+  ],
+  "commands": "firewall-cmd --set-default-zone=public\nfirewall-cmd --reload",
+  "undo": true,
+  "note": "Open ports you chose earlier stay open."
+ },
+ "dialog": {
+  "kind": "warningyesno",
+  "title": "Undo a change?",
+  "html": "<p><b>Firewall zone</b> was changed 3 days ago.</p><p>Undo sets it back to <tt>trusted</tt>.</p>",
+  "details": "firewall-cmd --set-default-zone=trusted\nfirewall-cmd --reload",
+  "buttons": [
+   {
+    "label": "Cancel",
+    "icon": "dialog-cancel"
+   },
+   {
+    "label": "Undo",
+    "icon": "edit-undo"
+   }
+  ],
+  "items": []
+ },
+ "dialog-message": {
+  "kind": "msgbox",
+  "title": "Security Check",
+  "html": "<p>Security Check is installed. Start it from the application menu (System → Security Check) or with the command <tt>bazzite-sec-audit</tt>.</p><p>Updates: Settings → Updates installs new releases.</p>",
+  "details": "",
+  "buttons": [
+   {
+    "label": "OK"
+   }
+  ],
+  "items": []
+ },
+ "dialog-error": {
+  "kind": "error",
+  "title": "Could not reach GitHub",
+  "html": "<p>Could not reach GitHub to look for an update. Check the network and try again.</p>",
+  "details": "",
+  "buttons": [
+   {
+    "label": "OK"
+   }
+  ],
+  "items": []
+ },
+ "dialog-list": {
+  "kind": "menu",
+  "title": "What next?",
+  "html": "<p>Choose what to do with the 5 problems that have a fix.</p>",
+  "details": "",
+  "buttons": [
+   {
+    "label": "Cancel"
+   },
+   {
+    "label": "Continue"
+   }
+  ],
+  "items": [
+   {
+    "tag": "fix",
+    "label": "Choose fixes",
+    "detail": "Pick from a list; each one is confirmed",
+    "risk": "",
+    "warn": ""
+   },
+   {
+    "tag": "report",
+    "label": "Open the report",
+    "detail": "HTML report in your browser",
+    "risk": "",
+    "warn": ""
+   },
+   {
+    "tag": "undo",
+    "label": "Undo earlier changes",
+    "detail": "2 changes can be undone",
+    "risk": "",
+    "warn": ""
+   }
+  ]
+ },
+ "settings": {
+  "version": "1.5.0",
+  "repo": "example-org/security-check",
+  "theme": "system",
+  "update_check": "1"
+ }
+}

@@ -20,11 +20,16 @@ This project is focused on Bazzite desktop and related Fedora Atomic images. Con
 3. Run:
    - `make lint`
    - `make test` only in a disposable VM/container, because the smoke test creates a throwaway user and needs root.
+   - `make test-ui` if you changed the GUI (see below).
 4. If you add or change reporting output, check that it remains readable and safe to share.
 
 ## Tests
 
-New functionality comes with tests. A change that adds a check, a fix, an option or a window, or that changes what one of them does, adds or updates tests in `tests/smoke.sh` in the same pull request. A bug fix adds a test that fails without the fix. Pull requests without them are not merged, unless the change cannot be tested there (documentation, CI configuration), and then the pull request says so.
+New functionality comes with tests. A change that adds a check, a fix, an option or a window, or that changes what one of them does, adds or updates tests in `tests/smoke.sh` (and, for the GUI, `tests/ui-offscreen.py`) in the same pull request. A bug fix adds a test that fails without the fix. Pull requests without them are not merged, unless the change cannot be tested there (documentation, CI configuration), and then the pull request says so.
+
+## Working on the GUI
+
+The windows are `ui/app.py` (PySide6) and the pages in `ui/qml/` (Kirigami). [`docs/ui.md`](docs/ui.md) describes how the root side and the window talk, what a page must provide, and how to add one or try one without root. A change to a page, to `ui/app.py` or to the window runs `make test-ui`, which needs no root and no display, and adds or updates checks in `tests/ui-offscreen.py`.
 
 ## Issue reports
 

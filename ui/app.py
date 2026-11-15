@@ -1,11 +1,13 @@
 #!/usr/bin/python3 -I
-# Security Check - the Kirigami front end (wizard, settings, tray icon).
+# Security Check - the Kirigami front end: the seven pages of the tool
+# (wizard, settings, dashboard, check, choose, confirm, dialog) in one
+# window, and the scan's progress window with its tray icon.
 #
 # Runs as the desktop user, never as root. The root side of the tool starts
-# it with a JSON description of what to show on stdin, and reads the
-# person's answers as one JSON object on stdout; the root side validates
-# every value it takes from it. Exit status 0: answered, 1: cancelled,
-# 3: this front end cannot run here (the caller falls back to kdialog).
+# it, tells it in JSON what to show, and reads the person's answers as
+# JSON; the root side validates every value it takes from it. What this
+# program writes to stderr, the root side reads through a pipe and copies
+# (cut to size, marked "ui:") into its run log.
 #
 # Every page is shown in ONE window (qml/Shell.qml), which stays open for
 # the whole run of the tool:
@@ -16,9 +18,11 @@
 #           without a JSON parser):
 #           {"id":"ID","status":0|1|3,"answer":...}
 #           0 answered, 1 cancelled or closed, 3 the page could not be shown.
-#           A line that is not a request gets {"id":"","status":3,...}.
 #       {"busy": "LABEL"}       nothing to answer: the last page stays, dimmed,
-#                               with a spinner and LABEL ("" for "Working…")
+#                               with a spinner and LABEL. "" does not ask for
+#                               the spinner: it only puts the spinner's usual
+#                               text ("Working…") back and, if the progress
+#                               window is open, closes it.
 #       {"progress": "start", "heading": "..."}   the scan: the window makes
 #       {"progress": "set", "line": "..."}        way for the small progress
 #       {"progress": "stop"}                      window and its tray icon,
@@ -26,10 +30,18 @@
 #                               line is the one "app.py progress" takes)
 #       {"theme": "system|light|dark"}            switch colours
 #       {"quit": true}          leave (as EOF does)
+#     Any other line (not JSON, not an object, an object with none of these
+#     keys, a page request without a usable id), and any line whose handling
+#     fails here, is answered by {"id":"","status":3,"answer":null} - with
+#     the request's id instead of "" when it had a usable one.
 #     Nothing is loaded and no window exists before the first line arrives.
+#     Exit status 0; 3 when Qt or the window could not be loaded (the root
+#     side does not read it: it sees the answer pipe close).
 #
-# The same window for one page (also what the root side uses when the
-# long-lived front end is not running):
+# One page in a window of its own, and the progress window alone. The root
+# side uses these when it could not make the two pipes for "serve"; and
+# they are what an installed 1.5.0 root side calls while it updates itself
+# to this version, so they must stay:
 #
 #   app.py wizard    < {"facts": ..., "detected": ..., "answers": ...}
 #   app.py settings  < {"version": ..., "theme": ..., "repo": ...}
@@ -38,14 +50,22 @@
 #   app.py choose    < {"title": ..., "intro": ..., "items": [{tag, label, ...}]}
 #   app.py confirm   < {"title": ..., "now": ..., "commands": ..., ...}
 #   app.py dialog    < {"kind": ..., "title": ..., "html": ..., "buttons": [...]}
-#   app.py progress  < {"heading": ...}, then progress lines until EOF:
-#                      "PERCENT<TAB>SLOW<TAB>LABEL<TAB>DETAIL" (PERCENT "-"
-#                      for no steps, SLOW 1 for a long step); a window and a
-#                      tray icon show them
+#       The answer is one JSON value on stdout. Exit status 0: answered,
+#       1: cancelled, 2: bad input, 3: this front end cannot run here (the
+#       caller falls back to kdialog).
+#   app.py progress  < {"heading": ...}, then progress lines until EOF or a
+#                      line "QUIT": "PERCENT<TAB>SLOW<TAB>LABEL<TAB>DETAIL"
+#                      (PERCENT "-" for no steps, SLOW 1 for a long step); a
+#                      window and a tray icon show them. Exit status 0, or 3.
+#
 #   app.py theme-dir THEME   prints a config folder whose kdeglobals uses
 #                            THEME's colours (for kdialog: XDG_CONFIG_HOME)
+#
+# In every mode it leaves when the root side has gone without saying so
+# (see _Owner).
 import json
 import os
+import select
 import sys
 
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -53,9 +73,19 @@ SCHEMES = {"light": "BreezeLight", "dark": "BreezeDark"}
 PAGES = {"wizard": "Wizard.qml", "settings": "Settings.qml", "dashboard": "Dashboard.qml",
          "check": "Check.qml", "choose": "Choose.qml", "confirm": "Confirm.qml", "dialog": "Dialog.qml"}
 MODES = tuple(PAGES) + ("progress", "serve")
-# For the tests only: a folder to take the page files from, and a function
-# called with (app, shell window, front end) once the window exists.
-PAGE_DIR = os.environ.get("BSA_UI_PAGES") or os.path.join(HERE, "qml")
+KEYS = ("quit", "theme", "progress", "busy", "mode")    # what a "serve" line may hold
+
+# The test interface (tests/ui-offscreen.py); nothing else may set these,
+# and there is no environment variable for them:
+#   PAGE_DIR    the folder the seven page files (PAGES) are loaded from. A
+#               test sets module.PAGE_DIR = "..." before it calls main().
+#               Shell.qml and Progress.qml are NOT taken from it: they are
+#               always loaded from the qml folder next to this file.
+#   TEST_HOOK   called as TEST_HOOK(app, shell, host) once the QApplication
+#               and the Shell root object exist, before the event loop runs
+#               (shell is None in "progress" mode, which has no Shell).
+#   main()      reads sys.argv and returns the exit status.
+PAGE_DIR = os.path.join(HERE, "qml")
 TEST_HOOK = None
 
 
@@ -148,6 +178,50 @@ def _theme_dir(theme):
     return 0
 
 
+class _Owner:
+    """Is the root side still there? Normally it says "quit" or closes the
+    pipe. But its other child processes hold copies of the pipe, so when it
+    is killed outright there may be no EOF for a long time. Two checks:
+    - the parent of this process (runuser, which the root side starts in a
+      session of its own and which waits for this process) has changed;
+    - the tool's main shell, whose process id the root side passes in
+      BSA_OWNER_PID, is no longer there (same id and same start time)."""
+
+    def __init__(self):
+        self.ppid = os.getppid()
+        self.pid = self.start = None
+        try:
+            pid = int(os.environ.get("BSA_OWNER_PID", ""))
+        except ValueError:
+            pid = 0
+        if pid > 1:
+            self.pid, self.start = pid, self._start_time(pid)
+
+    @staticmethod
+    def _start_time(pid):
+        """Field 22 of /proc/PID/stat; None when it cannot be read."""
+        try:
+            with open("/proc/%d/stat" % pid, "rb") as f:
+                return f.read().rpartition(b")")[2].split()[19]
+        except (OSError, IndexError):
+            return None
+
+    def gone(self):
+        if self.ppid > 1 and os.getppid() != self.ppid:
+            return True
+        if self.pid is None:
+            return False
+        if self.start is not None:
+            return self._start_time(self.pid) != self.start
+        try:
+            os.kill(self.pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            pass                    # not ours to signal: it is there
+        return False
+
+
 class _Lines:
     """Lines from a descriptor, read without Python's buffering."""
 
@@ -166,16 +240,70 @@ class _Lines:
         *lines, self.buf = self.buf.split(b"\n")
         return [line.decode("utf-8", "replace") for line in lines]
 
-    def first(self):
-        """The first line (waits for it); None when there is none. Lines
-        that came with it are kept in .pending."""
+    def first(self, owner):
+        """The first line (waits for it, as long as OWNER is there); None
+        when there is none. Lines that came with it are kept in .pending."""
         while not self.eof:
+            try:
+                ready = select.select([self.fd], [], [], OWNER_CHECK_MS / 1000)[0]
+            except (OSError, ValueError):
+                ready = [self.fd]
+            if not ready:
+                if owner.gone():
+                    return None
+                continue
             lines = self.more()
             if lines:
                 self.pending = lines[1:]
                 return lines[0]
         rest, self.buf = self.buf, b""
         return rest.decode("utf-8", "replace") if rest else None
+
+
+OWNER_CHECK_MS = 2000
+
+
+def _say(text=None):
+    """A line for the run log (stderr); without TEXT, the traceback of the
+    exception being handled."""
+    try:
+        if text is None:
+            import traceback
+            traceback.print_exc()
+        else:
+            print(text, file=sys.stderr, flush=True)
+    except Exception:
+        pass                        # the root side stopped reading stderr
+
+
+def _write_all(fd, data):
+    while data:
+        data = data[os.write(fd, data):]
+
+
+def _qml_url(folder, name):
+    from PySide6.QtCore import QUrl
+    return QUrl.fromLocalFile(os.path.join(folder, name)).toString()
+
+
+def _page_url(page):
+    """Where the page file of PAGE (a key of PAGES) is."""
+    return _qml_url(PAGE_DIR, PAGES[page])
+
+
+def _heading(msg):
+    """The heading for the progress window in a message ("" if none)."""
+    heading = msg.get("heading")
+    return heading if isinstance(heading, str) else ""
+
+
+def _request_id(msg):
+    """The id of a page request, "" if it has none that can be used."""
+    rid = msg.get("id") if isinstance(msg, dict) else None
+    if isinstance(rid, str) and 0 < len(rid) <= 64 \
+       and all(c.isascii() and (c.isalnum() or c in "-_") for c in rid):
+        return rid
+    return ""
 
 
 def main():
@@ -185,10 +313,12 @@ def main():
         print("usage: app.py %s|theme-dir light|dark" % "|".join(MODES), file=sys.stderr)
         return 2
     mode = sys.argv[1]
+    owner = _Owner()
     # The two pipes to the root side are moved away from stdin and stdout:
     # a program this one starts (a KDE helper) must not get a copy, or the
     # root side would still wait for an answer after a crash here; and
-    # nothing a library prints can end up among the answers.
+    # nothing a library prints can end up among the answers (it goes to
+    # stderr instead).
     rfd, wfd = os.dup(0), os.dup(1)
     null = os.open(os.devnull, os.O_RDONLY)
     os.dup2(null, 0)
@@ -199,71 +329,118 @@ def main():
         pass
     reader = _Lines(rfd)
     # Waits here: no Qt, no window, before the root side asks for one.
-    first = reader.first()
+    first = reader.first(owner)
     if mode == "serve":
-        return 0 if first is None else _gui(mode, first, reader, wfd)
+        if first is None or _is_quit(first):
+            return 0                # nothing was ever shown: no Qt needed
+        return _run(mode, first, reader, wfd, owner)
     try:
         data = json.loads(first or "{}")
     except ValueError:
         return 2
     if not isinstance(data, dict):
         return 2
-    return _gui(mode, data, reader, wfd)
+    return _run(mode, data, reader, wfd, owner)
 
 
-def _gui(mode, first, reader, wfd):
-    """mode "serve": pages as the root side asks for them (FIRST is its
-    first line); "progress": the progress window alone, fed progress lines;
-    else that one page with FIRST as its input."""
-    os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "org.kde.desktop")
+def _is_quit(line):
     try:
-        from PySide6.QtCore import QObject, QSocketNotifier, QTimer, QUrl, Signal, Slot
-        from PySide6.QtGui import QIcon, QPalette
-        from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+        msg = json.loads(line)
+    except ValueError:
+        return False
+    return isinstance(msg, dict) and bool(msg.get("quit"))
+
+
+class _Ui:
+    """The Qt application: its name, icon and colours, the QML engine, and
+    (not in "progress" mode) the one window, Shell.qml, with its host."""
+
+    def __init__(self, on_reply):
+        from PySide6.QtGui import QIcon
         from PySide6.QtQml import QQmlApplicationEngine
-    except ImportError:
-        return 3
+        from PySide6.QtWidgets import QApplication
+        app = self.app = QApplication(sys.argv[:1])
+        if _scheme_path(os.environ.get("BSA_THEME", "system")):
+            self.set_theme(os.environ["BSA_THEME"])
+        app.setApplicationName("bazzite-security-check")
+        app.setApplicationDisplayName("Security Check")
+        app.setDesktopFileName("bazzite-security-check")
+        icon = QIcon.fromTheme("bazzite-security-check")
+        if icon.isNull():
+            icon = QIcon(os.path.join(HERE, "icons", "bazzite-security-check.svg"))
+        app.setWindowIcon(icon)
+        # The window is hidden while the scan's progress shows, and closing it
+        # only answers "cancelled": this process ends when the root side says so.
+        app.setQuitOnLastWindowClosed(False)
+        self.icon_url = _qml_url(os.path.join(HERE, "icons"), "bazzite-security-check.svg")
+        self.engine = QQmlApplicationEngine()
+        self.host = _make_host(on_reply)
+        self.shell = None
 
-    app = QApplication(sys.argv[:1])
-
-    def set_theme(theme):
+    def set_theme(self, theme):
+        from PySide6.QtGui import QPalette
         scheme = _scheme_path(theme)
         # KDE's colour code (and so Kirigami) reads the scheme from this
         # application property, as KColorSchemeManager sets it.
-        app.setProperty("KDE_COLOR_SCHEME_PATH", scheme or "")
-        app.setPalette(_palette(scheme) if scheme else QPalette())
+        self.app.setProperty("KDE_COLOR_SCHEME_PATH", scheme or "")
+        self.app.setPalette(_palette(scheme) if scheme else QPalette())
 
-    if _scheme_path(os.environ.get("BSA_THEME", "system")):
-        set_theme(os.environ["BSA_THEME"])
-    app.setApplicationName("bazzite-security-check")
-    app.setApplicationDisplayName("Security Check")
-    app.setDesktopFileName("bazzite-security-check")
-    icon = QIcon.fromTheme("bazzite-security-check")
-    if icon.isNull():
-        icon = QIcon(os.path.join(HERE, "icons", "bazzite-security-check.svg"))
-    app.setWindowIcon(icon)
-    # The window is hidden while the scan's progress shows, and closing it
-    # only answers "cancelled": this process ends when the root side says so.
-    app.setQuitOnLastWindowClosed(False)
-    icon_url = QUrl.fromLocalFile(os.path.join(HERE, "icons", "bazzite-security-check.svg")).toString()
-    engine = QQmlApplicationEngine()
-    result = {"status": None, "answer": None}
+    def load(self, name, properties):
+        """The root object of qml/NAME (always the one next to this file),
+        None if it cannot be loaded."""
+        before = len(self.engine.rootObjects())
+        self.engine.setInitialProperties(properties)
+        self.engine.load(_qml_url(os.path.join(HERE, "qml"), name))
+        roots = self.engine.rootObjects()
+        return roots[-1] if len(roots) > before else None
 
-    def send(rid, status, answer):
-        """One answer line for the root side, always in this exact form."""
-        try:
-            text = json.dumps(answer)
-        except (TypeError, ValueError):
-            status, text = 3, "null"
-        line = ('{"id":%s,"status":%d,"answer":%s}\n' % (json.dumps(rid), status, text)).encode()
-        try:
-            while line:
-                line = line[os.write(wfd, line):]
-        except OSError:
-            app.quit()      # the root side has gone
+    def load_shell(self):
+        self.shell = self.load("Shell.qml", {"host": self.host, "iconSource": self.icon_url})
+        return self.shell is not None
+
+    def feed(self, reader, on_line, begin, owner):
+        """Run the event loop: BEGIN() first, then ON_LINE(line) for every
+        line READER gets (those that came with the first one too), until
+        something calls app.quit(), the input ends or OWNER has gone.
+        BEGIN returns False when no lines are to be read."""
+        from PySide6.QtCore import QSocketNotifier, QTimer
+        app = self.app
+
+        def readable():
+            for line in reader.more():
+                on_line(line)
+            if reader.eof:
+                notifier.setEnabled(False)
+                app.quit()
+
+        def start():
+            if begin() is False:
+                return
+            for line in reader.pending:
+                on_line(line)
+            if reader.eof:
+                return app.quit()
+            notifier.setEnabled(True)
+
+        notifier = QSocketNotifier(reader.fd, QSocketNotifier.Read)
+        notifier.setEnabled(False)
+        notifier.activated.connect(readable)
+        watch = QTimer()
+        watch.timeout.connect(lambda: app.quit() if owner.gone() else None)
+        watch.start(OWNER_CHECK_MS)
+        # Inside the event loop, so that a "quit" in the first lines works.
+        QTimer.singleShot(0, start)
+        if TEST_HOOK:
+            TEST_HOOK(app, self.shell, self.host)
+        app.exec()
+
+
+def _make_host(on_reply):
+    """What Shell.qml sees: what to show, and reply() to answer, which
+    calls ON_REPLY(id, status, answer)."""
+    from PySide6.QtCore import QObject, Signal, Slot
 
     class Host(QObject):
-        """What Shell.qml sees: what to show, and reply() to answer."""
         request = Signal(str, str, str, "QVariant")     # id, mode, page URL, input
         busy = Signal(str)                               # label ("" for the default)
         park = Signal(bool)                              # hidden while the progress window shows
@@ -272,189 +449,265 @@ def _gui(mode, first, reader, wfd):
         def reply(self, rid, status, answer):
             if hasattr(answer, "toVariant"):
                 answer = answer.toVariant()
-            if mode == "serve":
-                send(rid, status if status in (0, 1) else 3, answer if status == 0 else None)
-            else:
-                result["status"], result["answer"] = status, answer
-                app.quit()
+            on_reply(rid, status, answer)
 
-    host = Host()
-    shell = None
-    if mode != "progress":
-        engine.setInitialProperties({"host": host, "iconSource": icon_url})
-        engine.load(QUrl.fromLocalFile(os.path.join(HERE, "qml", "Shell.qml")))
-        if not engine.rootObjects():
-            return 3
-        shell = engine.rootObjects()[0]
+    return Host()
 
-    # ---- the scan's progress window and its tray icon ---------------------
-    prog = {"win": None, "tray": None, "status": None, "open": False}
 
-    def prog_show():
-        win = prog["win"]
-        win.show()
-        win.raise_()
-        win.requestActivate()
+class _Progress:
+    """The scan's progress window (qml/Progress.qml, made on first use) and
+    its tray icon, and the progress lines they show."""
 
-    def prog_start(heading):
-        """Show the progress window (made on first use); False if it cannot."""
-        if prog["win"] is None:
-            before = len(engine.rootObjects())
-            engine.setInitialProperties({"iconSource": icon_url})
-            engine.load(QUrl.fromLocalFile(os.path.join(HERE, "qml", "Progress.qml")))
-            if len(engine.rootObjects()) == before:
+    def __init__(self, ui):
+        self.ui = ui
+        self.win = self.tray = self.menu = self.status = None
+        self.open = False
+
+    def start(self, heading):
+        """Show the window with HEADING; False if it cannot be made."""
+        if self.win is None:
+            self.win = self.ui.load("Progress.qml", {"iconSource": self.ui.icon_url})
+            if self.win is None:
                 return False
-            prog["win"] = engine.rootObjects()[-1]
-            # The one-colour icon, which Plasma recolours for the panel.
-            sym = QIcon.fromTheme("bazzite-security-check-symbolic")
-            if sym.isNull():
-                sym = QIcon()
-                sym.addFile(os.path.join(HERE, "icons", "bazzite-security-check-symbolic.svg"))
-                sym.addFile(os.path.join(HERE, "icons", "22x22", "bazzite-security-check-symbolic.svg"))
-            if QSystemTrayIcon.isSystemTrayAvailable():
-                tray = prog["tray"] = QSystemTrayIcon(sym)
-                menu = prog["menu"] = QMenu()
-                prog["status"] = menu.addAction("Security Check is starting…")
-                prog["status"].setEnabled(False)
-                menu.addSeparator()
-                menu.addAction("Show progress", prog_show)
-                tray.setContextMenu(menu)
-                # A left click shows the window; a right click only opens the menu.
-                tray.activated.connect(lambda reason: prog_show()
-                                       if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
-                tray.setToolTip("Security Check")
-                prog["win"].setProperty("canHide", True)
+            self._make_tray()
         if heading:
-            prog["win"].setProperty("heading", heading[:160])
-        if prog["tray"]:
-            prog["tray"].show()
-        prog["open"] = True
-        prog_show()
+            self.win.setProperty("heading", heading[:160])
+        if self.tray:
+            self.tray.show()
+        self.open = True
+        self.show()
         return True
 
-    def prog_line(line):
-        f = line.split("\t")
-        while len(f) < 4:
-            f.append("")
-        pct, slow, label, detail = f[0], f[1] == "1", f[2][:160], f[3][:300]
-        if not prog["open"]:
-            # No progress window here: the main window's spinner says it.
-            host.busy.emit(label)
+    def _make_tray(self):
+        from PySide6.QtGui import QIcon
+        from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+        if not QSystemTrayIcon.isSystemTrayAvailable():
             return
-        win = prog["win"]
-        win.setProperty("percent", int(pct) if pct.isdigit() and int(pct) <= 100 else -1)
-        win.setProperty("slow", slow)
-        win.setProperty("label", label or "Working…")
-        win.setProperty("detail", detail)
-        if prog["tray"]:
-            tip = "Security Check: " + ("%s%% - " % pct if pct.isdigit() else "") + (label or "working")
-            prog["status"].setText(tip.replace("&", "&&"))
-            prog["tray"].setToolTip(tip)
+        # The one-colour icon, which Plasma recolours for the panel.
+        sym = QIcon.fromTheme("bazzite-security-check-symbolic")
+        if sym.isNull():
+            sym = QIcon()
+            sym.addFile(os.path.join(HERE, "icons", "bazzite-security-check-symbolic.svg"))
+            sym.addFile(os.path.join(HERE, "icons", "22x22", "bazzite-security-check-symbolic.svg"))
+        self.tray = QSystemTrayIcon(sym)
+        self.menu = QMenu()         # kept: the tray icon does not own it
+        self.status = self.menu.addAction("Security Check is starting…")
+        self.status.setEnabled(False)
+        self.menu.addSeparator()
+        self.menu.addAction("Show progress", self.show)
+        self.tray.setContextMenu(self.menu)
+        # A left click shows the window; a right click only opens the menu.
+        self.tray.activated.connect(
+            lambda reason: self.show() if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
+        self.tray.setToolTip("Security Check")
+        self.win.setProperty("canHide", True)
 
-    def prog_close():
-        if prog["open"]:
-            prog["open"] = False
-            prog["win"].hide()
-            if prog["tray"]:
-                prog["tray"].hide()
+    def show(self):
+        self.win.show()
+        self.win.raise_()
+        self.win.requestActivate()
 
-    # ---- what the root side sends ----------------------------------------
-    def bad():
-        send("", 3, None)
+    @staticmethod
+    def parse(line):
+        """(percent or -1, slow, label, detail) of a progress line."""
+        f = line.split("\t") + ["", "", ""]
+        pct = f[0]
+        ok = pct.isascii() and pct.isdigit() and len(pct) <= 3 and int(pct) <= 100
+        return (int(pct) if ok else -1), f[1] == "1", f[2][:160], f[3][:300]
 
-    def serve_line(line):
+    def line(self, line):
+        """Show a progress line; False when the window is not open."""
+        if not self.open:
+            return False
+        percent, slow, label, detail = self.parse(line)
+        self.win.setProperty("percent", percent)
+        self.win.setProperty("slow", slow)
+        self.win.setProperty("label", label or "Working…")
+        self.win.setProperty("detail", detail)
+        if self.tray:
+            tip = "Security Check: " + ("%d%% - " % percent if percent >= 0 else "") + (label or "working")
+            self.status.setText(tip.replace("&", "&&"))
+            self.tray.setToolTip(tip)
+        return True
+
+    def close(self):
+        if self.open:
+            self.open = False
+            self.win.hide()
+            if self.tray:
+                self.tray.hide()
+
+
+class _Serve:
+    """"app.py serve": what each line from the root side does. A line can
+    hold several of the keys; they are handled in the order of KEYS."""
+
+    def __init__(self, wfd):
+        self.wfd = wfd
+        self.ui = _Ui(self.reply)
+        self.progress = _Progress(self.ui)
+        self.host = self.ui.host
+
+    def send(self, rid, status, answer):
+        """One answer line for the root side, always in this exact form."""
+        try:
+            text = json.dumps(answer)
+        except (TypeError, ValueError):
+            status, text = 3, "null"
+        try:
+            _write_all(self.wfd, ('{"id":%s,"status":%d,"answer":%s}\n' % (json.dumps(rid), status, text)).encode())
+        except OSError:
+            self.ui.app.quit()      # the root side has gone
+
+    def reply(self, rid, status, answer):
+        """The page's answer (Host.reply)."""
+        self.send(rid, status if status in (0, 1) else 3, answer if status == 0 else None)
+
+    def line(self, line):
+        """One line from the root side. Whatever goes wrong with it, the
+        root side gets an answer: it must never wait for ever."""
         if not line.strip():
             return
         try:
             msg = json.loads(line)
         except ValueError:
-            return bad()
-        if not isinstance(msg, dict):
-            return bad()
-        if msg.get("quit"):
-            return app.quit()
-        if isinstance(msg.get("theme"), str):
-            set_theme(msg["theme"])
-        if "progress" in msg:
-            what = msg["progress"]
-            if what == "start":
-                heading = msg.get("heading")
-                if prog_start(heading if isinstance(heading, str) else ""):
-                    host.park.emit(True)
-                else:
-                    host.busy.emit("")
-            elif what == "set" and isinstance(msg.get("line"), str):
-                prog_line(msg["line"])
-            # "stop": the progress window stays (at "Done") until the next
-            # page or spinner is there, so there is never a moment with no
-            # window at all.
-        if isinstance(msg.get("busy"), str):
-            # A label asks for the spinner now; "" only puts the usual
-            # label back.
-            if msg["busy"] or prog["open"]:
-                prog_close()
-                host.park.emit(False)
-            host.busy.emit(msg["busy"][:200])
-        if "mode" in msg:
-            rid, page, data = msg.get("id"), msg.get("mode"), msg.get("data")
-            if not isinstance(rid, str) or not rid or len(rid) > 64 \
-               or not all(c.isascii() and (c.isalnum() or c in "-_") for c in rid):
-                return bad()
-            if page not in PAGES or not isinstance(data, dict):
-                return send(rid, 3, None)
-            prog_close()
-            host.park.emit(False)
-            host.request.emit(rid, page, QUrl.fromLocalFile(os.path.join(PAGE_DIR, PAGES[page])).toString(), data)
+            msg = None
+        if not isinstance(msg, dict) or not any(k in msg for k in KEYS):
+            _say("app.py: a line that is not a request was refused")
+            return self.send("", 3, None)
+        try:
+            for key in KEYS:
+                if key in msg and getattr(self, "on_" + key)(msg) is False:
+                    break
+        except Exception:
+            _say()
+            self.send(_request_id(msg), 3, None)
 
-    def on_line(line):
-        if mode == "serve":
-            serve_line(line)
-        elif line == "QUIT":
-            app.quit()
-        else:
-            prog_line(line)
+    def on_quit(self, msg):
+        if msg["quit"]:
+            self.ui.app.quit()
+            return False            # nothing else in this line counts
 
-    def readable():
-        for line in reader.more():
-            on_line(line)
-        if reader.eof:
-            notifier.setEnabled(False)
-            app.quit()
+    def on_theme(self, msg):
+        if isinstance(msg["theme"], str):
+            self.ui.set_theme(msg["theme"])
 
-    def begin():
-        if mode == "serve":
-            on_line(first)
-        elif mode == "progress":
-            heading = first.get("heading")
-            if not prog_start(heading if isinstance(heading, str) else ""):
-                result["status"] = 3
-                return app.quit()
-        else:
-            host.request.emit("one", mode, QUrl.fromLocalFile(os.path.join(PAGE_DIR, PAGES[mode])).toString(), first)
+    def on_progress(self, msg):
+        what = msg["progress"]
+        if what == "start":
+            if self.progress.start(_heading(msg)):
+                self.host.park.emit(True)
+            else:
+                self.host.busy.emit("")
+        elif what == "set" and isinstance(msg.get("line"), str):
+            if not self.progress.line(msg["line"]):
+                # No progress window here: the main window's spinner says it.
+                self.host.busy.emit(_Progress.parse(msg["line"])[2])
+        # "stop": the progress window stays (at "Done") until the next
+        # page or spinner is there, so there is never a moment with no
+        # window at all.
+
+    def on_busy(self, msg):
+        label = msg["busy"]
+        if not isinstance(label, str):
             return
-        for line in reader.pending:
-            on_line(line)
-        if reader.eof:
-            return app.quit()
-        notifier.setEnabled(True)
+        # A label asks for the spinner now; "" only puts the usual label
+        # back (and closes the progress window if that is what shows).
+        if label or self.progress.open:
+            self.show_window()
+        self.host.busy.emit(label[:200])
 
-    notifier = QSocketNotifier(reader.fd, QSocketNotifier.Read)
-    notifier.setEnabled(False)
-    notifier.activated.connect(readable)
-    # Inside the event loop, so that a "quit" in the first lines works.
-    QTimer.singleShot(0, begin)
-    if TEST_HOOK:
-        TEST_HOOK(app, shell, host)
-    app.exec()
-    prog_close()
+    def on_mode(self, msg):
+        rid, page, data = _request_id(msg), msg["mode"], msg.get("data")
+        if not rid:
+            return self.send("", 3, None)
+        if not isinstance(page, str) or page not in PAGES or not isinstance(data, dict):
+            return self.send(rid, 3, None)
+        self.show_window()
+        self.host.request.emit(rid, page, _page_url(page), data)
+
+    def show_window(self):
+        """The main window instead of the progress window."""
+        self.progress.close()
+        self.host.park.emit(False)
+
+    def run(self, first, reader, owner):
+        if not self.ui.load_shell():
+            return 3
+        self.ui.feed(reader, self.line, lambda: self.line(first), owner)
+        self.progress.close()
+        return 0
+
+
+class _OnePage:
+    """"app.py MODE < json": that one page in the window, then leave."""
+
+    def __init__(self, wfd):
+        self.wfd, self.status, self.answer = wfd, None, None
+        self.ui = _Ui(self.reply)
+
+    def reply(self, _rid, status, answer):
+        self.status, self.answer = status, answer
+        self.ui.app.quit()
+
+    def run(self, mode, data, reader, owner):
+        if not self.ui.load_shell():
+            return 3
+
+        def begin():
+            self.ui.host.request.emit("one", mode, _page_url(mode), data)
+            return False            # the input was the one JSON line
+
+        self.ui.feed(reader, lambda line: None, begin, owner)
+        if self.status == 0:
+            _write_all(self.wfd, (json.dumps(self.answer) + "\n").encode())
+            return 0
+        return 3 if self.status == 3 else 1
+
+
+class _ProgressOnly:
+    """"app.py progress": the progress window alone, fed progress lines."""
+
+    def __init__(self):
+        self.ui = _Ui(lambda *reply: None)
+        self.progress = _Progress(self.ui)
+        self.status = 0
+
+    def line(self, line):
+        if line == "QUIT":
+            self.ui.app.quit()
+        else:
+            self.progress.line(line)
+
+    def run(self, data, reader, owner):
+        def begin():
+            if not self.progress.start(_heading(data)):
+                self.status = 3
+                self.ui.app.quit()
+                return False
+
+        self.ui.feed(reader, self.line, begin, owner)
+        self.progress.close()
+        return self.status
+
+
+def _run(mode, first, reader, wfd, owner):
+    """Start Qt and run MODE. FIRST is the first line for "serve", else the
+    JSON object that was read from stdin."""
+    os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "org.kde.desktop")
+    # Without this Qt keeps its warnings (a page that does not load) to
+    # itself when stderr is not a terminal; the root side wants them.
+    os.environ.setdefault("QT_FORCE_STDERR_LOGGING", "1")
+    try:
+        import PySide6.QtQml        # noqa: F401
+        import PySide6.QtWidgets    # noqa: F401
+    except ImportError:
+        return 3
     if mode == "serve":
-        return 0
+        return _Serve(wfd).run(first, reader, owner)
     if mode == "progress":
-        return result["status"] or 0
-    if result["status"] == 0:
-        os.write(wfd, (json.dumps(result["answer"]) + "\n").encode())
-        return 0
-    return 3 if result["status"] == 3 else 1
+        return _ProgressOnly().run(first, reader, owner)
+    return _OnePage(wfd).run(mode, first, reader, owner)
 
 
 if __name__ == "__main__":
@@ -465,6 +718,5 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception:
-        import traceback
-        traceback.print_exc()
+        _say()
         sys.exit(3)

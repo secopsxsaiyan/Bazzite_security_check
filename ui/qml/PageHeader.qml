@@ -39,6 +39,9 @@ Rectangle {
             source: header.iconName !== "" ? header.iconName : header.iconSource
             Layout.alignment: Qt.AlignTop
             implicitWidth: Kirigami.Units.iconSizes.large; implicitHeight: implicitWidth
+            // Decoration (the app's icon, or one that repeats the title). A
+            // page whose icon says something puts its own item in "leading".
+            Accessible.ignored: true
         }
         ColumnLayout {
             Layout.fillWidth: true

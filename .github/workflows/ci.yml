@@ -60,3 +60,30 @@ jobs:
           persist-credentials: false
       - name: make test
         run: make test
+
+  ui:
+    name: UI test
+    # tests/ui-offscreen.py runs the real front end (ui/app.py and every
+    # page in ui/qml/) off-screen. It needs PySide6 with Qt Quick, Kirigami
+    # and qqc2-desktop-style; Ubuntu 24.04 packages none of them, Fedora
+    # (which Bazzite is built from) has all three.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      # registry.fedoraproject.org/fedora:43, by digest. For a newer one:
+      # skopeo inspect --format '{{.Digest}}' docker://registry.fedoraproject.org/fedora:43
+      image: registry.fedoraproject.org/fedora@sha256:086bb30fc7dd0f84b266b9c93d14298f06e30d04421dcd6813629ea00542fa8a
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      # First, so that the checkout below finds git in the container.
+      - name: Install PySide6, Kirigami and make
+        run: >-
+          dnf install -y --setopt=install_weak_deps=False
+          --disablerepo=fedora-cisco-openh264
+          python3-pyside6 kf6-kirigami kf6-qqc2-desktop-style make git-core
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: make test-ui
+        run: make test-ui
