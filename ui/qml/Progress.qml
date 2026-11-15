@@ -12,10 +12,14 @@ import "util.js" as Util
 Kirigami.ApplicationWindow {
     id: root
     title: qsTr("Security Check")
+    // As high as its content needs (the detail line always has the room of
+    // two lines, so the window does not grow and shrink with it), and no
+    // lower: the Hide button is never cut off.
+    readonly property real contentHeight: Math.ceil(body.implicitHeight) + Kirigami.Units.gridUnit * 2
     width: Kirigami.Units.gridUnit * 30
-    height: Kirigami.Units.gridUnit * 10
+    height: Math.max(Kirigami.Units.gridUnit * 10, contentHeight)
     minimumWidth: Kirigami.Units.gridUnit * 24
-    minimumHeight: Kirigami.Units.gridUnit * 9
+    minimumHeight: Math.max(Kirigami.Units.gridUnit * 9, contentHeight)
     pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
 
     property string iconSource: ""     // file URL of the app icon
@@ -35,6 +39,7 @@ Kirigami.ApplicationWindow {
         titleDelegate: Item {}
 
         ColumnLayout {
+            id: body
             anchors.fill: parent
             spacing: Kirigami.Units.largeSpacing
 
@@ -73,14 +78,18 @@ Kirigami.ApplicationWindow {
                         }
                     }
                     QQC2.Label {
+                        id: detailLabel
                         Layout.fillWidth: true
-                        visible: root.detail !== ""
                         text: root.detail
                         textFormat: Text.PlainText
                         // It comes from a check: two lines of it at most,
-                        // the window does not grow with it.
+                        // and the room of two lines is always there.
                         wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
+                        Layout.preferredHeight: twoLines.implicitHeight
+                        verticalAlignment: Text.AlignTop
                         opacity: Util.dimLabel
+                        // Never shown: how high two lines of it are.
+                        QQC2.Label { id: twoLines; visible: false; font: detailLabel.font; text: "1\n2"; textFormat: Text.PlainText }
                     }
                 }
             }
@@ -157,6 +166,7 @@ Kirigami.ApplicationWindow {
                     QQC2.ToolTip.text: qsTr("Keep working; the progress stays in the system tray.")
                     Accessible.description: QQC2.ToolTip.text
                     QQC2.ToolTip.visible: hovered
+                    QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
                 }
             }
         }

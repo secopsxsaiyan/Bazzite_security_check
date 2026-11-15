@@ -67,7 +67,15 @@ All notable changes to this project are listed here. The format follows
   keys move inside them. The main button underlines its Alt key while Alt
   is held. Screen readers get the messages in boxes and the text of a
   dialog as plain text. A dialog whose buttons do not fit next to each
-  other stacks them.
+  other stacks them. The control with the keyboard focus is always in view:
+  a finding that is taller than the window shows its tick box and title,
+  not its end. The focus ring, the placeholder of the report folder and the
+  tick of a finished step are dark enough in the light theme. A card, row or
+  button is read out once, not a second time label by label. Home and End
+  work in a dialog's list, and a block of commands shows its cursor.
+- Pages hold up with a larger font: the score ring and the step numbers grow
+  with the text, a hint that has no room next to the buttons goes above
+  them, and the progress window is high enough for its Hide button.
 - Changing the theme in Settings switches the open window at once.
 - CI uploads ShellCheck and Scorecard results to code scanning on pull
   requests, so the `Protect main` ruleset can pass without an administrator
@@ -88,6 +96,23 @@ All notable changes to this project are listed here. The format follows
   to be the ones it started (by process id and start time), and the window's
   own processes are signalled as the desktop user, not as root. A process
   that merely got the same id later cannot be hit.
+- The tool no longer waits for ever on a window that has gone or stopped
+  responding in an unusual way: one that ended while a program it started
+  still held one of its pipes, one that was stopped with a full pipe, one
+  that hung on the first page. It carries on with KDE dialogs, and when it
+  ends it always removes its private folder and gives up its lock.
+- A stray Enter or Space can no longer start a change in a question window.
+  Where "Yes" changes the PC there and then (applying a fix in the plain
+  dialog, each undo step, "Undo anyway", rolling back a failed fix, install,
+  remove, update), no button or the "No" button is the one Enter presses,
+  and the kdialog version is the warning dialog, whose default is "No".
+- What a fix prints is copied into the run log like an undo step's output:
+  only the end of it, cut to size and marked `fix:`. What kdialog or a
+  one-page window prints is read only up to the size of an answer.
+- Started with SIGPIPE ignored (the weekly check's systemd service does
+  that), the tool starts itself again with the signal at its default.
+  Before, `find | head` in the deep checks went on through every folder in
+  that case, up to its time limit. CI runs the smoke test in both states.
 
 ## [1.5.0] - 2026-11-14
 

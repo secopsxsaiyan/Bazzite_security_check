@@ -22,6 +22,8 @@ Item {
     property var answers: input.answers || ({})
     readonly property var steps: [qsTr("Welcome"), qsTr("Your PC"), qsTr("Options"), qsTr("Review")]
     readonly property int lastStep: steps.length - 1
+    // "start_step" is for the tests and for trying a step by hand: the
+    // root side never sends it, and the wizard starts on Welcome.
     property int step: Math.max(0, Math.min(lastStep, Math.floor(Number(input.start_step) || 0)))
     // Below this width the step names do not fit next to each other.
     readonly property bool compact: width < Kirigami.Units.gridUnit * 38
@@ -68,7 +70,7 @@ Item {
         page.finished(a)
     }
     // The root side rejects an answer without a report folder, whatever
-    // the action: "Start the check" then goes to Options, where a message
+    // the action: "Start the check-up" then goes to Options, where a message
     // asks for the folder, and "Settings" waits for it.
     readonly property bool hasFolder: !!answers.report_dir
     function primary() {
@@ -221,7 +223,7 @@ Item {
                                         color: page.facts.disk === "no" ? Util.ink(Kirigami.Theme, Kirigami.Theme.neutralTextColor) : Kirigami.Theme.textColor
                                     }
                                 }
-                                FactName { text: qsTr("Last check") }
+                                FactName { text: qsTr("Last check-up") }
                                 FactValue { text: page.facts.last || qsTr("None yet") }
                             }
                         }
@@ -229,7 +231,7 @@ Item {
                     Section {
                         title: qsTr("What happens next")
                         NextLine { iconName: "preferences-system"; text: qsTr("You say how this PC is used and pick the options. It takes a minute.") }
-                        NextLine { iconName: "security-high"; text: qsTr("The check runs and a dashboard shows the result of every check.") }
+                        NextLine { iconName: "security-high"; text: qsTr("The check-up runs, and the “Check-up result” page shows what every check found.") }
                         NextLine { iconName: "tools-wizard"; text: qsTr("You pick the fixes you want. Each one is shown and confirmed before it runs.") }
                     }
                 }
@@ -270,19 +272,19 @@ Item {
                     Notice {
                         visible: !page.hasFolder
                         kind: "warning"
-                        text: qsTr("Choose a report folder below: the check cannot start without one.")
+                        text: qsTr("Choose a report folder below: the check-up cannot start without one.")
                     }
                     OptionCard {
                         Layout.fillWidth: true
                         title: qsTr("Offer fixes"); iconName: "tools-wizard"
                         badge: qsTr("Recommended"); badgeTint: Kirigami.Theme.positiveTextColor
-                        description: qsTr("After the check, pick fixes from a list. Each one is shown and confirmed before it runs. Turn off for a report only.")
+                        description: qsTr("After the check-up, pick fixes from a list. Each one is shown and confirmed before it runs. Turn off for a report only.")
                         switchedOn: page.answers.fix !== false
                         onSwitched: (on) => page.setAnswer("fix", on)
                     }
                     OptionCard {
                         Layout.fillWidth: true
-                        title: qsTr("Deep check"); iconName: "edit-find"
+                        title: qsTr("Deep check-up"); iconName: "edit-find"
                         badge: qsTr("Several minutes"); badgeTint: Kirigami.Theme.neutralTextColor
                         description: qsTr("Also SUID files, autostart entries, changes to /etc and a ClamAV scan of Downloads.")
                         switchedOn: page.answers.deep === true
@@ -305,7 +307,7 @@ Item {
                                 Kirigami.Heading { text: qsTr("Report folder"); level: 4; Layout.fillWidth: true; wrapMode: Text.Wrap }
                                 QQC2.Label {
                                     Layout.fillWidth: true; wrapMode: Text.Wrap; opacity: Util.dimText
-                                    text: qsTr("An HTML and a Markdown report are saved here after the check.")
+                                    text: qsTr("An HTML and a Markdown report are saved here after the check-up.")
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true
@@ -319,12 +321,16 @@ Item {
                                         Layout.preferredWidth: Kirigami.Units.gridUnit * 10
                                         readOnly: true
                                         text: page.answers.report_dir || ""
-                                        placeholderText: qsTr("No folder chosen")
-                                        Accessible.name: qsTr("Report folder")
-                                        // Not the placeholder (which a text field gives as
-                                        // its description) while a folder is chosen.
-                                        Accessible.description: text === "" ? placeholderText
+                                        // A text field gives its placeholder as its description
+                                        // to a screen reader (Qt 6.10 puts it over the one set
+                                        // here), so with a folder chosen the placeholder, which
+                                        // is not shown then, says what the field is.
+                                        placeholderText: text === "" ? qsTr("No folder chosen")
                                             : qsTr("Read-only. The Choose button next to it picks another folder.")
+                                        // Dimmed text, not the style's paler grey: it has to be read.
+                                        placeholderTextColor: Qt.alpha(Kirigami.Theme.textColor, Util.dimText)
+                                        Accessible.name: qsTr("Report folder")
+                                        Accessible.description: placeholderText
                                         QQC2.ToolTip.text: Util.tip(text)
                                         QQC2.ToolTip.visible: hovered && contentWidth > width - leftPadding - rightPadding
                                         QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
@@ -372,12 +378,12 @@ Item {
                     }
                     SummaryCard {
                         iconName: "edit-find"; name: qsTr("Depth"); goTo: 2
-                        value: page.answers.deep === true ? qsTr("Deep check") : qsTr("Standard check")
+                        value: page.answers.deep === true ? qsTr("Deep check-up") : qsTr("Standard check-up")
                         detail: page.answers.deep === true ? qsTr("Takes several minutes.") : qsTr("Takes about a minute.")
                     }
                     SummaryCard {
                         iconName: "tools-wizard"; name: qsTr("Fixes"); goTo: 2
-                        value: page.answers.fix === false ? qsTr("None, report only") : qsTr("Offered after the check")
+                        value: page.answers.fix === false ? qsTr("None, report only") : qsTr("Offered after the check-up")
                         detail: page.answers.fix === false ? qsTr("Nothing on this PC is changed.") : qsTr("You pick them, and each one is confirmed before it runs.")
                     }
                     SummaryCard {
@@ -385,13 +391,13 @@ Item {
                         value: page.answers.report_dir || qsTr("Not chosen")
                         wrapAnywhere: true
                         detail: page.answers.report_dir ? qsTr("An HTML and a Markdown report are saved here.")
-                                                        : qsTr("Choose a folder before the check can start.")
+                                                        : qsTr("Choose a folder before the check-up can start.")
                     }
                     QQC2.Label {
                         Layout.fillWidth: true
                         Layout.topMargin: Kirigami.Units.smallSpacing
                         wrapMode: Text.Wrap; opacity: Util.dimText
-                        text: qsTr("Your answers are remembered for next time. Afterwards a dashboard shows the result of every check.")
+                        text: qsTr("Your answers are remembered for next time. Afterwards the “Check-up result” page shows what every check found.")
                     }
                 }
             }
@@ -429,7 +435,7 @@ Item {
             QQC2.Button { text: qsTr("Back"); icon.name: "go-previous"; visible: page.step > 0; onClicked: page.dismiss() }
             PrimaryButton {
                 id: mainButton
-                text: page.step === 0 ? qsTr("Get started") : page.step === page.lastStep ? qsTr("Start the check") : qsTr("Next")
+                text: page.step === 0 ? qsTr("Get started") : page.step === page.lastStep ? qsTr("Start the check-up") : qsTr("Next")
                 icon.name: page.step === page.lastStep ? "security-high" : "go-next"
                 onClicked: page.primary()
             }
@@ -470,13 +476,19 @@ Item {
         QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
         HoverHandler { cursorShape: stepButton.done ? Qt.PointingHandCursor : Qt.ArrowCursor }
 
+        // The button's name says all of it: the number and the name in it
+        // are not said a second time.
         contentItem: RowLayout {
             spacing: Kirigami.Units.smallSpacing
             Rectangle {
-                implicitWidth: Kirigami.Units.gridUnit * 1.4; implicitHeight: implicitWidth; radius: width / 2
-                // The current step: a shade of the highlight colour on
-                // which its number can be read.
-                color: stepButton.done ? Kirigami.Theme.positiveTextColor
+                // Round the number, whatever the size of the text is.
+                implicitWidth: Math.max(Kirigami.Units.gridUnit * 1.4,
+                                        Math.ceil(Math.max(stepNumber.implicitWidth, stepNumber.implicitHeight)) + Kirigami.Units.smallSpacing)
+                implicitHeight: implicitWidth; radius: width / 2
+                // A finished step and the current one: shades of the
+                // positive and the highlight colour on which the tick and
+                // the number can be seen (Util.deep).
+                color: stepButton.done ? Util.deep(Kirigami.Theme, Kirigami.Theme.positiveTextColor)
                      : stepButton.current ? Util.deep(Kirigami.Theme, Kirigami.Theme.highlightColor) : "transparent"
                 border.color: stepButton.done || stepButton.current ? color : Kirigami.Theme.disabledTextColor
                 border.width: page.hairline
@@ -487,10 +499,13 @@ Item {
                     source: "dialog-ok-apply"
                     color: Kirigami.Theme.highlightedTextColor
                     isMask: true
+                    Accessible.ignored: true
                 }
                 QQC2.Label {
+                    id: stepNumber
                     anchors.centerIn: parent
                     visible: !stepButton.done
+                    Accessible.ignored: true
                     text: stepButton.number + 1
                     // A step still to come is dimmed text, not the grey of
                     // a switched-off control, which is too pale to read.
@@ -502,6 +517,7 @@ Item {
             QQC2.Label {
                 // When narrow, only the current step keeps its name.
                 visible: !page.compact || stepButton.current
+                Accessible.ignored: true
                 text: stepButton.name
                 font.bold: stepButton.current
                 font.underline: stepButton.done && (stepButton.hovered || stepButton.visualFocus)
@@ -596,17 +612,22 @@ Item {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: Kirigami.Units.smallSpacing
+                    // The card says its title, its badge, its description
+                    // and what was found as its name and description: the
+                    // labels in it are not said a second time.
                     Kirigami.Heading {
                         text: card.title; level: 4; wrapMode: Text.Wrap
                         Layout.fillWidth: true
                         Layout.maximumWidth: Math.ceil(implicitWidth)
+                        Accessible.ignored: true
                     }
                     StatusChip { visible: card.badge !== ""; text: card.badge; tint: card.badgeTint; Accessible.ignored: true }
                     Item { Layout.fillWidth: true }
                 }
-                QQC2.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: card.description; opacity: Util.dimText }
+                QQC2.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: card.description; opacity: Util.dimText; Accessible.ignored: true }
                 QQC2.Label {
                     visible: card.note !== ""
+                    Accessible.ignored: true
                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
                     text: card.note
                     font: Kirigami.Theme.smallFont

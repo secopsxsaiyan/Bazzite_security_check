@@ -56,6 +56,7 @@ QQC2.Button {
                 textFormat: control.showsKey ? Text.StyledText : Text.PlainText
                 font: control.font
                 color: Kirigami.Theme.highlightedTextColor
+                Accessible.ignored: true    // the button says it
             }
         }
     }

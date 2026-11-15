@@ -96,7 +96,12 @@ Item {
             subtitle: [page.d.host || "", page.d.os || "", page.d.image || ""].filter(function (s) { return s !== "" }).join(" · ")
 
             leading: Item {
-                implicitWidth: Kirigami.Units.gridUnit * 5.5
+                // As big as the number and the grade in it need, whatever
+                // the size of the text is: their box fits inside the ring.
+                implicitWidth: Math.max(Kirigami.Units.gridUnit * 5.5,
+                                        Math.ceil(Math.sqrt(scoreText.implicitWidth * scoreText.implicitWidth
+                                                            + scoreText.implicitHeight * scoreText.implicitHeight))
+                                        + ring.line * 2 + Kirigami.Units.smallSpacing)
                 implicitHeight: implicitWidth
                 width: implicitWidth; height: implicitHeight
                 Accessible.role: Accessible.StaticText
@@ -123,11 +128,14 @@ Item {
                     }
                     Component.onCompleted: requestPaint()
                 }
+                // The item around them says both.
                 ColumnLayout {
+                    id: scoreText
                     anchors.centerIn: parent
                     spacing: 0
                     QQC2.Label {
                         Layout.alignment: Qt.AlignHCenter
+                        Accessible.ignored: true
                         text: page.score
                         font.pointSize: Kirigami.Theme.defaultFont.pointSize * 2.2
                         font.weight: Font.Bold
@@ -135,6 +143,7 @@ Item {
                     }
                     QQC2.Label {
                         Layout.alignment: Qt.AlignHCenter
+                        Accessible.ignored: true
                         text: qsTr("grade %1").arg(page.d.grade || "?")
                         textFormat: Text.PlainText
                         font: Kirigami.Theme.smallFont
@@ -164,27 +173,33 @@ Item {
                     Accessible.role: Accessible.StaticText
                     Accessible.name: qsTr("Open problems: %1 high, %2 medium, %3 low, %4 info")
                         .arg(page.open.high || 0).arg(page.open.medium || 0).arg(page.open.low || 0).arg(page.open.info || 0)
-                    QQC2.Label { text: qsTr("Open:"); height: highChip.height; verticalAlignment: Text.AlignVCenter }
+                    // The row says the four counts as its name: the label
+                    // and the chips are not said a second time.
+                    QQC2.Label { text: qsTr("Open:"); height: highChip.height; verticalAlignment: Text.AlignVCenter; Accessible.ignored: true }
                     // A count of none is a grey frame without a fill, so the
                     // eye goes to what is open; the others have the colour
                     // of their severity (information is grey everywhere).
                     StatusChip {
                         id: highChip
+                        Accessible.ignored: true
                         text: qsTr("%1 high").arg(page.open.high || 0)
                         quiet: (page.open.high || 0) === 0
                         tint: quiet ? Kirigami.Theme.disabledTextColor : Util.sevColor(Kirigami.Theme, "high")
                     }
                     StatusChip {
+                        Accessible.ignored: true
                         text: qsTr("%1 medium").arg(page.open.medium || 0)
                         quiet: (page.open.medium || 0) === 0
                         tint: quiet ? Kirigami.Theme.disabledTextColor : Util.sevColor(Kirigami.Theme, "medium")
                     }
                     StatusChip {
+                        Accessible.ignored: true
                         text: qsTr("%1 low").arg(page.open.low || 0)
                         quiet: (page.open.low || 0) === 0
                         tint: quiet ? Kirigami.Theme.disabledTextColor : Util.sevColor(Kirigami.Theme, "low")
                     }
                     StatusChip {
+                        Accessible.ignored: true
                         text: qsTr("%1 info").arg(page.open.info || 0)
                         quiet: (page.open.info || 0) === 0
                         tint: Util.sevColor(Kirigami.Theme, "info")
@@ -209,7 +224,7 @@ Item {
                     x: Kirigami.Units.gridUnit
                     y: Kirigami.Units.gridUnit
                     // Lines of text stay readable on a wide window.
-                    width: Math.min(flick.width - Kirigami.Units.gridUnit * 2, Kirigami.Units.gridUnit * 56)
+                    width: Math.min(flick.width - Kirigami.Units.gridUnit * 2, Kirigami.Units.gridUnit * 48)
                     spacing: Kirigami.Units.largeSpacing
 
                     // ---- what happened in this run ------------------------
@@ -232,7 +247,7 @@ Item {
                     }
                     Notice {
                         visible: page.d.prev === true
-                        title: qsTr("Since the last check:")
+                        title: qsTr("Since the last check-up:")
                         text: (page.d.gone || 0) + (page.d["new"] || 0) === 0 ? qsTr("no changes.")
                             : page.d.new_titles
                                 ? Util.fill(qsTr("%1 resolved, %2 new - %3"), [page.d.gone || 0, page.d["new"] || 0, page.d.new_titles])
@@ -264,7 +279,7 @@ Item {
                             onClicked: page.act("keep")
                             QQC2.ToolTip.visible: hovered
                             QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
-                            QQC2.ToolTip.text: qsTr("Keep problems you accept because you use the feature they are there for (Steam Remote Play, Sunshine, SSH, ...).")
+                            QQC2.ToolTip.text: qsTr("Keep problems you accept because you use the feature they are there for (Steam Remote Play, Sunshine, SSH, …).")
                             Accessible.description: QQC2.ToolTip.text
                         }
                         ActionButton { text: qsTr("Settings"); icon.name: "configure"; onClicked: page.act("settings") }
@@ -331,7 +346,7 @@ Item {
                                             implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
                                             Accessible.ignored: true    // the chip's name says it
                                         }
-                                        QQC2.Label { Layout.fillWidth: true; text: chip.modelData.name; textFormat: Text.PlainText; elide: Text.ElideRight }
+                                        QQC2.Label { Layout.fillWidth: true; text: chip.modelData.name; textFormat: Text.PlainText; elide: Text.ElideRight; Accessible.ignored: true }
                                     }
                                     background: Rectangle {
                                         radius: height / 2
@@ -415,7 +430,9 @@ Item {
                                         ColumnLayout {
                                             Layout.fillWidth: true
                                             spacing: 0
+                                            // The row says all of this as its name.
                                             QQC2.Label {
+                                                Accessible.ignored: true
                                                 text: row.modelData.title; textFormat: Text.PlainText
                                                 Layout.fillWidth: true
                                                 wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
@@ -423,6 +440,7 @@ Item {
                                             QQC2.Label {
                                                 visible: (row.modelData.affects || "") !== ""
                                                 text: row.modelData.affects || ""
+                                                Accessible.ignored: true
                                                 textFormat: Text.PlainText
                                                 font: Kirigami.Theme.smallFont
                                                 opacity: Util.dimLabel
@@ -432,12 +450,14 @@ Item {
                                                 elide: Text.ElideRight
                                                 // The whole line when it is cut off.
                                                 QQC2.ToolTip.visible: truncated && affectsHover.hovered
+                                                QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
                                                 QQC2.ToolTip.text: Util.tip(text)
                                                 HoverHandler { id: affectsHover }
                                             }
                                         }
                                         QQC2.Label {
                                             text: row.modelData.summary || ""
+                                            Accessible.ignored: true
                                             textFormat: Text.PlainText
                                             // Medium only (no high) reads orange, like the header's count
                                             // (a colour made readable as text: Util.ink). The icon in front

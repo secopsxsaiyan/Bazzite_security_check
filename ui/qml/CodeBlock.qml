@@ -1,6 +1,8 @@
 // Security Check - commands or other fixed-width text: read-only, can be
 // selected with the mouse or the keyboard (Tab to it, Ctrl+A, Shift+arrows,
-// Ctrl+C), with a Copy button.
+// Ctrl+C), with a Copy button. With the keyboard focus in it the text
+// shows its cursor, which the arrow keys, Home and End move, and the page
+// scrolls along with the cursor.
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
@@ -34,8 +36,17 @@ Rectangle {
         selectedTextColor: Kirigami.Theme.highlightedTextColor
         text: block.text
         onActiveFocusChanged: {
+            // Read-only text shows no cursor by itself.
+            cursorVisible = activeFocus
             if (activeFocus) Util.reveal(block.flickable, block, Kirigami.Units.gridUnit)
             else deselect()
+        }
+        // The line the cursor is on stays in view.
+        onCursorRectangleChanged: if (activeFocus) Util.reveal(block.flickable, cursorLine, Kirigami.Units.gridUnit)
+        Item {
+            id: cursorLine
+            x: edit.cursorRectangle.x; y: edit.cursorRectangle.y
+            width: edit.cursorRectangle.width; height: edit.cursorRectangle.height
         }
         Accessible.role: Accessible.StaticText
         Accessible.name: block.text
@@ -53,6 +64,7 @@ Rectangle {
         QQC2.ToolTip.visible: hovered
         QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
         Accessible.name: text
+        onActiveFocusChanged: if (activeFocus && visualFocus) Util.reveal(block.flickable, this, Kirigami.Units.gridUnit)
         onClicked: { edit.selectAll(); edit.copy(); edit.deselect() }
     }
 }

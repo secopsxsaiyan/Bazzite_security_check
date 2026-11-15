@@ -5,6 +5,7 @@
 // and name the control as its target.
 import QtQuick
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 Rectangle {
     id: ring
@@ -25,6 +26,9 @@ Rectangle {
     radius: cornerRadius + outset
     color: "transparent"
     border.width: line
-    border.color: Kirigami.Theme.focusColor
+    // The focus colour of Breeze has 2.2:1 on a light page: half of it and
+    // half the text colour of the place (Util.ink) keeps the hue and has
+    // at least 3:1 on the page and on a card, in both themes.
+    border.color: Util.ink(Kirigami.Theme, Kirigami.Theme.focusColor)
     visible: target.visualFocus !== undefined ? target.visualFocus : target.activeFocus
 }

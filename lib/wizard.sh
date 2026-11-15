@@ -262,7 +262,7 @@ _wiz_usecases() {
 _wiz_options() {
     local sel t
     sel=$(UI_CHOOSE_NOTE=0 UI_CHOOSE_LOWONLY=0 UI_CHOOSE_ALLOW_NONE=1 UI_CHOOSE_OK="Next" UI_CHOOSE_TITLE="Options" ui_checklist "$(_wiz_page 2 "Options" "Both can be changed next time." \
-"<p><b>Offer fixes:</b> after the check you pick fixes from a list; each one is shown and confirmed before it runs. Deselect it for a report only.</p><p><b>Deep check:</b> also SUID files, autostart entries, /etc changes and a ClamAV scan of Downloads.</p>")" \
+"<p><b>Offer fixes:</b> after the check-up you pick fixes from a list; each one is shown and confirmed before it runs. Deselect it for a report only.</p><p><b>Deep check:</b> also SUID files, autostart entries, /etc changes and a ClamAV scan of Downloads.</p>")" \
         fix  "Offer fixes (recommended)" \
              "$([[ $FIX_MODE == confirm ]] && echo on || echo off)" \
         deep "Deep check · several minutes" \
@@ -278,7 +278,7 @@ _wiz_options() {
 _wiz_report() {
     local choice
     [[ -n "$REPORT_DIR" ]] || REPORT_DIR=$(_default_report_dir)
-    if ! ui_yesno "$(_wiz_page 3 "Report" "An HTML and a Markdown report are saved after the check." \
+    if ! ui_yesno "$(_wiz_page 3 "Report" "An HTML and a Markdown report are saved after the check-up." \
 "<p>Folder:</p><p>&nbsp;&nbsp;<b>$(_html "$REPORT_DIR")</b></p><p><i>Reports can contain host and user names; review one before sharing it.</i></p>")" \
         "Save here" "Choose another folder…" "y"; then
         choice=$(ui_dir "Report folder" "$REPORT_DIR") || choice=""
@@ -297,9 +297,9 @@ _wiz_review_html() {
     local body="<table cellpadding=\"3\">"
     body+="$(_wiz_row "Use" "$(_html "$(_usecase_summary)")")"
     body+="$(_wiz_row "Depth" "$([[ $DEEP -eq 1 ]] && echo "Deep · several minutes" || echo "Standard · about a minute")")"
-    body+="$(_wiz_row "Fixes" "$([[ $FIX_MODE == confirm ]] && echo "offered after the check - you pick them and confirm each one" || echo "none - report only")")"
+    body+="$(_wiz_row "Fixes" "$([[ $FIX_MODE == confirm ]] && echo "offered after the check-up - you pick them and confirm each one" || echo "none - report only")")"
     body+="$(_wiz_row "Report" "$(_html "$REPORT_DIR")")"
-    body+="</table><p>Your answers are remembered for next time. Afterwards a dashboard shows the result of every check.</p>"
+    body+="</table><p>Your answers are remembered for next time. Afterwards you see the result of every check.</p>"
     _wiz_page 4 "Ready to check this PC" "Nothing has been checked or changed yet." "$body"
 }
 
@@ -401,7 +401,7 @@ run_wizard() {
         _wiz_usecases
         _wiz_options
         _wiz_report
-        ui_choice3 "$(_wiz_review_html)" "" "Start the check" "Change answers…" "Quit" "" y
+        ui_choice3 "$(_wiz_review_html)" "" "Start the check-up" "Change answers…" "Quit" "" y
         rc=$?
         case "$rc" in
             0) return 0 ;;

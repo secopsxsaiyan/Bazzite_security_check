@@ -36,8 +36,10 @@
 #     the request's id instead of "" when it had a usable one.
 #     Nothing is loaded and no window exists before the first line that is
 #     not empty arrives; if that line is "quit", nothing ever is.
-#     Exit status 0; 3 when Qt or the window could not be loaded (the root
-#     side does not read it: it sees the answer pipe close).
+#     Exit status 0; 3 when Qt or the window could not be loaded, or after
+#     an exception that nothing here caught (the root side does not read
+#     it: it sees the answer pipe close). An answer that cannot be written
+#     ends it too, with status 0.
 #
 # One page in a window of its own, and the progress window alone. The root
 # side uses these when it could not make the two pipes for "serve"; and
@@ -343,7 +345,7 @@ def main():
         return _run(mode, reader, wfd, owner, line=line)
     try:
         data = json.loads(reader.first(owner) or "{}")
-    except ValueError:
+    except Exception:               # not JSON, or JSON nested too deep
         return 2
     if not isinstance(data, dict):
         return 2
@@ -353,7 +355,7 @@ def main():
 def _is_quit(line):
     try:
         msg = json.loads(line)
-    except ValueError:
+    except Exception:               # not JSON (_Serve.line answers it)
         return False
     return isinstance(msg, dict) and bool(msg.get("quit"))
 
@@ -578,9 +580,10 @@ class _Serve:
         root side gets an answer: it must never wait for ever."""
         if not line.strip():
             return
+        # Not only ValueError: JSON nested very deep is a RecursionError.
         try:
             msg = json.loads(line)
-        except ValueError:
+        except Exception:
             msg = None
         if not isinstance(msg, dict) or not any(k in msg for k in KEYS):
             _say("app.py: a line that is not a request was refused")

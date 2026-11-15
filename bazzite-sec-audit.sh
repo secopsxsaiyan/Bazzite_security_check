@@ -450,6 +450,31 @@ Many checks will not apply. Continue anyway?" "Continue" "Quit" "n"; then
     return 0
 }
 
+# _sigpipe_ignored — this shell was started with SIGPIPE ignored (signal
+# 13: bit 12 of the SigIgn mask in /proc/PID/status).
+_sigpipe_ignored() {
+    local k v
+    while read -r k v _; do
+        [[ "$k" == SigIgn: ]] || continue
+        (( (16#$v >> 12) & 1 ))
+        return
+    done 2>/dev/null < "/proc/$BASHPID/status"
+    return 1
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    # A systemd service (the weekly check) and some launchers start their
+    # programs with SIGPIPE ignored, and a shell can neither trap nor reset
+    # a signal that was ignored when it started: every program it starts
+    # ignores it too. The checks count on the default: in "find ... | head",
+    # find is ended by it when head has read enough, and otherwise goes on
+    # through every folder. So the tool then starts again with the signal
+    # at its default, which "env" can set (coreutils 8.32 or newer; with an
+    # older one the tool runs as it was started: the same results, later).
+    # _BSA_SIGPIPE_RESTART: once only, should the restart not change it.
+    if [[ -z "${_BSA_SIGPIPE_RESTART:-}" ]] && _sigpipe_ignored && /usr/bin/env --default-signal=PIPE true 2>/dev/null; then
+        exec /usr/bin/env --default-signal=PIPE _BSA_SIGPIPE_RESTART=1 "$BASH" "$0" "$@"
+    fi
+    unset _BSA_SIGPIPE_RESTART
     main "$@"
 fi

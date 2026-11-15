@@ -44,6 +44,15 @@ Item {
     }
     property bool showDetails: false
     readonly property Item scrollArea: scroll.contentItem
+    // A control that gets the keyboard focus comes into view.
+    Connections {
+        target: page.Window.window
+        function onActiveFocusItemChanged() {
+            var f = page.Window.activeFocusItem
+            if (f && f.visualFocus !== false && Util.within(f, page.scrollArea))
+                Util.reveal(page.scrollArea, f, Kirigami.Units.smallSpacing)
+        }
+    }
 
     // ---- size -----------------------------------------------------------
     // The width comes from what the content would like when nothing wraps
@@ -169,8 +178,9 @@ Item {
                         model: page.items
                         // The list is one stop for Tab, at the picked
                         // row; Up and Down pick the row before or after
-                        // it, and Enter answers with the picked row (the
-                        // dialog's main button).
+                        // it, Home and End the first and the last, and
+                        // Enter answers with the picked row (the dialog's
+                        // main button).
                         delegate: QQC2.RadioDelegate {
                             id: radio
                             required property var modelData
@@ -188,6 +198,12 @@ Item {
                                 var prev = radios.itemAt(index - 1)
                                 if (prev) prev.pick(); else event.accepted = false
                             }
+                            Keys.onPressed: function (event) {
+                                if (event.key === Qt.Key_Home) radios.itemAt(0).pick()
+                                else if (event.key === Qt.Key_End) radios.itemAt(radios.count - 1).pick()
+                                else return
+                                event.accepted = true
+                            }
                             Layout.fillWidth: true
                             leftPadding: radio.indicator.width + radio.spacing * 2
                             // The style draws the highlight of a row from
@@ -201,9 +217,11 @@ Item {
                             Component.onCompleted: { checked = page.picked === modelData.tag; page.listWidth = Math.max(page.listWidth, implicitWidth) }
                             onImplicitWidthChanged: page.listWidth = Math.max(page.listWidth, implicitWidth)
                             onCheckedChanged: if (checked) page.picked = modelData.tag
-                            onActiveFocusChanged: if (activeFocus) Util.reveal(scroll.contentItem, radio, 0)
                             Accessible.name: Util.riskLabel(modelData.label, modelData.risk)
                             Accessible.description: Util.describe(modelData.detail, modelData.warn)
+                            // The row says its label, risk, detail and
+                            // warning as its name and description: the
+                            // labels in it are not said a second time.
                             contentItem: ColumnLayout {
                                 spacing: 0
                                 RowLayout {
@@ -212,6 +230,7 @@ Item {
                                     QQC2.Label {
                                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
                                         font.weight: Font.DemiBold; text: radio.modelData.label
+                                        Accessible.ignored: true
                                     }
                                     StatusChip {
                                         visible: !!radio.modelData.risk
@@ -224,6 +243,7 @@ Item {
                                     Layout.fillWidth: true; visible: !!radio.modelData.detail
                                     wrapMode: Text.Wrap; textFormat: Text.PlainText
                                     opacity: Util.dimText; text: radio.modelData.detail || ""
+                                    Accessible.ignored: true
                                 }
                                 // The icon and the chip above say how risky;
                                 // the warning is in the text colour, so
@@ -242,6 +262,7 @@ Item {
                                         Layout.fillWidth: true
                                         wrapMode: Text.Wrap; textFormat: Text.PlainText
                                         text: radio.modelData.warn || ""
+                                        Accessible.ignored: true
                                     }
                                 }
                             }
@@ -292,7 +313,6 @@ Item {
                         id: plainButton
                         QQC2.Button {
                             text: slot.modelData.label
-                            icon.name: slot.modelData.icon || ""
                             onClicked: page.answer(slot.index)
                         }
                     }
@@ -300,7 +320,6 @@ Item {
                         id: mainButton
                         PrimaryButton {
                             text: slot.modelData.label
-                            icon.name: slot.modelData.icon || ""
                             onClicked: page.answer(slot.index)
                         }
                     }

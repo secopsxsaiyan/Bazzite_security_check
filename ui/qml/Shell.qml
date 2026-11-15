@@ -6,9 +6,9 @@
 // and dismiss() (Esc). A page may also have initialFocus(), which returns
 // the item that gets the keyboard focus when the page is shown, and a
 // property scrollArea: the Flickable that PageUp, PageDown, Home, End and
-// the arrow keys scroll (see scrollKey()). Between two
-// requests the last page stays (dimmed, under a spinner, when the next one
-// takes a while), so the window never goes away while the tool works.
+// the arrow keys scroll (see scrollKey()). Between two requests the last
+// page stays (dimmed, under a spinner, when the next one takes a while), so
+// the window never goes away while the tool works.
 // "dialog" requests (Dialog.qml, sized by its content) are shown over the
 // current page; when there is no page yet, the dialog is the whole content
 // of a small window, which grows when the first page arrives.
@@ -85,7 +85,7 @@ Kirigami.ApplicationWindow {
     // did. The tool decides what comes next: it ends (and this front end
     // with it), or it sends the next page. With nothing to answer, the
     // window just gets out of the way until the next page; the work goes on.
-    onClosing: (close) => {
+    onClosing: function (close) {
         close.accepted = false
         if (pendingId !== "")
             finish(pendingId, 1, null)
@@ -123,12 +123,12 @@ Kirigami.ApplicationWindow {
     // Every request gets an answer, whatever goes wrong here: the root
     // side waits for it without a time limit.
     function showRequest(id, mode, url, input) {
-        const made = { "slot": null }
+        var made = { "slot": null }
         try {
             present(id, mode, url, input, made)
         } catch (e) {
-            // A slot that did not become the page would stay over it,
-            // unseen, and take its clicks.
+            // A slot that did not become the page or the dialog would
+            // stay in the window, unseen, with what was made in it.
             if (made.slot && made.slot !== pageSlot && made.slot !== dialogSlot)
                 made.slot.destroy()
             if (pendingId === id) pendingId = ""
@@ -141,16 +141,16 @@ Kirigami.ApplicationWindow {
     function present(id, mode, url, input, made) {
         if (pendingId !== "")
             finish(pendingId, 1, null)      // never two questions at once
-        const component = Qt.createComponent(url)
+        var component = Qt.createComponent(url)
         if (component.status !== Component.Ready) {
             fail(id, "cannot load " + url + ": " + component.errorString())
             return
         }
-        const isDialog = mode === "dialog"
-        const over = isDialog && pageItem !== null && !pageIsDialog
-        const slot = (over ? dialogSlotComponent : pageSlotComponent).createObject(over ? dialogLayer : pageLayer)
+        var isDialog = mode === "dialog"
+        var over = isDialog && pageItem !== null && !pageIsDialog
+        var slot = (over ? dialogSlotComponent : pageSlotComponent).createObject(over ? dialogLayer : pageLayer)
         made.slot = slot
-        const item = component.createObject(slot, { "input": input, "iconSource": root.iconSource })
+        var item = component.createObject(slot, { "input": input, "iconSource": root.iconSource })
         if (!item || !(item instanceof Item) || !isSignal(item.finished) || !isSignal(item.cancelled)) {
             if (item) item.destroy()
             slot.destroy()
@@ -164,20 +164,25 @@ Kirigami.ApplicationWindow {
         if (isDialog && item.maximumWidth !== undefined) {
             // Over a page: inside the window, with the page visible around
             // it. Alone: what fits on the screen.
-            item.maximumWidth = Qt.binding(() => over
-                ? Math.max(Kirigami.Units.gridUnit * 16, Math.min(Kirigami.Units.gridUnit * 40, root.width - Kirigami.Units.gridUnit * 4))
-                : Math.min(Kirigami.Units.gridUnit * 40, Math.max(Kirigami.Units.gridUnit * 16, root.screen.desktopAvailableWidth - Kirigami.Units.gridUnit * 4)))
-            item.maximumHeight = Qt.binding(() => over
-                ? Math.max(Kirigami.Units.gridUnit * 10, root.height - Kirigami.Units.gridUnit * 4)
-                : Math.min(Kirigami.Units.gridUnit * 36, Math.max(Kirigami.Units.gridUnit * 10, root.screen.desktopAvailableHeight - Kirigami.Units.gridUnit * 6)))
+            item.maximumWidth = Qt.binding(function () {
+                return over
+                    ? Math.max(Kirigami.Units.gridUnit * 16, Math.min(Kirigami.Units.gridUnit * 40, root.width - Kirigami.Units.gridUnit * 4))
+                    : Math.min(Kirigami.Units.gridUnit * 40, Math.max(Kirigami.Units.gridUnit * 16, root.screen.desktopAvailableWidth - Kirigami.Units.gridUnit * 4))
+            })
+            item.maximumHeight = Qt.binding(function () {
+                return over
+                    ? Math.max(Kirigami.Units.gridUnit * 10, root.height - Kirigami.Units.gridUnit * 4)
+                    : Math.min(Kirigami.Units.gridUnit * 36, Math.max(Kirigami.Units.gridUnit * 10, root.screen.desktopAvailableHeight - Kirigami.Units.gridUnit * 6))
+            })
         }
         if (over) {
             if (dialogSlot) dialogSlot.destroy()
             dialogSlot = slot
             dialogItem = item
+            slot.item = item        // the card takes the dialog's size
         } else {
-            const old = pageSlot
-            const resized = compact
+            var old = pageSlot
+            var resized = compact
             if (dialogSlot) { dialogSlot.destroy(); dialogSlot = null; dialogItem = null }
             pageSlot = slot
             pageItem = item
@@ -200,14 +205,13 @@ Kirigami.ApplicationWindow {
         busyShown = false
         busyLabel = ""
         grace.stop()
-        slot.item = item
         slot.shown = true
         // The keyboard focus stays with the window, away from the pages,
         // until the new one has settled: see settleTime.
         resume = null
         unfocus()
         settle.restart()
-        const hidden = !visible
+        var hidden = !visible
         wanted = true
         if (hidden && visible) { raise(); requestActivate() }
     }
@@ -219,7 +223,7 @@ Kirigami.ApplicationWindow {
         if (id === "" || id !== pendingId) return
         pendingId = ""
         if (dialogSlot) {
-            const slot = dialogSlot
+            var slot = dialogSlot
             dialogSlot = null
             dialogItem = null
             slot.enabled = false
@@ -240,7 +244,7 @@ Kirigami.ApplicationWindow {
         if (label === "") return
         grace.stop()
         busyShown = true
-        const hidden = !visible
+        var hidden = !visible
         wanted = true
         if (hidden && visible) { raise(); requestActivate() }
     }
@@ -253,8 +257,8 @@ Kirigami.ApplicationWindow {
         id: settle
         interval: root.settleTime
         onTriggered: {
-            const slot = root.dialogSlot || root.pageSlot
-            const back = root.resume, ring = root.resumeRing
+            var slot = root.dialogSlot || root.pageSlot
+            var back = root.resume, ring = root.resumeRing
             root.resume = null
             if (!slot || root.pendingId === "") return
             if (root.usable(back) && root.inside(back, slot)) {
@@ -265,7 +269,7 @@ Kirigami.ApplicationWindow {
                 return
             }
             slot.forceActiveFocus()
-            const first = root.current && root.current.initialFocus ? root.current.initialFocus() : null
+            var first = root.current && root.current.initialFocus ? root.current.initialFocus() : null
             if (root.usable(first)) first.forceActiveFocus()
         }
     }
@@ -278,7 +282,7 @@ Kirigami.ApplicationWindow {
         content.forceActiveFocus()
     }
     function inside(item, ancestor) {
-        for (let p = item; p; p = p.parent)
+        for (var p = item; p; p = p.parent)
             if (p === ancestor) return true
         return false
     }
@@ -293,7 +297,7 @@ Kirigami.ApplicationWindow {
     function hold() {
         if (pendingId === "") return
         if (!settling) {
-            const f = activeFocusItem, slot = dialogSlot || pageSlot
+            var f = activeFocusItem, slot = dialogSlot || pageSlot
             resume = f && slot && inside(f, slot) ? f : null
             resumeRing = !!resume && resume.visualFocus === true
             unfocus()
@@ -301,12 +305,27 @@ Kirigami.ApplicationWindow {
         settle.restart()
     }
     // A key event that can answer a page: Space, Enter and Esc, and
-    // anything with Alt (every button has an Alt+letter shortcut).
+    // anything with Alt (every button has an Alt+letter shortcut). Not a
+    // key that only types: see typing().
     function answers(event) {
-        const key = event.key
+        var key = event.key
+        if (typing(event)) return false
         return key === Qt.Key_Space || key === Qt.Key_Return || key === Qt.Key_Enter
             || key === Qt.Key_Escape || key === Qt.Key_Select
             || (event.modifiers & Qt.AltModifier) !== 0
+    }
+    // A key event that types into the text field with the keyboard focus,
+    // if that field can be edited: Space, and Enter where it starts a new
+    // line (a text area). Held down, such a key repeats as in any text
+    // field, and hold() leaves it alone: it answers nothing. Everything
+    // else stays guarded there too: Esc, anything with Alt, Enter in a
+    // one-line field (which may take Enter as "done"), and every key in a
+    // field that is read-only.
+    function typing(event) {
+        var f = activeFocusItem, key = event.key
+        if ((event.modifiers & Qt.AltModifier) !== 0 || !usable(f) || f.readOnly !== false) return false
+        if (key === Qt.Key_Space) return f instanceof TextInput || f instanceof TextEdit
+        return (key === Qt.Key_Return || key === Qt.Key_Enter) && f instanceof TextEdit
     }
 
     Timer {
@@ -344,10 +363,10 @@ Kirigami.ApplicationWindow {
         // With Ctrl, Shift, Alt or Meta a key means something else.
         if (event.modifiers & ~Qt.KeypadModifier) return
         if (scrollKey(event.key)) { event.accepted = true; return }
-        const esc = event.key === Qt.Key_Escape
-        const enter = event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+        var esc = event.key === Qt.Key_Escape
+        var enter = event.key === Qt.Key_Return || event.key === Qt.Key_Enter
         if (!esc && !enter) return
-        const f = usable(root.activeFocusItem) ? root.activeFocusItem : null
+        var f = usable(root.activeFocusItem) ? root.activeFocusItem : null
         if (enter && (f instanceof TextInput || f instanceof TextEdit)) return
         event.accepted = true
         if (esc) {
@@ -367,12 +386,12 @@ Kirigami.ApplicationWindow {
     // without one has nothing to scroll. Returns true for a scroll key
     // that was used.
     function scrollKey(key) {
-        const area = current ? current.scrollArea : null
+        var area = current ? current.scrollArea : null
         if (!area || typeof area.contentY !== "number") return false
-        const top = area.originY - area.topMargin
-        const bottom = Math.max(top, area.originY + area.contentHeight + area.bottomMargin - area.height)
-        const page = area.height * 0.9, line = Kirigami.Units.gridUnit * 3
-        let to
+        var top = area.originY - area.topMargin
+        var bottom = Math.max(top, area.originY + area.contentHeight + area.bottomMargin - area.height)
+        var page = area.height * 0.9, line = Kirigami.Units.gridUnit * 3
+        var to
         switch (key) {
         case Qt.Key_PageDown: to = area.contentY + page; break
         case Qt.Key_PageUp: to = area.contentY - page; break
@@ -430,7 +449,6 @@ Kirigami.ApplicationWindow {
         id: pageSlotComponent
         FocusScope {
             id: slot
-            property Item item: null
             property bool shown: false
             property bool instant: false
             anchors.fill: parent
@@ -451,7 +469,6 @@ Kirigami.ApplicationWindow {
             id: card
             property Item item: null
             property bool shown: false
-            property bool instant: false
             anchors.centerIn: parent
             width: item ? item.implicitWidth : 0
             height: item ? item.implicitHeight : 0
@@ -487,9 +504,9 @@ Kirigami.ApplicationWindow {
         id: content
         anchors.fill: parent
         focus: true
-        Keys.onPressed: (event) => root.keyPressed(event)
-        Keys.onReleased: (event) => root.keyReleased(event)
-        Keys.onShortcutOverride: (event) => root.keyAnnounced(event)
+        Keys.onPressed: function (event) { root.keyPressed(event) }
+        Keys.onReleased: function (event) { root.keyReleased(event) }
+        Keys.onShortcutOverride: function (event) { root.keyAnnounced(event) }
 
         // The page. While a dialog is over it, or the tool is busy, it is
         // dimmed and takes no input (and no keyboard focus: Tab stays in
@@ -508,7 +525,7 @@ Kirigami.ApplicationWindow {
             visible: root.pendingId === "" || root.dialogItem !== null
             acceptedButtons: Qt.AllButtons
             hoverEnabled: true
-            onWheel: (wheel) => { wheel.accepted = true }
+            onWheel: function (wheel) { wheel.accepted = true }
         }
         Item {
             id: dialogLayer
@@ -521,7 +538,7 @@ Kirigami.ApplicationWindow {
             visible: root.settling
             acceptedButtons: Qt.AllButtons
             hoverEnabled: true
-            onWheel: (wheel) => { wheel.accepted = true }
+            onWheel: function (wheel) { wheel.accepted = true }
         }
 
         // Busy: what the tool is doing, between two pages.

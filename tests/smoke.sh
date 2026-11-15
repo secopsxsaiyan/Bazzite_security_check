@@ -25,6 +25,18 @@ touch "$W/calls.log" "$W/kdialog.log"; chmod 666 "$W/calls.log" "$W/kdialog.log"
 U=bdatest
 UH=/var/home/$U
 PASS=0; FAIL=0
+# SIGPIPE may be ignored when this starts (a CI runner starts its steps
+# like that, a systemd service too, a terminal does not), and bash cannot
+# change it afterwards. The suite must pass both ways (CI runs it twice,
+# see .github/workflows/ci.yml); the few checks that see the difference
+# use PIPE_END: how a program ends that writes to a closed pipe (141: ended
+# by the signal; 1: its write failed).
+if (( (16#$(awk '/^SigIgn:/ { print $2 }' "/proc/$$/status") >> 12) & 1 )); then
+    SIGPIPE_IGNORED=1; PIPE_END=1
+else
+    SIGPIPE_IGNORED=0; PIPE_END=141
+fi
+echo "SIGPIPE at the start: $( (( SIGPIPE_IGNORED )) && echo ignored || echo default)"
 ok()   { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
 bad()  { FAIL=$((FAIL + 1)); printf '  FAIL %s\n' "$1"; }
 expect() { if grep -qF -- "$2" "$1"; then ok "$3"; else bad "$3 (missing: $2)"; fi; }
@@ -1181,6 +1193,73 @@ assert f[1]["fixable"] is False' "$(_check_input check_firewall)" && echo "check
         [[ "$(dlg '{"button":0}')" == 0 && "$(dlg '{"button":1}')" == 1 ]] && ! dlg '{"button":2}' > /dev/null && ! dlg '{"button":-1}' > /dev/null \
             && ! dlg '{"button":true}' > /dev/null && ! dlg '{"button":"1"}' > /dev/null && ! dlg '{"button":1.0}' > /dev/null && ! dlg '[1]' > /dev/null \
             && echo "dialog-button-in-range"
+        # The button a stray Enter or Space presses in the window ("primary",
+        # counted from 0, buttons in the order Cancel, No, Yes; -1: none). It
+        # follows the default answer, and it is never a Yes that changes the
+        # PC as administrator ("careful", "warn").
+        for fn in ui_yesno ui_choice3 ui_radiolist ui_msg run_undo; do eval "$(sed -n "/^${fn}() {/,/^}/p" "$HERE"/../lib/ui.sh "$HERE"/../lib/fixes.sh)"; done
+        prim() { python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); print(d["primary"], d["kind"], end=";")' "$W/app-in.json"; }
+        APP_OUT='{"button":0}'; p=""
+        ui_yesno "q" Y N n; p+=$(prim); ui_yesno "q" Y N y; p+=$(prim)
+        ui_yesno "q" Y N y careful; p+=$(prim); ui_yesno "q" Y N n careful; p+=$(prim)
+        ui_yesno "q" Y N y warn; p+=$(prim); ui_yesno "q" Y N n warn; p+=$(prim)
+        [[ "$p" == "0 question;1 question;-1 question;0 question;-1 warning;0 warning;" ]] && echo "yesno-enter-follows-the-default-never-a-change"
+        p=""
+        ui_choice3 "q" "" Y N C; p+=$(prim); ui_choice3 "q" "" Y N C "" y; p+=$(prim)
+        ui_choice3 "q" "" Y N C careful; p+=$(prim); ui_choice3 "q" "" Y N C careful y; p+=$(prim)
+        ui_choice3 "q" "" Y N C warn; p+=$(prim); ui_choice3 "q" "" Y N C warn y; p+=$(prim)
+        [[ "$p" == "1 question;2 question;1 question;-1 question;1 warning;-1 warning;" ]] && echo "choice3-enter-follows-the-default-never-a-change"
+        # The windows that change something. Each answer comes from a
+        # queue; every dialog that was asked for is kept.
+        ui_app() {
+            local a
+            printf '%s\n' "$2" >> "$W/app-all.jsonl"
+            if [[ "$1" != dialog ]]; then printf '%s' "$APP_OUT"; return 0; fi
+            a=$(head -n 1 "$W/app-q"); sed -i 1d "$W/app-q"
+            printf '%s' "${a:-{\"button\":0\}}"
+        }
+        # dlgs — of every dialog: its primary, its kind and its last button.
+        dlgs() { python3 -I -c 'import json, sys
+for line in open(sys.argv[1]):
+    d = json.loads(line)
+    print(d["primary"], d["kind"], d["buttons"][-1]["label"], sep="/", end=";")' "$1"; }
+        # Apply, where the Apply window gave no usable answer: with and
+        # without a warning, Enter is "Skip".
+        APP_OUT='{"choice":"rm"}'; : > "$W/app-all.jsonl"; : > "$W/app-q"
+        _fix_warnings() { :; }; apply_change "true" "" > /dev/null 2>&1; r1=$?
+        _fix_warnings() { echo "x|Something stops working"; }; apply_change "true" "" > /dev/null 2>&1; r2=$?
+        [[ $r1 -eq 2 && $r2 -eq 2 && "$(grep '"buttons"' "$W/app-all.jsonl" > "$W/app-dlg.jsonl"; dlgs "$W/app-dlg.jsonl")" == "1/question/Apply;1/warning/Apply;" ]] && echo "apply-fallback-enter-is-skip"
+        # Undo: the older of two runs is picked, "Undo anyway" is pressed,
+        # the first step's window is closed with Stop. Enter was Cancel,
+        # then "Keep it"; nothing was undone.
+        (
+            STATE_DIR="$W/undo-prim"; mkdir -p "$STATE_DIR/undo/20250101-000000" "$STATE_DIR/undo/20250102-000000"
+            for r in 20250101-000000 20250102-000000; do
+                printf '%s\n' '#!/usr/bin/env bash' '# TITLE: A change' 'set -uo pipefail' "touch '$W/undo-prim/ran'" > "$STATE_DIR/undo/$r/01-undo.sh"
+            done
+            : > "$W/app-all.jsonl"
+            printf '%s\n' '{"button":1,"tag":"20250101-000000"}' '{"button":1}' '{"button":0}' '{"button":0}' > "$W/app-q"
+            run_undo > /dev/null 2>&1
+            [[ "$(dlgs "$W/app-all.jsonl")" == "1/question/OK;0/warning/Undo anyway;1/question/Undo it;0/info/OK;" && ! -e "$W/undo-prim/ran" \
+               && -e "$STATE_DIR/undo/20250101-000000/01-undo.sh" ]] && echo "undo-enter-is-cancel-then-keep-it"
+        )
+        # kdialog cannot be told its default button: a marked question
+        # uses its warning dialog, whose default is No (or Cancel).
+        (
+            _ui_dialog() { return 4; }; _kd() { printf '%s ' "$@" >> "$W/kd-kinds"; echo >> "$W/kd-kinds"; return 1; }
+            UI_MODE=kde; : > "$W/kd-kinds"
+            ui_yesno "q" Y N y; ui_yesno "q" Y N y careful; ui_yesno "q" Y N n warn
+            ui_choice3 "q" "" Y N C; ui_choice3 "q" "" Y N C careful; ui_choice3 "q" "" Y N C warn
+            [[ "$(grep -oE -- '--(warning)?yesno(cancel)? ' "$W/kd-kinds" | tr -d '\n')" == "--yesno --warningyesno --warningyesno --yesnocancel --warningyesnocancel --warningyesnocancel " ]] \
+                && echo "careful-questions-use-the-kdialog-warning"
+        )
+        # Every question whose Yes changes the PC there and then is marked.
+        marked=1
+        for q in 'echo warn || echo careful)"' '"Roll back" "Leave it" "y" careful' '"Undo anyway" "Cancel" "n" warn' \
+                 '"Undo it" "Keep it" "Stop" careful' '"${verb}" "Cancel" "y" careful' '"Set it up" "Cancel" "y" careful' '"Update" "Not now" "y" careful'; do
+            grep -qF -- "$q" "$HERE"/../lib/fixes.sh "$HERE"/../lib/install.sh "$HERE"/../lib/update.sh || { marked=0; echo "not marked: $q"; }
+        done
+        [[ "$(grep -cF '"Remove" "Cancel" "y" careful' "$HERE/../lib/install.sh")" -eq 2 && $marked -eq 1 ]] && echo "root-changing-questions-are-marked"
     )
 
     # The real detection rules: Steam alone does not mean Remote Play is
@@ -1598,7 +1677,9 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          fix-args-kept repo-section-not-run fix-umask-022 \
          fix-needs-private-tmp newline-path-not-split sudo-shell-rules-found image-policy-read \
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
-         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked dialog-button-in-range kept-no-date-no-since; do
+         kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked dialog-button-in-range kept-no-date-no-since \
+         yesno-enter-follows-the-default-never-a-change choice3-enter-follows-the-default-never-a-change apply-fallback-enter-is-skip \
+         undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked; do
     expect "$W/t6.out" "$m" "$m"
 done
 
@@ -1608,7 +1689,7 @@ done
 # and that a front end that fails or goes away means "use kdialog" (3), not
 # a hang and not "cancelled".
 cat > "$W/fake-front.py" <<'PYEOF'
-import json, os, signal, sys, time
+import json, os, signal, subprocess, sys, time
 log = open(sys.argv[1], "a")
 def note(*a):
     print(*a, file=log, flush=True)
@@ -1623,12 +1704,21 @@ n = 0
 note("pid", os.getpid())
 for line in sys.stdin:
     m = json.loads(line)
-    if m.get("hang"):
+    if m.get("hang") or m.get("data", {}).get("hang"):
         # Stuck: deaf to "quit", to the end of its input and to SIGTERM.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         note("hanging")
         while True:
             time.sleep(1000)
+    if m.get("deaf"):
+        # Deaf to "quit" and to the end of its input, but not to SIGTERM.
+        note("deaf")
+        while True:
+            time.sleep(1000)
+    if m.get("freeze"):
+        # Stopped (as by SIGSTOP from outside): it reads nothing any more.
+        note("frozen")
+        os.kill(os.getpid(), signal.SIGSTOP)
     if m.get("quit"):
         note("quit")
         break
@@ -1641,6 +1731,18 @@ for line in sys.stdin:
     d = m["data"]
     if d.get("die"):
         sys.exit(7)
+    if d.get("chatty"):
+        # It ends, and leaves a program behind that holds its stderr and
+        # keeps writing to it.
+        p = subprocess.Popen(["bash", "-c", "while echo chatter >&2; do sleep 0.2; done"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        note("child", p.pid)
+        os._exit(0)
+    if d.get("holder"):
+        # It ends, and leaves a program behind that holds its answer pipe.
+        p = subprocess.Popen(["sleep", "300"], stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        note("child", p.pid)
+        os._exit(0)
     if d.get("fds"):
         # What this process has open: {descriptor: what it is}.
         fds = {}
@@ -1685,6 +1787,8 @@ for line in sys.stdin:
         send(m["id"], 3, None)
     elif d.get("cancel"):
         send(m["id"], 1, None)
+    elif "status" in d:
+        send(m["id"], d["status"], {"status": d["status"]})
     else:
         send(m["id"], 0, {"mode": m["mode"], "say": d.get("say"), "n": n})
 PYEOF
@@ -1698,7 +1802,9 @@ PYEOF
     new_run() { ui_front_stop; RUN_TMP=$(mktemp -d "$W/front-rt.XXXXXX"); UI_MODE=kde; _QML_OK=yes; : > "$FL"; }
 
     new_run; ui_front_start
-    [[ -n "$_UI_FRONT_W" && -z "$(ls -A "$RUN_TMP")" ]] && echo "front-started"
+    # (Its two pipes have no name any more; what is in the private folder
+    # is the note of its processes.)
+    [[ -n "$_UI_FRONT_W" && "$(ls -A "$RUN_TMP")" == ui-front-seen ]] && echo "front-started"
     a=$(ui_app wizard '{"say":"one"}'); rc=$?
     [[ $rc -eq 0 && "$a" == '{"mode": "wizard", "say": "one", "n": 1}' ]] && echo "front-answer-in-subshell"
     a=$(ui_app dialog '{"say":"two } \"x\""}'); rc=$?
@@ -1713,7 +1819,10 @@ PYEOF
     # A fix being applied: the window's spinner. The scan: its progress window.
     ui_busy_start 'Applying: "Firewall"'; ui_busy_stop
     ui_progress_start "Checking your PC…" 4; ui_progress_set 2 "Firewall"; ui_progress_set 4 "Malware" slow; ui_progress_stop
+    ui_theme_prepare() { echo "prepared for ${UI_THEME}" >> "$W/front-theme-prepared"; }
     UI_THEME=light; ui_theme_changed; UI_THEME=system
+    ui_theme_prepare() { :; }
+    [[ "$(cat "$W/front-theme-prepared" 2>/dev/null)" == "prepared for light" ]] && echo "theme-change-refreshes-the-kdialog-theme"
     a=$(ui_app wizard '{"say":"after"}')
     [[ "$a" == *'"n": 7}' ]] && grep -qxF '{"busy": "Applying: \"Firewall\""}' "$FL" && grep -qxF '{"busy": ""}' "$FL" \
         && [[ -z "$_PROGRESS_FD" && -z "$_PROGRESS_REF" ]] && echo "front-busy-in-window"
@@ -1732,8 +1841,16 @@ PYEOF
 
     new_run; ui_front_start
     a=$(ui_app wizard '{"fail":true}'); rc=$?
-    for _ in 1 2 3 4 5 6 7 8 9 10; do grep -qx quit "$FL" && break; sleep 0.1; done
+    for _ in $(seq 1 100); do grep -qx quit "$FL" && break; sleep 0.1; done
     [[ $rc -eq 3 ]] && grep -qx quit "$FL" && ! _qml_ok && echo "front-page-failure-is-3"
+    # A status that is none of "answered", "cancelled" and "failed" is not
+    # an answer either.
+    new_run; ui_front_start
+    a=$(ui_app wizard '{"status":2}'); rc=$?
+    [[ $rc -eq 3 && -z "$a" ]] && ! _qml_ok && echo "front-unknown-status-is-3"
+    # Where the front end cannot run it is not started.
+    new_run; _QML_OK=no; ui_front_start
+    [[ -z "$_UI_FRONT_W" && -z "$(ls -A "$RUN_TMP")" ]] && ! grep -q '^pid ' "$FL" && echo "front-not-started-where-it-cannot-run"
     new_run; ui_front_start
     a=$(ui_app wizard '{"garbage":true}'); rc=$?
     [[ $rc -eq 3 && -z "$a" ]] && echo "front-bad-answer-is-3"
@@ -1749,6 +1866,26 @@ PYEOF
     _ui_app_cmd() { echo '{"not":"an answer"}'; return 2; }
     a=$(ui_app settings '{}'); rc=$?
     [[ $rc -eq 3 && -z "$a" && "$_QML_OK" == yes ]] && ! _qml_ok && echo "front-one-shot-failure-is-3-and-remembered"
+    # Its answer has the limit of the long-lived one's, and no more of it
+    # is read: 300 MB of "answer" under a memory limit the shell could not
+    # hold them in.
+    new_run
+    _ui_app_cmd() { head -c $(( _UI_FRONT_LINE_MAX - 1 )) /dev/zero | tr '\0' x; echo; }
+    a=$(ui_app settings '{}'); rc=$?
+    [[ $rc -eq 0 && ${#a} -eq $(( _UI_FRONT_LINE_MAX - 1 )) ]] && _qml_ok && echo "front-one-shot-longest-answer"
+    _ui_app_cmd() { head -c 300000000 /dev/zero 2>/dev/null | tr '\0' x 2>/dev/null; }
+    a=$(ulimit -v 200000; ui_app settings '{}'); rc=$?
+    [[ $rc -eq 3 && -z "$a" ]] && ! _qml_ok && echo "front-one-shot-answer-capped"
+    # kdialog's answer: read up to the same limit, its status kept.
+    (
+        RUN_TMP=""; UI_MODE=kde
+        set +o pipefail     # the status must not depend on the caller's options
+        _as_desktop_user() { head -c 300000000 /dev/zero 2>/dev/null | tr '\0' x 2>/dev/null; }
+        n=$(_kd --inputbox x | wc -c)
+        _as_desktop_user() { echo picked; return 1; }
+        a=$(_kd --menu x); rc=$?
+        [[ "$n" -eq "$_UI_FRONT_LINE_MAX" && $rc -eq 1 && "$a" == picked ]] && echo "kdialog-answer-capped-status-kept"
+    )
     _ui_app_cmd() { python3 -I "$W/fake-front.py" "$FL" "$@"; }
 
     # A subshell does not start the front end: it would end with the subshell.
@@ -1794,14 +1931,47 @@ PYEOF
 
     # A write to a pipe that nobody reads fails: it does not end the shell
     # (SIGPIPE), which would skip the EXIT trap. Afterwards the signal is
-    # back at its default for the programs started from here.
+    # as it was before, for this shell and for the programs started from
+    # here: at its default, unless it was ignored when the suite started.
+    sigign() { bash -c 'awk "/^SigIgn:/ { print \$2 }" "/proc/$$/status"'; }
+    ign0=$(sigign)
     mkfifo "$W/dead-pipe"
     cat "$W/dead-pipe" > /dev/null & rdr=$!
     exec {dw}> "$W/dead-pipe"
     kill "$rdr"; wait "$rdr" 2>/dev/null
     ( _pipe_write "$dw" "x"; echo "pipe-write-status-$?" ); echo "pipe-write-shell-status-$?"
-    ( _pipe_write "$dw" "x"; echo x >&"$dw"; echo "not reached" ) 2>/dev/null; [[ $? -eq 141 ]] && echo "pipe-write-leaves-sigpipe-alone"
+    ( _pipe_write "$dw" "x"; echo x >&"$dw"; echo "pipe-write-shell-went-on" ) > "$W/pipe-after" 2>/dev/null; prc=$?
+    if (( SIGPIPE_IGNORED )); then
+        [[ $prc -eq 0 ]] && grep -qx pipe-write-shell-went-on "$W/pipe-after" && pipe_after=same
+    else
+        [[ $prc -eq 141 && ! -s "$W/pipe-after" ]] && pipe_after=same
+    fi
+    [[ "${pipe_after:-}" == same && -n "$ign0" && "$(sigign)" == "$ign0" ]] && echo "pipe-write-leaves-sigpipe-alone"
     exec {dw}>&-
+    # The same write to a pipe that is full, with a reader that takes
+    # nothing out of it: given up after a moment, and nothing left behind.
+    mkfifo "$W/full-pipe"
+    exec {dr}<> "$W/full-pipe" {dw}> "$W/full-pipe"
+    timeout 2 head -c 200000 /dev/zero >&"$dw"; filled=$?
+    # (In a shell of its own, which is ended should it wait for ever.
+    # Processes are counted without the ones that have ended and wait to
+    # be collected, which "pgrep" and "kill -0" still find.)
+    procs_running() { local p n=0; for p in $(pgrep -x "$1"); do _proc_stat "$p" && n=$((n + 1)); done; echo "$n"; }
+    nb=$(procs_running bash); rm -f "$W/soon-status"
+    ( _pipe_write_soon "$dw" '{"quit":true}'; echo "$?" > "$W/soon-status" ) & soon=$!
+    for _ in $(seq 1 300); do [[ -s "$W/soon-status" ]] && break; sleep 0.1; done
+    [[ -s "$W/soon-status" ]] || pkill -KILL -P "$soon"
+    kill -KILL "$soon" 2>/dev/null; wait "$soon" 2>/dev/null
+    for _ in $(seq 1 50); do [[ "$(procs_running bash)" -le "$nb" ]] && break; sleep 0.1; done
+    [[ $filled -eq 124 && "$(cat "$W/soon-status" 2>/dev/null)" == 1 && "$(procs_running bash)" -le "$nb" ]] && echo "pipe-write-soon-gives-up-on-a-full-pipe"
+    exec {dw}>&- {dr}<&-
+    # ... and to a pipe that is read: the line arrives.
+    mkfifo "$W/read-pipe"
+    cat "$W/read-pipe" > "$W/read-pipe.out" & rdr=$!
+    exec {dw}> "$W/read-pipe"
+    _pipe_write_soon "$dw" "a line"; src=$?
+    exec {dw}>&-; wait "$rdr"
+    [[ $src -eq 0 && "$(cat "$W/read-pipe.out")" == "a line" ]] && echo "pipe-write-soon-writes"
 
     # The front end is a program of a less trusted account. It never gets
     # the run log itself: its stderr is a pipe, which this side copies into
@@ -1813,16 +1983,36 @@ PYEOF
     a=$(ui_app wizard '{"fds":true}'); rc=$?
     [[ $rc -eq 0 && "$a" == *'"2": "pipe:'* && "$a" == *"/front.log"* && "$a" != *"front-run.log"* ]] && echo "front-no-log-descriptor"
     [[ $rc -eq 0 && -e "/proc/self/fd/$lk" && "$a" != *"front.lock"* ]] && echo "front-no-lock-descriptor"
+    # It has its three standard descriptors and nothing else of this
+    # tool's (what is left over is the stand-in's own: its notes, and the
+    # folder it lists).
+    python3 -I -c 'import json, sys
+d = json.loads(sys.argv[1])
+own = [k for k, v in d.items() if "front.log" in v or v.endswith("/fd")]
+sys.exit(0 if sorted(set(d) - set(own)) == ["0", "1", "2"] else 1)' "$a" && echo "front-three-descriptors-only"
+    # Of the window's two pipes, only the helper and the front end hold a
+    # copy: not the log reader (and its dd), which lives longer than the
+    # front end when something else still writes to its stderr.
+    fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START")
+    held=0
+    for p in "${tree[@]}"; do
+        pid=${p%% *}
+        [[ "$pid" == "$_UI_FRONT_PID" || "$pid" == "$fpid" ]] && continue
+        for l in "/proc/$pid/fd"/*; do
+            [[ "$(readlink "$l" 2>/dev/null)" == *"/ui-front/re"[qp]* ]] && held=1
+        done
+    done
+    [[ -n "$fpid" && ${#tree[@]} -ge 4 && $held -eq 0 ]] && echo "front-log-reader-holds-no-window-pipe"
     _RUN_LOCK_FD=""; exec {lk}>&-
     a=$(ui_app wizard "$(python3 -I -c 'import json; print(json.dumps({"say": "e", "stderr": "plain line\n12:00:00 [OK] forged\x1b[31m\ttab\r\n\x00caf\u00e9\n" + "y" * 4500 + "\n"}))')")
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [[ "$(grep -c 'ui: yyy' "$RUN_LOG")" -eq 3 ]] && break; sleep 0.1; done
+    for _ in $(seq 1 100); do [[ "$(grep -c 'ui: yyy' "$RUN_LOG")" -eq 3 ]] && break; sleep 0.1; done
     [[ "$a" == *'"say": "e"'* ]] && grep -qE '^[0-9:]{8} ui: plain line$' "$RUN_LOG" \
         && grep -qE '^[0-9:]{8} ui: 12:00:00 \[OK\] forged\[31m tab$' "$RUN_LOG" && grep -qE '^[0-9:]{8} ui: caf\?\?$' "$RUN_LOG" \
         && ! grep -qvE '^[0-9:]{8} ui: ' "$RUN_LOG" && ! LC_ALL=C grep -q '[^ -~]' "$RUN_LOG" && echo "front-stderr-marked-and-cleaned"
     [[ "$(grep -c 'ui: yyy' "$RUN_LOG")" -eq 3 && "$(awk '{ if (length($0) > m) m = length($0) } END { print m }' "$RUN_LOG")" -eq 2013 ]] \
         && echo "front-stderr-line-capped"
     a=$(ui_app wizard '{"say":"f","flood":300000}'); rc=$?
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -q 'the rest is not recorded' "$RUN_LOG" && break; sleep 0.1; done
+    for _ in $(seq 1 100); do grep -q 'the rest is not recorded' "$RUN_LOG" && break; sleep 0.1; done
     sleep 0.3
     b=$(ui_app wizard '{"say":"g","stderr":"after the cap\n"}')
     [[ $rc -eq 0 && "$a" == *'"say": "f"'* && "$b" == *'"say": "g"'* && "$(stat -c %s "$RUN_LOG")" -lt 30000 ]] \
@@ -1833,23 +2023,40 @@ PYEOF
     # ends instead of reading for the rest of the run.
     : > "$RUN_LOG"; t0=$SECONDS
     timeout 30 cat /dev/zero | _ui_log_reader "$W/no-such-stop-file"; st=("${PIPESTATUS[@]}")
-    [[ ${st[0]} -eq 141 && ${st[1]} -eq 0 && $(( SECONDS - t0 )) -lt 10 && ! -s "$RUN_LOG" ]] && echo "front-stderr-nul-bytes-capped"
+    # (The writer ends when the reader has closed the pipe, long before
+    # its 60 seconds are over; how it ends: see PIPE_END.)
+    timeout 60 cat /dev/zero 2>/dev/null | _ui_log_reader "$W/no-such-stop-file"; st=("${PIPESTATUS[@]}")
+    [[ ${st[0]} -eq $PIPE_END && ${st[1]} -eq 0 && $(( SECONDS - t0 )) -lt 30 && ! -s "$RUN_LOG" ]] && echo "front-stderr-nul-bytes-capped"
     t0=$SECONDS
-    timeout 30 bash -c 'while :; do head -c 5000 /dev/zero; echo; done' | _ui_log_reader "$W/no-such-stop-file"; st=("${PIPESTATUS[@]}")
-    [[ ${st[0]} -eq 141 && $(( SECONDS - t0 )) -lt 10 && "$(stat -c %s "$RUN_LOG")" -lt 1000 ]] && echo "front-stderr-nul-lines-capped"
+    timeout 60 bash -c 'while :; do head -c 5000 /dev/zero || exit; echo || exit; done' 2>/dev/null | _ui_log_reader "$W/no-such-stop-file"; st=("${PIPESTATUS[@]}")
+    [[ ${st[0]} -eq $PIPE_END && $(( SECONDS - t0 )) -lt 30 && "$(stat -c %s "$RUN_LOG")" -lt 1000 ]] && echo "front-stderr-nul-lines-capped"
     # What it logs is not held back, and a program that keeps the pipe
     # open does not keep the reader (or its dd) once the stop file is there.
-    # (Counted without the ones that have ended and wait to be collected,
-    # which "pgrep" and "kill -0" still find.)
-    dd_running() { local p n=0; for p in $(pgrep -x dd); do _proc_stat "$p" && n=$((n + 1)); done; echo "$n"; }
-    : > "$RUN_LOG"; rm -f "$W/reader-stop"; ndd=$(dd_running)
-    ( echo "first line"; sleep 2; : > "$W/reader-stop"; exec sleep 21 ) {_UI_FRONT_W}>&- {_UI_FRONT_R}<&- | _ui_log_reader "$W/reader-stop" &
+    dd_running() { procs_running dd; }
+    # The writer goes on (to the stop file, then to holding the pipe) only
+    # when this side has seen its first line in the log.
+    : > "$RUN_LOG"; rm -f "$W/reader-stop" "$W/reader-go"; ndd=$(dd_running)
+    ( echo "first line"; until [[ -e "$W/reader-go" ]]; do sleep 0.1; done; : > "$W/reader-stop"; exec sleep 21 ) \
+        {_UI_FRONT_W}>&- {_UI_FRONT_R}<&- | _ui_log_reader "$W/reader-stop" &
     rd=$!
-    for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q 'ui: first line' "$RUN_LOG" && break; sleep 0.1; done
+    for _ in $(seq 1 200); do grep -q 'ui: first line' "$RUN_LOG" && break; sleep 0.1; done
     grep -q 'ui: first line' "$RUN_LOG" && [[ ! -e "$W/reader-stop" ]] && echo "front-stderr-logged-at-once"
-    for _ in $(seq 1 60); do kill -0 "$rd" 2>/dev/null || break; sleep 0.1; done
-    ! _proc_stat "$rd" && [[ "$(dd_running)" == "$ndd" ]] && echo "front-stderr-reader-ends-on-stop-file"
+    : > "$W/reader-go"
+    for _ in $(seq 1 200); do _proc_stat "$rd" || break; sleep 0.1; done
+    for _ in $(seq 1 50); do [[ "$(dd_running)" == "$ndd" ]] && break; sleep 0.1; done
+    [[ -e "$W/reader-stop" ]] && ! _proc_stat "$rd" && [[ "$(dd_running)" == "$ndd" ]] && echo "front-stderr-reader-ends-on-stop-file"
     pkill -x -f 'sleep 21'
+    # Nor does a program that keeps writing keep it: the stop file is seen
+    # while the lines keep coming, too.
+    : > "$RUN_LOG"; rm -f "$W/chatty-stop"
+    ( while echo chatter; do sleep 0.2; done ) {_UI_FRONT_W}>&- {_UI_FRONT_R}<&- 2>/dev/null | _ui_log_reader "$W/chatty-stop" &
+    rd=$!
+    for _ in $(seq 1 200); do grep -q 'ui: chatter' "$RUN_LOG" && break; sleep 0.1; done
+    : > "$W/chatty-stop"
+    for _ in $(seq 1 200); do _proc_stat "$rd" || break; sleep 0.1; done
+    for _ in $(seq 1 50); do [[ "$(dd_running)" == "$ndd" ]] && break; sleep 0.1; done
+    grep -q 'ui: chatter' "$RUN_LOG" && ! _proc_stat "$rd" && [[ "$(dd_running)" == "$ndd" ]] && echo "front-stderr-reader-ends-while-lines-keep-coming"
+    builtin kill "$rd" 2>/dev/null; wait 2>/dev/null
 
     # A program started through _no_tty (a fix, another account's program)
     # does not get the window's two pipes; any other child does. Its exit
@@ -1869,8 +2076,9 @@ PYEOF
     # Every signal this shell sends from here on is noted, with what the
     # target was at that moment: its start time and its account.
     kill() {
-        local t="${!#}"
-        if _proc_stat "$t"; then echo "$t $_PS_START $(stat -c %u "/proc/$t" 2>/dev/null)"; else echo "$t gone -"; fi >> "$W/front-kills"
+        local t="${!#}" sig="${1#-}"
+        [[ "$1" == -s ]] && sig=$2
+        if _proc_stat "$t"; then echo "$t $_PS_START $(stat -c %u "/proc/$t" 2>/dev/null) $sig"; else echo "$t gone - $sig"; fi >> "$W/front-kills"
         builtin kill "$@"
     }
     # kills_in_tree — every signal noted went to a process of the list.
@@ -1901,36 +2109,50 @@ PYEOF
         && ! kill -0 "$fpid" 2>/dev/null && kill -0 "$other" 2>/dev/null && echo "front-processes-gone-after-stop"
     # A child of this shell that still holds the two pipes keeps the helper
     # waiting: only the helper is signalled then, and without a long wait.
+    # (The wait is counted in looks, 0.02 seconds apart, not in seconds: a
+    # busy machine makes each look slower, not more of them. The full wait
+    # for a front end that does not leave is 100 looks.)
     new_run; ui_front_start
     a=$(ui_app wizard '{"say":"x"}')
     mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START"); hpid=$_UI_FRONT_PID
-    sleep 300 & holder=$!
-    : > "$W/front-kills"; t0=${EPOCHREALTIME/[.,]/}
+    command sleep 300 & holder=$!
+    : > "$W/front-kills"; looks=0
+    sleep() { looks=$(( looks + 1 )); command sleep "$@"; }
     ui_front_stop
-    t1=${EPOCHREALTIME/[.,]/}
-    [[ "$(cut -d' ' -f1 "$W/front-kills" | sort -u)" == "$hpid" && $(( t1 - t0 )) -lt 1500000 && -z "$(_procs_left "${tree[@]}")" ]] \
+    unset -f sleep
+    [[ "$(cut -d' ' -f1 "$W/front-kills" | sort -u)" == "$hpid" && $looks -ge 10 && $looks -lt 60 && -z "$(_procs_left "${tree[@]}")" ]] \
         && kills_in_tree && builtin kill -0 "$holder" 2>/dev/null && echo "front-stop-with-a-pipe-holder"
     builtin kill "$holder" 2>/dev/null
     new_run; ui_front_start; _ui_front_send '{"hang":true}'
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -qx hanging "$FL" && break; sleep 0.1; done
+    for _ in $(seq 1 100); do grep -qx hanging "$FL" && break; sleep 0.1; done
     fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START")
     : > "$W/front-kills"; t0=$SECONDS
     ui_front_stop
     grep -qx hanging "$FL" && [[ -n "$fpid" && ${#tree[@]} -ge 3 && -z "$(_procs_left "${tree[@]}")" ]] && ! _proc_stat "$fpid" \
-        && builtin kill -0 "$other" 2>/dev/null && [[ $(( SECONDS - t0 )) -le 6 ]] && echo "front-stuck-process-ended"
+        && builtin kill -0 "$other" 2>/dev/null && [[ $(( SECONDS - t0 )) -le 20 ]] && echo "front-stuck-process-ended"
     [[ -s "$W/front-kills" ]] && kills_in_tree && echo "front-stuck-signals-only-its-processes"
+    # It is asked to end (TERM) before it is ended (KILL) ...
+    [[ "$(awk -v p="$fpid" '$1 == p { print $4 }' "$W/front-kills" | uniq | tr '\n' ' ')" == "TERM KILL " ]] && echo "front-stuck-term-before-kill"
+    # ... and one that ends when asked is not sent KILL at all.
+    new_run; ui_front_start; _ui_front_send '{"deaf":true}'
+    for _ in $(seq 1 100); do grep -qx deaf "$FL" && break; sleep 0.1; done
+    fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START")
+    : > "$W/front-kills"
+    ui_front_stop
+    grep -qx deaf "$FL" && [[ -n "$fpid" ]] && ! _proc_stat "$fpid" && [[ -z "$(_procs_left "${tree[@]}")" ]] && kills_in_tree \
+        && grep -q "^$fpid .* TERM\$" "$W/front-kills" && ! grep -q ' KILL$' "$W/front-kills" && echo "front-that-ends-on-term-gets-no-kill"
     # The same when the helper has ended before it (ended from outside):
     # there is no process to find the front end from, so what was seen
     # below the helper while it lived is what is ended.
     new_run; ui_front_start; _ui_front_send '{"hang":true}'
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -qx hanging "$FL" && break; sleep 0.1; done
+    for _ in $(seq 1 100); do grep -qx hanging "$FL" && break; sleep 0.1; done
     fpid=$(awk '$1 == "pid" { print $2 }' "$FL"); _ui_front_up; mapfile -t tree < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START"); hpid=$_UI_FRONT_PID
     builtin kill -KILL "$hpid"
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do _proc_stat "$hpid" || break; sleep 0.1; done
-    orphan=no; ! _proc_stat "$hpid" && _proc_stat "$fpid" && [[ " ${_UI_FRONT_SEEN[*]} " == *" $fpid $_PS_START own "* ]] && orphan=yes
+    for _ in $(seq 1 100); do _proc_stat "$hpid" || break; sleep 0.1; done
+    orphan=no; ! _proc_stat "$hpid" && _proc_stat "$fpid" && [[ " $(_ui_front_seen | tr '\n' ' ')" == *" $fpid $_PS_START own "* ]] && orphan=yes
     : > "$W/front-kills"; t0=$SECONDS
     ui_front_stop
-    [[ "$orphan" == yes && -s "$W/front-kills" && $(( SECONDS - t0 )) -le 6 ]] && ! _proc_stat "$fpid" && kills_in_tree \
+    [[ "$orphan" == yes && -s "$W/front-kills" && $(( SECONDS - t0 )) -le 20 ]] && ! _proc_stat "$fpid" && kills_in_tree \
         && builtin kill -0 "$other" 2>/dev/null && echo "front-stuck-without-its-helper-ended"
     builtin kill -KILL "$fpid" 2>/dev/null
     builtin kill "$other" 2>/dev/null
@@ -1947,13 +2169,19 @@ PYEOF
     new_run; ui_front_start
     a=$(ui_app wizard '{"say":"x"}'); pid="$_UI_FRONT_PID"
     _cleanup
-    for _ in 1 2 3 4 5 6 7 8 9 10; do grep -qx quit "$FL" && ! kill -0 "$pid" 2>/dev/null && break; sleep 0.1; done
+    for _ in $(seq 1 100); do grep -qx quit "$FL" && ! kill -0 "$pid" 2>/dev/null && break; sleep 0.1; done
     grep -qx quit "$FL" && ! kill -0 "$pid" 2>/dev/null && [[ -z "$_UI_FRONT_W" && ! -d "$RUN_TMP" ]] && echo "front-stopped-on-exit"
 
     # Not running (no private folder for the pipes): one page, one window.
     UI_MODE=kde; _QML_OK=yes; RUN_TMP=""; : > "$FL"
     ui_app wizard '{"say":"x"}' > "$W/front-a9"; rc=$?
     [[ $rc -eq 0 && "$(cat "$W/front-a9")" == '{"oneshot": "wizard"}' && -z "$_UI_FRONT_W" ]] && echo "front-one-shot-without-folder"
+    # ... and the scan's progress in a window of its own ("app.py progress").
+    : > "$FL"
+    ui_progress_start "Checking" 3; pb=$_PROGRESS_BACKEND; pfd=$_PROGRESS_FD
+    ui_progress_set 1 "Firewall"; ui_progress_stop
+    for _ in $(seq 1 100); do grep -qx 'oneshot progress' "$FL" && break; sleep 0.1; done
+    [[ "$pb" == window && -n "$pfd" && -z "$_PROGRESS_FD" && -z "$_UI_FRONT_W" ]] && grep -qx 'oneshot progress' "$FL" && echo "progress-in-a-window-of-its-own"
 ) > "$W/front.out" 2>&1
 for m in front-started front-answer-in-subshell front-one-process front-cancelled-is-1 front-stale-answer-skipped front-large-answer \
          front-busy-in-window front-progress-lines front-theme-sent front-died-falls-back front-not-used-again front-gone-kdialog-asks \
@@ -1965,7 +2193,12 @@ for m in front-started front-answer-in-subshell front-one-process front-cancelle
          front-one-shot-failure-is-3-and-remembered front-not-started-in-a-subshell front-request-is-one-line front-answer-without-id-is-3 \
          front-longest-answer front-cut-answer-is-3 front-answer-limit-counts-bytes front-gone-between-requests-is-noted front-gone-nothing-sent \
          front-gone-progress-is-kdialog pipe-write-status-1 pipe-write-shell-status-0 pipe-write-leaves-sigpipe-alone front-no-lock-descriptor \
-         same-account-drops-window-pipes front-stuck-without-its-helper-ended; do
+         same-account-drops-window-pipes front-stuck-without-its-helper-ended \
+         front-unknown-status-is-3 front-not-started-where-it-cannot-run front-one-shot-longest-answer front-one-shot-answer-capped \
+         kdialog-answer-capped-status-kept theme-change-refreshes-the-kdialog-theme pipe-write-soon-gives-up-on-a-full-pipe \
+         pipe-write-soon-writes front-three-descriptors-only front-stderr-reader-ends-while-lines-keep-coming \
+         front-log-reader-holds-no-window-pipe front-stuck-term-before-kill front-that-ends-on-term-gets-no-kill \
+         progress-in-a-window-of-its-own; do
     expect "$W/front.out" "$m" "$m"
 done
 
@@ -2005,6 +2238,164 @@ for m in first-page-status-0 helper-ended window-marked-gone next-page-status-4 
 done
 reject "$W/sigpipe.out" "not reached" "the held signal takes effect when the fix is recorded"
 [[ -z "$(compgen -G "$W/sigpipe-rt.*")" ]] && ok "the private folder is removed after that" || bad "private folder left behind: $(compgen -G "$W/sigpipe-rt.*")"
+
+# A front end is a program of a less trusted account, and it can end badly
+# in more ways than "it is gone": it leaves a program behind that holds one
+# of its pipes, it is stopped with the request pipe full, it hangs on the
+# first page. In none of them may this side wait for ever, and the tool's
+# exit must always get to its end: the private folder removed, the run's
+# lock released, nothing of the tool's left running. Each case is a run of
+# its own, in a session of its own, with the lock and the exit trap of a
+# real run.
+cat > "$W/front-end.sh" <<'FEEOF'
+# shellcheck disable=SC1090
+source "$TOOL"
+echo "$$" > "$W/fe-$1.sid"
+STATE_DIR="$W/fe-$1.state"; RUN_ID="fe"; TMPDIR="$W/fe-$1.tmp"; export TMPDIR
+mkdir -p "$STATE_DIR" "$TMPDIR"
+_init_state
+FL="$W/fe-$1.log"; : > "$FL"
+_ui_app_cmd() { python3 -I "$W/fake-front.py" "$FL" "$@"; }
+# On the first page the front end's process appears a second after it was
+# started, when the main shell has long gone on: the real one, at the far
+# end of runuser, is not there at once either.
+[[ "$1" != hung-first-page ]] || _ui_app_cmd() { sleep 1; python3 -I "$W/fake-front.py" "$FL" "$@"; }
+UI_MODE=kde; _QML_OK=yes
+trap _on_signal INT TERM HUP
+trap 'echo "exit-trap-ran"; _cleanup; echo "exit-trap-done"' EXIT
+ui_front_start
+case "$1" in
+    chatty|holder)
+        # The front end ends while a page is asked, and something it
+        # started still holds its stderr (chatty) or its answer pipe.
+        a=$(ui_app wizard "{\"$1\":true}"); echo "page-status-$?"
+        a=$(ui_app wizard '{"say":"x"}'); echo "next-page-status-$?"
+        ;;
+    frozen)
+        # The front end is stopped, and the request pipe is full.
+        a=$(ui_app wizard '{"say":"x"}'); echo "page-status-$?"
+        _ui_front_send '{"freeze":true}'
+        fpid=$(awk '$1 == "pid" { print $2 }' "$FL")
+        for _ in $(seq 1 100); do
+            [[ "$(sed 's/.*) //' "/proc/$fpid/stat" 2>/dev/null | cut -c1)" == T ]] && break
+            sleep 0.1
+        done
+        timeout 2 head -c 200000 /dev/zero >&"$_UI_FRONT_W"; echo "pipe-filled-$?"
+        ;;
+    hung-first-page)
+        # The first page is asked from $(...), as the wizard's is. The
+        # front end hangs on it, and then a signal goes to every process
+        # of the tool (the session ends): it ends the helper, not the
+        # front end. The signal is sent when this side had the time to
+        # note the front end's process, or after ten seconds.
+        (
+            until grep -qx hanging "$FL"; do sleep 0.1; done
+            fpid=$(awk '$1 == "pid" { print $2 }' "$FL")
+            for _ in $(seq 1 100); do grep -q "^$fpid " "$RUN_TMP/ui-front-seen" 2>/dev/null && break; sleep 0.1; done
+            kill -TERM 0
+        ) > /dev/null 2>&1 &
+        a=$(ui_app wizard '{"hang":true}'); echo "page-status-$?"
+        ;;
+esac
+exit 0
+FEEOF
+# running PID — the process is there (and not one that has ended and waits
+# to be collected, which pgrep still lists).
+running() { [[ "$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -c1)" == [A-Y] ]]; }
+# front_end_case NAME — run one of them; one that takes longer than two
+# minutes is ended. Leaves its exit status in FE_RC and what is left of
+# its session afterwards (process ids) in FE_LEFT.
+front_end_case() {
+    local name="$1" pid sid="" p i
+    rm -f "$W/fe-$name.sid"
+    env TOOL="$TOOL" W="$W" setsid --wait bash "$W/front-end.sh" "$name" > "$W/fe-$name.out" 2>&1 &
+    pid=$!
+    for (( i = 0; i < 1200; i++ )); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    sid=$(cat "$W/fe-$name.sid" 2>/dev/null)
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "not-ended-in-time" >> "$W/fe-$name.out"
+        [[ -n "$sid" ]] && pkill -KILL -s "$sid"
+    fi
+    wait "$pid"; FE_RC=$?
+    # What it left behind may need a moment to end by itself (a program
+    # that finds its pipe closed).
+    FE_LEFT="no session id"
+    [[ -n "$sid" ]] || return 0
+    for (( i = 0; i < 100; i++ )); do
+        FE_LEFT=""
+        for p in $(pgrep -s "$sid"); do running "$p" && FE_LEFT+="$p "; done
+        [[ -n "$FE_LEFT" && "$FE_LEFT" != "${2:-} " ]] || break
+        sleep 0.1
+    done
+    [[ -z "$FE_LEFT" ]] || pkill -KILL -s "$sid"
+    return 0
+}
+# front_end_clean NAME — after it: no private folder, and the lock is free.
+front_end_clean() {
+    [[ -z "$(ls -A "$W/fe-$1.tmp" 2>/dev/null)" ]] && flock -n "$W/fe-$1.state/.lock" true \
+        && grep -qx exit-trap-done "$W/fe-$1.out" && ! grep -q not-ended-in-time "$W/fe-$1.out"
+}
+front_end_case chatty
+if [[ $FE_RC -eq 0 && -z "$FE_LEFT" ]] && grep -qx page-status-3 "$W/fe-chatty.out" && grep -qx next-page-status-4 "$W/fe-chatty.out" \
+   && front_end_clean chatty; then
+    ok "a front end that ends and leaves a program writing to its stderr: no wait, a clean exit, nothing left"
+else
+    bad "front end gone, its stderr still written to: exit $FE_RC, left '$FE_LEFT', $(tr '\n' ' ' < "$W/fe-chatty.out")"
+fi
+front_end_case holder "$(awk '$1 == "child" { print $2 }' "$W/fe-holder.log" 2>/dev/null)"
+held_by=$(awk '$1 == "child" { print $2 }' "$W/fe-holder.log")
+# (What is left is the program that holds the pipe: the desktop user's
+# own, and not below the front end any more. This side leaves it alone.)
+if [[ $FE_RC -eq 0 && -n "$held_by" && "$FE_LEFT" == "$held_by " ]] && grep -qx page-status-3 "$W/fe-holder.out" \
+   && grep -qx next-page-status-4 "$W/fe-holder.out" && front_end_clean holder; then
+    ok "a front end that ends while a program holds its answer pipe: noticed, a clean exit"
+else
+    bad "front end gone, its answer pipe still held: exit $FE_RC, left '$FE_LEFT' (holder '$held_by'), $(tr '\n' ' ' < "$W/fe-holder.out")"
+fi
+front_end_case frozen
+if [[ $FE_RC -eq 0 && -z "$FE_LEFT" ]] && grep -qx page-status-0 "$W/fe-frozen.out" && grep -qx pipe-filled-124 "$W/fe-frozen.out" \
+   && grep -qx frozen "$W/fe-frozen.log" && front_end_clean frozen; then
+    ok "a stopped front end with a full request pipe: the exit trap finishes, nothing left"
+else
+    bad "front end stopped, request pipe full: exit $FE_RC, left '$FE_LEFT', $(tr '\n' ' ' < "$W/fe-frozen.out")"
+fi
+front_end_case hung-first-page
+if [[ $FE_RC -eq 130 && -z "$FE_LEFT" ]] && grep -qx hanging "$W/fe-hung-first-page.log" && ! grep -q page-status "$W/fe-hung-first-page.out" \
+   && front_end_clean hung-first-page; then
+    ok "a front end that hangs on the first page is ended after a signal to every process of the tool"
+else
+    bad "front end hung on the first page, then a signal: exit $FE_RC, left '$FE_LEFT', $(tr '\n' ' ' < "$W/fe-hung-first-page.out")"
+fi
+
+# Started with SIGPIPE ignored (the weekly check's systemd service, a CI
+# runner), the tool starts again with the signal at its default, so that
+# every program it runs has it: the checks count on "find | head" ending
+# find. A stand-in for "date", the first program the tool runs, notes what
+# it finds each time: ignored, then (started again) default.
+mkdir "$W/sigbin"
+cat > "$W/sigbin/date" <<EOF
+#!/bin/bash
+awk '/^SigIgn:/ { print \$2 }' "/proc/\$\$/status" >> "$W/sigpipe-states"
+exec "$(command -v date)" "\$@"
+EOF
+chmod 755 "$W/sigbin/date"
+# sigpipe_states — "i" (ignored) or "d" (default) for each time it ran.
+sigpipe_states() {
+    local m out=""
+    while read -r m; do (( (16#$m >> 12) & 1 )) && out+=i || out+=d; done < "$W/sigpipe-states"
+    echo "$out"
+}
+: > "$W/sigpipe-states"
+env --ignore-signal=PIPE PATH="$W/sigbin:$PATH" "$TOOL" --list-checks > "$W/sigpipe-list-ignored" 2>&1; rc_i=$?
+st_i=$(sigpipe_states); : > "$W/sigpipe-states"
+env --default-signal=PIPE PATH="$W/sigbin:$PATH" "$TOOL" --list-checks > "$W/sigpipe-list-default" 2>&1; rc_d=$?
+st_d=$(sigpipe_states)
+if [[ $rc_i -eq 0 && $rc_d -eq 0 && "$st_i" == id && "$st_d" == d ]] && grep -q '^firewall' "$W/sigpipe-list-default" \
+   && cmp -s "$W/sigpipe-list-ignored" "$W/sigpipe-list-default"; then
+    ok "started with SIGPIPE ignored, the tool starts again with the default (same arguments, same result)"
+else
+    bad "SIGPIPE at the start: ignored gave '$st_i' (exit $rc_i), default gave '$st_d' (exit $rc_d)"
+fi
 
 # The form of an answer line is written down twice: where the root side
 # takes it apart, and where the test of the real front end checks every
@@ -2080,8 +2471,28 @@ done
     # A line without end is cut ("12:00:00 undo: " are 15 characters).
     run 'head -c 5000 /dev/zero | tr "\0" x; echo; exit 0'
     [[ $rc -eq 0 && "$(awk '{ print length($0) }' "$RUN_LOG")" == $(( _LOG_FOREIGN_LINE + 15 )) ]] && echo "undo-out-long-line-cut"
+    # A fix's output goes the same way: it can run a program as another
+    # account too. Marked "fix: ", cleaned, only the end, and 200 MB of it
+    # under a memory limit that the shell could not hold them in.
+    RUN_TMP=$(mktemp -d "$W/fix-out-rt.XXXXXX"); UI_MODE=none
+    : > "$RUN_LOG"
+    _run_change "A noisy fix" 'seq 1 300000; printf "a\0b\n\033[31m12:00:00 [OK] forged\n"; echo the-end' "" > /dev/null 2>&1; rc=$?
+    [[ $rc -eq 0 && "$(grep -cE '^[0-9:]{8} fix: ' "$RUN_LOG")" -eq $(( _LOG_FOREIGN_LINES + 1 )) && "$(stat -c %s "$RUN_LOG")" -lt 20000 ]] \
+        && grep -qE '^[0-9:]{8} fix: the-end$' "$RUN_LOG" && grep -qE '^[0-9:]{8} fix: \[31m12:00:00 \[OK\] forged$' "$RUN_LOG" \
+        && grep -qE '^[0-9:]{8} fix: ab$' "$RUN_LOG" && ! grep -qE '(^| )299000$' "$RUN_LOG" && grep -q 'end of the output (exit 0)' "$RUN_LOG" \
+        && echo "fix-out-capped-marked-cleaned"
+    ( ulimit -v 200000; : > "$RUN_LOG"
+      _run_change "A fix that prints without end" 'head -c 200000000 /dev/zero | tr "\0" y; echo; echo end; exit 3' "" > /dev/null 2>&1; rc=$?
+      [[ $rc -eq 3 ]] && grep -q ' fix: end$' "$RUN_LOG" && grep -q 'end of the output (exit 3)' "$RUN_LOG" && echo "fix-out-memory-bounded" )
+    rm -rf -- "$RUN_TMP"
+    # What a program of another account wrote: no more lines of it than
+    # _LOG_FOREIGN_LINES in one go.
+    : > "$RUN_LOG"; _log_foreign "x: " "$(seq 1 $(( _LOG_FOREIGN_LINES + 100 )))"
+    [[ "$(wc -l < "$RUN_LOG")" -eq $(( _LOG_FOREIGN_LINES + 1 )) && "$(tail -n 1 "$RUN_LOG")" == *" x: (more lines were dropped)" ]] \
+        && grep -q " x: ${_LOG_FOREIGN_LINES}\$" "$RUN_LOG" && ! grep -q " x: $(( _LOG_FOREIGN_LINES + 1 ))\$" "$RUN_LOG" && echo "foreign-log-lines-capped"
 ) > "$W/undo-out.out" 2>&1
-for m in undo-out-small-ok undo-out-status-kept undo-out-large-ok-is-ok undo-out-failure-logs-the-end undo-out-memory-bounded undo-out-nul-bytes-dropped undo-out-long-line-cut; do
+for m in undo-out-small-ok undo-out-status-kept undo-out-large-ok-is-ok undo-out-failure-logs-the-end undo-out-memory-bounded undo-out-nul-bytes-dropped undo-out-long-line-cut \
+         fix-out-capped-marked-cleaned fix-out-memory-bounded foreign-log-lines-capped; do
     expect "$W/undo-out.out" "$m" "$m"
 done
 
@@ -2100,8 +2511,14 @@ DESKTOP_USER="$U"; DESKTOP_UID=$(id -u "$U"); UI_MODE=kde; _QML_OK=yes; SCRIPT_D
 ui_front_start
 sleep 300 &
 echo "$!" > "$W/owner.sleep"
-sleep 0.5
-_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START" > "$W/owner.tree"
+# Until the front end's own process (python, as the desktop user) is there.
+for _ in $(seq 1 200); do
+    _proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START" > "$W/owner.tree"
+    while read -r p _ k; do
+        [[ "$k" == user && "$(tr '\0' ' ' 2>/dev/null < "/proc/$p/cmdline")" == *"app.py serve"* ]] && break 2
+    done < "$W/owner.tree"
+    sleep 0.1
+done
 if [[ "${1:-}" == stop || "${1:-}" == stuck ]]; then
     if [[ "$1" == stuck ]]; then
         # The front end (python, the desktop user's) does not react any
@@ -2163,6 +2580,38 @@ OWNEREOF
     fi
     kill "$rootp" "$ru" 2>/dev/null
 
+    # Whose a process is. One of root's below the desktop user's front
+    # end is nobody's here ("other": root did not start it), and so is one
+    # whose real and effective accounts differ (a setuid program). Neither
+    # is signalled, by root or as the desktop user.
+    cat > "$W/lineage.py" <<'LINEAGEEOF'
+import os, pwd, subprocess, sys, time
+uid = int(sys.argv[1])
+if sys.argv[2] == "below":
+    # A program of root's, started before this process becomes the user's.
+    child = subprocess.Popen(["sleep", "300"]).pid
+    os.setgroups([]); os.setgid(pwd.getpwuid(uid).pw_gid); os.setuid(uid)
+else:
+    child = 0
+    os.setresuid(uid, 0, 0)
+print("ready", child, flush=True)
+time.sleep(300)
+LINEAGEEOF
+    ( python3 -I "$W/lineage.py" "$uid" below > "$W/lineage-below.out"; : ) & top=$!
+    python3 -I "$W/lineage.py" "$uid" split > "$W/lineage-split.out" & split=$!
+    for _ in $(seq 1 100); do grep -q ready "$W/lineage-below.out" && grep -q ready "$W/lineage-split.out" && break; sleep 0.1; done
+    below=$(awk '{ print $2 }' "$W/lineage-below.out")
+    _proc_stat "$top"; mapfile -t lt < <(_proc_tree "$top" "$_PS_START")
+    if [[ ${#lt[@]} -eq 3 && "${lt[0]}" == "$top "*" own" && "${lt[1]}" == *" user" && "${lt[2]}" == "$below "*" other" ]]; then
+        _ui_front_signal KILL "${lt[@]}"
+        for _ in $(seq 1 50); do _proc_stat "$top" || break; sleep 0.1; done
+        ! _proc_stat "$top" && ! _proc_stat "${lt[1]%% *}" && _proc_stat "$below" && echo "root-process-below-the-user-is-left-alone"
+    fi
+    _proc_stat "$split"; sstart=$_PS_START
+    [[ "$(_proc_tree "$split" "$sstart")" == "$split $sstart other" ]] && ! _proc_uid "$split" && ! _kill_same KILL "$split" "$sstart" \
+        && { _ui_front_signal KILL "$split $sstart other"; sleep 0.3; _proc_stat "$split"; } && echo "setuid-process-is-left-alone"
+    kill -KILL "$top" "$below" "$split" 2>/dev/null
+
     rm -f "$W/owner.ready"
     env TOOL="$TOOL" W="$W" U="$U" UH="$UH" bash "$W/owner.sh" & owner=$!
     for _ in $(seq 1 50); do [[ -e "$W/owner.ready" ]] && break; sleep 0.1; done
@@ -2182,6 +2631,7 @@ OWNEREOF
     mapfile -t tree < "$W/owner.tree"; _ui_front_reap "${tree[@]}"
 ) > "$W/owner.out" 2>&1
 for m in real-front-stopped real-front-stuck-ended real-front-root-signals-only-root-processes root-signal-not-for-another-account user-signal-spares-root-and-reused-ids \
+         root-process-below-the-user-is-left-alone setuid-process-is-left-alone \
          user-signal-ends-the-users-process real-front-runs-as-user real-front-no-log-descriptor pipes-still-held real-front-leaves-when-root-side-is-killed; do
     expect "$W/owner.out" "$m" "$m"
 done

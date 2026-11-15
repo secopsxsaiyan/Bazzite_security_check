@@ -107,12 +107,14 @@ _qml_ok() {
 # The desktop user's account is trusted less than root, so the front end
 # gets nothing of root's but the two pipes and a third one for its stderr:
 # never the run log itself (see _ui_log_reader), and an answer line is only
-# read up to _UI_FRONT_LINE_MAX bytes.
+# read up to _UI_FRONT_LINE_MAX bytes. Nor is it trusted to answer, to end
+# or to stay: this side notices within a second when it has gone, whoever
+# still holds its pipes (_ui_front_ask), and never waits for it without a
+# limit when the tool itself ends (ui_front_stop).
 _UI_FRONT_W=""         # file descriptor: requests to the front end
 _UI_FRONT_R=""         # file descriptor: its answers
 _UI_FRONT_PID=""       # the helper subshell that runs it (not python itself)
 _UI_FRONT_START=""     # ... and its start time: the two together name it
-_UI_FRONT_SEEN=()      # its processes when last looked at (_ui_front_note)
 _UI_FRONT_ANSWER=""
 _UI_FRONT_OWNER="$BASHPID"     # the shell that may start it and holds the pipes
 # An answer line must be shorter than this many bytes. The callers hand the
@@ -133,24 +135,49 @@ _ui_front_up() {
     [[ -n "$_UI_FRONT_W" && ! -e "${RUN_TMP:-}/ui-front-gone" ]] || return 1
     if ! _proc_stat "$_UI_FRONT_PID" || [[ "$_PS_START" != "$_UI_FRONT_START" ]]; then
         log "The Security Check window's helper process has ended; using KDE dialogs from here on"
-        if [[ -n "${RUN_TMP:-}" && -d "$RUN_TMP" ]]; then : > "$RUN_TMP/ui-front-gone"; fi
+        _ui_front_gone_mark
         return 1
     fi
     _ui_front_note
     return 0
 }
 
-# _ui_front_note — remember the front end's processes (in the shell that
-# started it). ui_front_stop finds them from the helper down; should the
-# helper end before the front end does, there is nothing to start from, and
-# a front end that hangs would be left running. What was seen here is then
-# what gets ended. This look is a cheap one (_proc_tree ... quick), so it
-# is taken every time the main shell uses the front end.
+# _ui_front_gone_mark — write the file that says "the front end has gone
+# or failed" to every shell of this run.
+_ui_front_gone_mark() {
+    if [[ -n "${RUN_TMP:-}" && -d "$RUN_TMP" ]]; then : > "$RUN_TMP/ui-front-gone"; fi
+    return 0
+}
+
+# _ui_front_note — remember the front end's processes. ui_front_stop finds
+# them from the helper down; should the helper end before the front end
+# does, there is nothing to start from, and a front end that hangs would be
+# left running. What was seen here last is then what gets ended. It is kept
+# in a file of the private folder (ui-front-seen), not in a variable: the
+# first pages are asked from $(...), and what such a shell sees must reach
+# the main shell, which does the ending. This look is a cheap one
+# (_proc_tree ... quick), so it is taken every time a shell of this run
+# uses the front end, and once a second while it waits for an answer.
 _ui_front_note() {
-    [[ "$BASHPID" == "$_UI_FRONT_OWNER" ]] || return 0
-    local -a seen=()
+    [[ -n "${RUN_TMP:-}" && -d "$RUN_TMP" ]] || return 0
+    local f="$RUN_TMP/ui-front-seen"
+    local -a seen=() old=()
     mapfile -t seen < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START" quick)
-    (( ${#seen[@]} )) && _UI_FRONT_SEEN=("${seen[@]}")
+    (( ${#seen[@]} )) || return 0
+    { mapfile -t old < "$f"; } 2>/dev/null
+    [[ "${seen[*]}" != "${old[*]}" ]] || return 0
+    # In one step (a new file, renamed): no shell reads half a list.
+    { printf '%s\n' "${seen[@]}" > "$f.$BASHPID" && mv -f -- "$f.$BASHPID" "$f"; } 2>/dev/null
+    return 0
+}
+
+# _ui_front_seen — the list _ui_front_note kept, one "PID STARTTIME KIND"
+# a line; only lines of that form.
+_ui_front_seen() {
+    local line
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[0-9]+\ [0-9]+\ (own|user|other)$ ]] && printf '%s\n' "$line"
+    done 2>/dev/null < "${RUN_TMP:-}/ui-front-seen"
     return 0
 }
 
@@ -168,10 +195,16 @@ _ui_front_note() {
 # end's further writes fail, which it ignores). The reader ends when the
 # pipe is closed and, because a program the front end started can keep the
 # pipe open, also within a second of STOPFILE appearing or its folder
-# going away. Always run in a process of its own (a process substitution):
-# it closes its standard input.
+# going away: that is looked at when nothing came for a second, and once a
+# second while lines keep coming (a program the front end left behind can
+# write on and on). Always run in a process of its own (a process
+# substitution) that holds nothing but this pipe: the reader closes its
+# standard input, and whoever starts it gives it no copy of the window's
+# two pipes, not even as its standard output. With one, the answer pipe
+# would stay open for as long as the reader lives, and a shell waiting for
+# an answer would not see the front end's end.
 _ui_log_reader() {
-    local stop="${1:-}" line rc total=0 LC_ALL=C in="" hpid hstart="" held=1
+    local stop="${1:-}" line rc total=0 LC_ALL=C in="" hpid hstart="" held=1 looked=$SECONDS
     # exec: the process to end is "dd" itself, a child of this shell.
     exec {in}< <(exec dd bs=1 count="$_UI_LOG_MAX" status=none 2>/dev/null)
     hpid=$!
@@ -188,10 +221,12 @@ _ui_log_reader() {
             fi
             _log_foreign "ui: " "$line"
         fi
-        (( rc == 0 )) && continue
-        if (( rc <= 128 )); then held=0; break; fi      # the pipe was closed, or dd is done
-        # Nothing for a second: is anyone still there?
-        if [[ -n "$stop" ]] && { [[ -e "$stop" ]] || [[ ! -d "${stop%/*}" ]]; }; then break; fi
+        if (( rc > 0 && rc <= 128 )); then held=0; break; fi    # the pipe was closed, or dd is done
+        # Is anyone still there? (rc above 128: nothing came for a second.)
+        if [[ -n "$stop" ]] && (( rc > 128 || SECONDS != looked )); then
+            looked=$SECONDS
+            if [[ -e "$stop" || ! -d "${stop%/*}" ]]; then break; fi
+        fi
     done
     # "dd" still holds the pipe when this loop ended first. It is this
     # shell's own child and is ended only while it is still that process.
@@ -206,34 +241,55 @@ ui_front_start() {
     [[ -z "$_UI_FRONT_W" && "$BASHPID" == "$_UI_FRONT_OWNER" ]] || return 0
     [[ -n "${RUN_TMP:-}" && -d "$RUN_TMP" && ! -e "$RUN_TMP/ui-front-gone" ]] || return 0
     _qml_ok || return 0
-    local d="$RUN_TMP/ui-front"
+    local d="$RUN_TMP/ui-front" hq="" hp="" w="" r="" cr="" cw="" efd=""
     if ! mkdir -- "$d" 2>/dev/null || ! mkfifo -- "$d/req" "$d/rep" 2>/dev/null; then
         rm -rf -- "$d"
         return 0
     fi
-    # When the front end ends (or cannot start), its answer pipe is closed,
-    # so a waiting ui_app sees the end at once; then the file says it has
-    # gone, and what is still written to it is thrown away: while this
-    # helper lives, writing to it never fails and never blocks (without it,
-    # see _pipe_write). It must not hold the run's lock (_run_lock_close).
-    # The log reader must hold neither of the two pipes.
-    _UI_FRONT_SEEN=()
+    # All four ends are opened here, before the helper exists. Opening one
+    # end of a pipe waits until the other end is open; opening it for
+    # reading and writing at once (hq, hp) never waits, and while those are
+    # held no other open does. Were the opening shared with the helper, each
+    # side waiting for the other, a helper that was ended before it got
+    # there would leave this shell waiting for ever.
+    if ! { exec {hq}<> "$d/req" {hp}<> "$d/rep"; } 2>/dev/null \
+       || ! { exec {w}> "$d/req" {r}< "$d/rep" {cr}< "$d/req" {cw}> "$d/rep"; } 2>/dev/null; then
+        for efd in "$hq" "$hp" "$w" "$r" "$cr" "$cw"; do
+            [[ -z "$efd" ]] || exec {efd}>&-
+        done
+        rm -rf -- "$d"
+        return 0
+    fi
+    exec {hq}>&- {hp}>&-
+    rm -rf -- "$d"
+    # The helper gets the front end's two ends (cr, cw) as its standard
+    # input and output, and closes every other copy. When the front end
+    # ends (or cannot start), the helper closes the answer pipe, so a
+    # waiting ui_app sees the end at once; then the file says it has gone,
+    # and what is still written to it is thrown away: while this helper
+    # lives, writing to it never fails (without it, see _pipe_write). It
+    # must not hold the run's lock (_run_lock_close).
+    # The front end gets its stderr pipe as descriptor 2 and under no other
+    # number, and the log reader gets nothing but that pipe.
     (
+        exec {w}>&- {r}<&- {cr}<&- {cw}>&-
         _run_lock_close
-        _ui_app_cmd serve 2> >(_ui_log_reader "$RUN_TMP/ui-front-gone" > /dev/null 2>&1)
-        exec >&-
-        : 2>/dev/null > "$RUN_TMP/ui-front-gone"
+        exec {efd}> >(exec > /dev/null 2>&1; _ui_log_reader "$RUN_TMP/ui-front-gone")
+        _ui_app_cmd serve 2>&"$efd" {efd}>&-
+        exec {efd}>&- >&-
+        _ui_front_gone_mark 2>/dev/null
         exec cat > /dev/null
-    ) < "$d/req" > "$d/rep" &
+    ) <&"$cr" >&"$cw" &
     _UI_FRONT_PID=$!
-    # It cannot have ended yet: it waits for the other end of its pipes,
-    # which is opened below. Its start time tells it from any later process
-    # with the same id (see ui_front_stop).
+    exec {cr}<&- {cw}>&-
+    _UI_FRONT_W=$w; _UI_FRONT_R=$r
+    # It has not ended by itself: it reads its input to the end, and this
+    # shell holds the other end. Its start time tells it from any later
+    # process with the same id (see ui_front_stop).
     _UI_FRONT_START=""
     _proc_stat "$_UI_FRONT_PID" && _UI_FRONT_START=$_PS_START
     disown "$_UI_FRONT_PID" 2>/dev/null || true
-    exec {_UI_FRONT_W}> "$d/req" {_UI_FRONT_R}< "$d/rep"
-    rm -rf -- "$d"
+    _ui_front_note
     return 0
 }
 
@@ -467,13 +523,18 @@ _ui_front_reap() {
 #      helper while it lived (_ui_front_note), less what has ended since.
 #      Each of those was found by the same rules and is named by its id
 #      and start time, so rules 3 and 4 hold for it unchanged.
+#   7. Nothing here waits without a limit, whatever the front end does:
+#      this runs when the tool ends, and what comes after it (the private
+#      folder removed, the run's lock released) must always happen.
 ui_front_stop() {
     [[ -n "$_UI_FRONT_W" ]] || return 0
     # Written whether or not the file says "gone": a front end that is
     # still there (its helper is not) must hear it, and otherwise the
-    # helper throws the line away or nobody reads it.
-    _pipe_write "$_UI_FRONT_W" '{"quit":true}' || true
-    if [[ -n "${RUN_TMP:-}" && -d "$RUN_TMP" ]]; then : > "$RUN_TMP/ui-front-gone"; fi
+    # helper throws the line away or nobody reads it. A front end that has
+    # stopped reading, with the pipe full, gets no "quit" (rule 7): it is
+    # ended below like any other that does not leave.
+    _pipe_write_soon "$_UI_FRONT_W" '{"quit":true}' || true
+    _ui_front_gone_mark
     [[ "$BASHPID" == "$_UI_FRONT_OWNER" ]] || return 0
     # The list, while the pipes are still open here (rule 2). The front end
     # is already leaving meanwhile, which is what keeps this short.
@@ -481,13 +542,15 @@ ui_front_stop() {
     if [[ -n "$_UI_FRONT_PID" && -n "$_UI_FRONT_START" ]]; then
         mapfile -t procs < <(_proc_tree "$_UI_FRONT_PID" "$_UI_FRONT_START")
     fi
-    if (( ! ${#procs[@]} && ${#_UI_FRONT_SEEN[@]} )); then
-        mapfile -t procs < <(_procs_left "${_UI_FRONT_SEEN[@]}")      # rule 6
+    if (( ! ${#procs[@]} )); then
+        local -a seen=()
+        mapfile -t seen < <(_ui_front_seen)
+        (( ${#seen[@]} )) && mapfile -t procs < <(_procs_left "${seen[@]}")     # rule 6
     fi
     exec {_UI_FRONT_W}>&- {_UI_FRONT_R}<&-
     _UI_FRONT_W=""; _UI_FRONT_R=""
     (( ${#procs[@]} )) && _ui_front_reap "${procs[@]}"
-    _UI_FRONT_PID=""; _UI_FRONT_START=""; _UI_FRONT_SEEN=()
+    _UI_FRONT_PID=""; _UI_FRONT_START=""
     return 0
 }
 
@@ -498,13 +561,35 @@ ui_front_stop() {
 # never recorded. So the signal is ignored, and only for this one write: an
 # ignored signal stays ignored in every program started from here, and the
 # checks and fixes count on the default (in "find | head", find is ended by
-# it when head has read enough).
+# it when head has read enough). Where the signal was already ignored when
+# this shell started, the two "trap" lines change nothing (a shell cannot),
+# and the write fails in the same way.
 _pipe_write() {
     local rc=0
     trap '' PIPE
     printf '%s\n' "$2" 2>/dev/null 1>&"$1" || rc=1
     trap - PIPE
     return "$rc"
+}
+
+# _pipe_write_soon FD LINE — the same, for a pipe that may be full with
+# nobody taking anything out of it (a front end that was stopped): a write
+# would then wait for ever. So a process of its own writes the line, and
+# when it has not ended after a second it is ended and the line given up
+# (1; what it wrote of the line stays in the pipe). 0 does not say that
+# the line arrived.
+_pipe_write_soon() {
+    local pid st="" i
+    ( _pipe_write "$1" "$2" ) > /dev/null &
+    pid=$!
+    _proc_stat "$pid" && st=$_PS_START
+    disown "$pid" 2>/dev/null || true
+    for (( i = 0; i < 50; i++ )); do
+        _proc_stat "$pid" || return 0
+        sleep 0.02
+    done
+    [[ -z "$st" ]] || _kill_same KILL "$pid" "$st"
+    return 1
 }
 
 # _ui_front_send LINE — one line to the front end (1: it is not there).
@@ -524,29 +609,48 @@ _ui_front_send() {
 # sends _UI_FRONT_LINE_MAX bytes or more without a line end has failed.
 # (Bytes, not characters: LC_ALL=C. The limit is there for memory and for
 # the size of a program argument, and both count bytes.)
+#
+# The wait is for a front end that is there. The end of the answer pipe
+# does not always tell that it has gone (a program it started can hold a
+# copy), so the line is read a second at a time, and in between this looks
+# whether the front end is still up (_ui_front_up, which also notes its
+# processes; the first look comes sooner, when the front end has just had
+# time to start). What a read took before its time was up is kept: the
+# line is put together from the parts.
 _ui_front_ask() {
-    local id="${BASHPID}-${RANDOM}${RANDOM}" data="$2" line LC_ALL=C
+    local id="${BASHPID}-${RANDOM}${RANDOM}" data="$2" line="" part rc pause=0.2 LC_ALL=C
     # The same pattern is in tests/ui-offscreen.py (ANSWER_RE), which holds
     # the real front end to it; tests/smoke.sh checks that the two agree.
     local re='^\{"id":"([^"]*)","status":([0-9]+),"answer":(.*)\}$'
     _UI_FRONT_ANSWER=""
     [[ -n "$data" ]] || data='{}'
     if _ui_front_send "{\"id\":\"${id}\",\"mode\":\"${1}\",\"data\":${data}}"; then
-        while IFS= read -r -n "$_UI_FRONT_LINE_MAX" -u "$_UI_FRONT_R" line; do
+        while :; do
+            part=""; rc=0
+            IFS= read -r -t "$pause" -n "$_UI_FRONT_LINE_MAX" -u "$_UI_FRONT_R" part || rc=$?
+            line+=$part
             # "read" stops at the limit: a line of that length is the start
             # of a longer one. Cut off like that it could still have the
             # form of an answer, so the pattern alone does not refuse it.
             (( ${#line} < _UI_FRONT_LINE_MAX )) || break
+            if (( rc > 128 )); then
+                pause=1
+                _ui_front_up || break
+                continue
+            fi
+            (( rc == 0 )) || break          # the pipe was closed
             [[ "$line" =~ $re ]] || break
+            line=""
             if [[ "${BASH_REMATCH[1]}" != "$id" ]]; then
                 # No id: the request could not be read. Another id: the
                 # answer to an earlier request that was given up.
                 [[ -n "${BASH_REMATCH[1]}" ]] || break
                 continue
             fi
+            # The front end is certainly running now: note its processes.
             case "${BASH_REMATCH[2]}" in
-                0) _UI_FRONT_ANSWER="${BASH_REMATCH[3]}"; return 0 ;;
-                1) return 1 ;;
+                0) _UI_FRONT_ANSWER="${BASH_REMATCH[3]}"; _ui_front_note; return 0 ;;
+                1) _ui_front_note; return 1 ;;
             esac
             break
         done
@@ -563,19 +667,25 @@ _ui_front_ask() {
 # answered, 1 cancelled, 3 anything else: "app.py MODE" has more ways to
 # end than that (2 bad input, a signal, runuser's own errors), and none of
 # them is an answer. Its stderr reaches the log as the long-lived one's
-# does.
+# does, and its answer has the same limit: "head" takes no more than
+# _UI_FRONT_LINE_MAX bytes of what it prints, and that many is too long.
 _ui_app_page() {
-    local out rc=0 stop="" efd
+    local out rc=0 stop="" efd LC_ALL=C
     if [[ -n "${RUN_LOG:-}" && -n "${RUN_TMP:-}" && -d "$RUN_TMP" ]]; then
         stop="$RUN_TMP/ui-page-done.${BASHPID}.${RANDOM}"
-        exec {efd}> >(_ui_log_reader "$stop" > /dev/null 2>&1)
+        exec {efd}> >(exec > /dev/null 2>&1; _ui_log_reader "$stop")
     else
         # No private folder to tell the log reader "done" in: no log.
         exec {efd}> /dev/null
     fi
-    out=$(_ui_app_cmd "$1" <<< "$2" 2>&"$efd" {efd}>&-) || rc=$?
+    out=$(set -o pipefail
+          _ui_app_cmd "$1" <<< "$2" 2>&"$efd" {efd}>&- | head -c "$_UI_FRONT_LINE_MAX") || rc=$?
     exec {efd}>&-
     [[ -z "$stop" ]] || : > "$stop"
+    if (( ${#out} >= _UI_FRONT_LINE_MAX )); then
+        log "The Security Check window's answer was too long (${1})"
+        rc=3; out=""
+    fi
     case "$rc" in
         0) printf '%s' "$out" ;;
         1) ;;
@@ -606,7 +716,7 @@ ui_app() {
         # Not to be tried again in this run. The file says so to the shell
         # that called this in $(...), where the variable is lost.
         _QML_OK=no
-        if [[ -n "${RUN_TMP:-}" && -d "$RUN_TMP" ]]; then : > "$RUN_TMP/ui-front-gone"; fi
+        _ui_front_gone_mark
     fi
     return "$rc"
 }
@@ -618,7 +728,10 @@ ui_theme_prepare() {
     _UI_THEME_DIR=""
     [[ "${UI_THEME:-system}" != system && "$UI_MODE" == kde && -n "$DESKTOP_USER" ]] || return 0
     local d home
-    d=$(_as_desktop_user python3 -I "$SCRIPT_DIR/ui/app.py" theme-dir "$UI_THEME" 2>/dev/null) || d=""
+    # (No more is read of what a program of that account prints than a
+    # path can be long.)
+    d=$(set -o pipefail
+        _as_desktop_user python3 -I "$SCRIPT_DIR/ui/app.py" theme-dir "$UI_THEME" 2>/dev/null | head -c 4097) || d=""
     home=$(_home_of "$DESKTOP_USER")
     # Only a folder in that person's home is used.
     [[ -n "$home" && "$d" == "$home"/* && "$d" != *$'\n'* && "$d" != *..* ]] && _UI_THEME_DIR="$d"
@@ -647,6 +760,10 @@ _ui_theme_env() {
 # in $(...) must call _ui_fallback itself on 255: the subshell's switch is
 # lost when it ends. The failure is also remembered in RUN_TMP, which every
 # later call sees, so a broken kdialog is not started again and again.
+# kdialog is a program of the desktop user's account: no more is read of
+# what it prints than an answer of the window may be long. (Its answers
+# are a few tags, a folder or a password. One that was cut is checked like
+# any other: see _ui_offered.)
 _kd() {
     local rc=0 flag="${RUN_TMP:+${RUN_TMP}/kdialog-failed}"
     if [[ -n "$flag" && -e "$flag" ]]; then
@@ -655,7 +772,9 @@ _kd() {
     fi
     local theme
     theme=$(_ui_theme_env)
-    _as_desktop_user env ${theme:+"$theme"} kdialog --title "$UI_TITLE" --icon "$(_ui_icon)" "$@" 2>/dev/null || rc=$?
+    _as_desktop_user env ${theme:+"$theme"} kdialog --title "$UI_TITLE" --icon "$(_ui_icon)" "$@" 2>/dev/null \
+        | head -c "$_UI_FRONT_LINE_MAX"
+    rc=${PIPESTATUS[0]}
     if (( rc > 2 )); then
         log "kdialog failed (exit ${rc}); falling back"
         if [[ -n "$flag" ]]; then : > "$flag"; fi
@@ -765,9 +884,9 @@ _tty_read() {
 # _ui_dialog KIND TEXT DETAILS BUTTON... [-- TAG LABEL on|off ...] — the
 # Kirigami dialog (KIND info, warning, error or question; TEXT plain or
 # rich; buttons left to right; after "--", items to pick one of). The
-# button that is highlighted, and that Enter presses, is the last one, or
-# the one whose number (from 0) is in UI_DIALOG_PRIMARY; -1 there means
-# none. Prints the number of the button that was pressed, and the picked
+# button that is highlighted, has the focus and that Enter presses is the
+# last one, or the one whose number (from 0) is in UI_DIALOG_PRIMARY; -1
+# there means none (see ui_yesno for which it is). Prints the number of the button that was pressed, and the picked
 # tag on a second line. Status 0 answered, 1 closed, 3 or 4 it cannot run
 # here (as ui_app; 3 also for an answer that is not one of the buttons
 # and tags given).
@@ -870,12 +989,30 @@ ui_error() {
     return 0
 }
 
-# ui_yesno TEXT [YES_LABEL] [NO_LABEL] [DEFAULT y|n] [warn] — 0 for yes.
-# "warn" shows KDE's warning dialog (for questions with side effects).
+# ui_yesno TEXT [YES_LABEL] [NO_LABEL] [DEFAULT y|n] [warn|careful] — 0
+# for yes. DEFAULT is the answer of Enter on the terminal and the answer
+# when there is no one to ask.
+#
+# Which button a stray Enter or Space presses in a window (the same rule
+# in ui_choice3):
+#   DEFAULT n            the NO button
+#   DEFAULT y            the YES button
+#   DEFAULT y, careful   none: for a question whose YES changes this PC as
+#                        administrator there and then (apply, undo,
+#                        install, remove). A key that was meant for the
+#                        window before must not do that; YES is clicked,
+#                        or reached with Tab.
+#   warn                 as "careful", and shown as a warning (a question
+#                        with side effects)
+# kdialog cannot be told which button is the default: its plain question
+# has YES, its warning has NO. So "careful" and "warn" both use its warning
+# dialog; the other questions get YES there whatever DEFAULT is, which is
+# why a question whose YES changes something must be marked.
 ui_yesno() {
-    local text="$1" yes="${2:-Yes}" no="${3:-No}" def="${4:-n}" kind="--yesno" a rc
-    [[ "${5:-}" == "warn" ]] && kind="--warningyesno"
-    a=$(UI_DIALOG_PRIMARY="$([[ $def == n && ${5:-} == warn ]] && echo 0 || echo 1)" _ui_dialog "$([[ ${5:-} == warn ]] && echo warning || echo question)" "$text" "" "$no" "$yes")
+    local text="$1" yes="${2:-Yes}" no="${3:-No}" def="${4:-n}" how="${5:-}" kind="--yesno" primary=1 a rc
+    [[ -z "$how" ]] || { kind="--warningyesno"; primary=-1; }
+    [[ "$def" == y ]] || primary=0
+    a=$(UI_DIALOG_PRIMARY="$primary" _ui_dialog "$([[ $how == warn ]] && echo warning || echo question)" "$text" "" "$no" "$yes")
     case $? in
         0) [[ "$a" == 1 ]] && return 0; return 1 ;;
         1) return 1 ;;
@@ -896,15 +1033,18 @@ ui_yesno() {
     [[ "$def" == "y" ]]
 }
 
-# ui_choice3 HTML_OR_TEXT TEXT_FOR_TTY YES NO CANCEL [warn] [y|n] — 0, 1 or 2
-# (Yes/No/Cancel); "warn" shows KDE's warning dialog. An empty TEXT_FOR_TTY
-# is made from the HTML (only when it is needed). On the terminal, Enter
-# gives the last argument's answer (No unless "y" is given); with no one to
-# ask, the answer is always No.
+# ui_choice3 HTML_OR_TEXT TEXT_FOR_TTY YES NO CANCEL [warn|careful] [y|n] —
+# 0, 1 or 2 (Yes/No/Cancel). An empty TEXT_FOR_TTY is made from the HTML
+# (only when it is needed). On the terminal, Enter gives the last
+# argument's answer (No unless "y" is given); with no one to ask, the
+# answer is always No. "warn", "careful" and the button that Enter presses
+# in a window: as in ui_yesno (kdialog's warning has Cancel as its
+# default).
 ui_choice3() {
-    local html="$1" text="$2" yes="$3" no="$4" cancel="$5" kind="--yesnocancel" def="${7:-n}" a rc
-    [[ "${6:-}" == "warn" ]] && kind="--warningyesnocancel"
-    a=$(UI_DIALOG_PRIMARY="$([[ $def == n && ${6:-} == warn ]] && echo 1 || echo 2)" _ui_dialog "$([[ ${6:-} == warn ]] && echo warning || echo question)" "$html" "" "$cancel" "$no" "$yes")
+    local html="$1" text="$2" yes="$3" no="$4" cancel="$5" how="${6:-}" kind="--yesnocancel" def="${7:-n}" primary=2 a rc
+    [[ -z "$how" ]] || { kind="--warningyesnocancel"; primary=-1; }
+    [[ "$def" == y ]] || primary=1
+    a=$(UI_DIALOG_PRIMARY="$primary" _ui_dialog "$([[ $how == warn ]] && echo warning || echo question)" "$html" "" "$cancel" "$no" "$yes")
     case $? in
         0) case "$a" in 2) return 0 ;; 1) return 1 ;; *) return 2 ;; esac ;;
         1) return 2 ;;
@@ -1311,8 +1451,10 @@ _progress_window_stop() {
 _progress_kdialog_start() {
     local theme ref
     theme=$(_ui_theme_env)
-    ref=$(_as_desktop_user env ${theme:+"$theme"} kdialog --title "$UI_TITLE" --icon "$(_ui_icon)" \
-        --progressbar "$1" "$([[ $2 -gt 0 ]] && echo 100 || echo 0)" 2>/dev/null) || return 0
+    # (Of what it prints, no more is read than such a line can be long.)
+    ref=$(set -o pipefail
+          _as_desktop_user env ${theme:+"$theme"} kdialog --title "$UI_TITLE" --icon "$(_ui_icon)" \
+              --progressbar "$1" "$([[ $2 -gt 0 ]] && echo 100 || echo 0)" 2>/dev/null | head -c 256) || return 0
     # "org.kde.kdialog-12345 /ProgressDialog"
     [[ "$ref" =~ ^(org\.kde\.kdialog-[0-9]+)[[:space:]]+(/[A-Za-z]+)$ ]] && _PROGRESS_REF="$ref"
     return 0

@@ -10,10 +10,9 @@
 # module and its main() runs there with stdin and stdout replaced by two
 # pipes, the same two the root side (lib/ui.sh) holds. The scenario sends
 # request lines, presses keys and clicks in the window and reads the answer
-# lines. It
-# is driven from inside the front end's own event loop, through the
-# module's test interface: PAGE_DIR (the folder the page files come from)
-# and TEST_HOOK(app, shell, host).
+# lines. It is driven from inside the front end's own event loop, through
+# the module's test interface: PAGE_DIR (the folder the page files come
+# from) and TEST_HOOK(app, shell, host).
 #
 # One "ok" or "FAIL" line per check, then a summary; the exit status is 1
 # when a check failed. A QML warning (a binding loop, a type error, a
@@ -127,7 +126,12 @@ STUBS_BROKEN = {
     # Loads, but is not a page: not an Item.
     "Choose.qml": "import QtQml\nQtObject { property var input; property string iconSource }\n",
     # Loads, but is not a page: no finished() and cancelled().
-    "Dialog.qml": "import QtQuick\nItem { required property var input; property string iconSource: \"\" }\n",
+    "Settings.qml": "import QtQuick\nItem { required property var input; property string iconSource: \"\" }\n",
+    # A page by every test the Shell makes, but the Shell fails while it
+    # sets it up: a dialog whose maximumWidth cannot be set.
+    "Dialog.qml": "import QtQuick\nItem {\n    objectName: \"cannot-be-set-up\"\n    required property var input\n"
+                  "    property string iconSource: \"\"\n    signal finished(var answer)\n    signal cancelled()\n"
+                  "    readonly property real maximumWidth: 100\n}\n",
 }
 
 # ---- one scenario, in its own process ----------------------------------------
@@ -183,8 +187,19 @@ def pump():
 
 def send(obj):
     """One line to the front end: an object (as JSON), or the text as it is."""
-    data = obj if isinstance(obj, bytes) else (obj if isinstance(obj, str) else json.dumps(obj)).encode()
-    os.write(req_w, data + b"\n")
+    data = (obj if isinstance(obj, bytes) else (obj if isinstance(obj, str) else json.dumps(obj)).encode()) + b"\n"
+    if len(data) <= pipe_room():
+        os.write(req_w, data)
+        return
+    # A line longer than the pipe (a container may refuse to enlarge it):
+    # this process also reads it, so a plain write would block for ever.
+    # A thread writes it while the front end reads.
+    import threading
+
+    def write_all(fd=req_w, rest=data):
+        while rest:
+            rest = rest[os.write(fd, rest):]
+    threading.Thread(target=write_all, daemon=True).start()
 
 
 def ask(rid, mode, data):
@@ -570,6 +585,38 @@ def at_once(rid, mode, data, act, what):
     return None
 
 
+def on_and_on(rid, mode, data, act, steps, what):
+    """at_once(), and then each of STEPS (functions) in turn, 150 ms apart:
+    input that goes on and on as a page appears. Every step must start the
+    settle pause again, so each one is taken only while the Shell says it
+    is still settling. When it is not (this machine stalled for longer than
+    the pause between two steps), all of it starts again with a new
+    request, a few times: nothing is left out. Returns the id of the
+    request that got ACT and every step, or that was answered on the way
+    (the caller's check then fails); None, after a failed check, when no
+    try got through."""
+    tries = 4
+    for attempt in range(tries):
+        cur = yield from at_once("%s%d" % (rid, attempt), mode, data, act, what + " at once")
+        if cur is None:
+            return None
+        done = 0
+        for step in steps:
+            yield P(0.15)
+            if got(cur) or prop("settling") is not True:
+                break
+            step()
+            done += 1
+        if done == len(steps) or got(cur):
+            return cur
+        say("     note: %s on and on: the settle pause was over before step %d of %d (try %d)" % (what, done + 1, len(steps), attempt + 1))
+        yield from settled(what)
+    check(False, "%s on and on: the page was still settling before each of %d steps, 150 ms apart, in one of %d tries (if not: "
+          "the Shell does not start the settle pause again with every key and click, or this machine stalls again and again)"
+          % (what, len(steps), tries))
+    return None
+
+
 # ---- the scenarios -----------------------------------------------------------
 def sc_pages():
     """Every real page, with its sample input and with {}: it loads without
@@ -682,6 +729,11 @@ def sc_shell():
     send({"busy": "Looking for an update…"})
     yield W(lambda: prop("busyShown") is True and prop("busyLabel") == "Looking for an update…", "busy: label shown")
     shot("shell-busy")
+    status = lambda: [s for s in spoken() if s[0] == "StatusBar"]
+    yield W(lambda: status() == [("StatusBar", "Looking for an update…", "")],
+            "busy: a screen reader is told one status, with the label as its name", 3.0)
+    if status() != [("StatusBar", "Looking for an update…", "")]:
+        say("     it is told: %s" % cut(status() or spoken(), 400))
     send({"busy": ""})
     yield W(lambda: prop("busyLabel") == "", "busy \"\": the usual label is back")
     check(prop("busyShown") is True and len(replies) == 1, "busy: still busy, and nothing was answered")
@@ -703,6 +755,9 @@ def sc_shell():
         check(prop("dialogItem") is not None and prop("pageItem") is not None and (shell.width(), shell.height()) == big,
               "dialog over a page: on top of it, same window size")
         shot("shell-dialog-over-page")
+        told = [s for s in spoken() if s[0] == "Dialog"]
+        check(told == [("Dialog", S["dialog-error"]["title"], "")],
+              "dialog over a page: a screen reader is told one dialog, with the dialog's title as its name: %s" % cut(told))
         slot, inside = prop("dialogSlot"), True
         for _ in range(6):
             key(Tab)
@@ -866,10 +921,10 @@ def sc_controls():
         check(page.property("step") == 2 and off.property("switchedOn") is True, "wizard: Enter on a card goes on, and leaves the tick alone")
         click(card("Offer fixes"), "Offer fixes")
         yield P(0.1)
-        deep = card("Deep check")
+        deep = card("Deep check-up")
         space(deep)
         yield P(0.1)
-        check(deep is not None and deep.property("switchedOn") is True, "wizard: Space on \"Deep check\" ticks it")
+        check(deep is not None and deep.property("switchedOn") is True, "wizard: Space on \"Deep check-up\" ticks it")
         key(Return, text="\r")
         yield P(0.15)
         check(page.property("step") == 3, "wizard: Enter on a card of the Options step goes on to Review")
@@ -998,6 +1053,77 @@ def sc_controls():
             state["tag"] = now[0]
         space(button("Cancel"))             # the other button: answered, not cancelled
 
+    def press_keys(*keys):
+        def steps(rid):
+            yield from press(rid, keys)
+        return steps
+
+    def list_end_home(rid):
+        tags = [i["tag"] for i in S["dialog-list"]["items"]]
+
+        def picked():
+            return [plain(r.property("modelData"))["tag"] for r in controls("QQuickRadioDelegate") if r.property("checked")]
+        key(K().Key_End)
+        yield P(0.1)
+        at_end, on_end = picked(), shell.activeFocusItem().property("checked")
+        key(K().Key_Home)
+        yield P(0.1)
+        check(len(tags) > 2 and at_end == [tags[-1]] and on_end is True and picked() == [tags[0]]
+              and shell.activeFocusItem().property("checked") is True,
+              "dialog, list: End picks the last row and Home the first, and the keyboard focus goes with them (%s, then %s)" % (at_end, picked()))
+        key(K().Key_End)
+        yield P(0.1)
+        key(Return, text="\r")
+
+    # Enter is the main button, and the main button is switched off: nothing.
+    def choose_nothing(rid):
+        for tag in ("a", "b"):              # the two that come ticked
+            space(row("tag", tag))
+            yield P(0.1)
+        page = prop("pageItem")
+        mains = [i for i in items_under(page) if is_main(i)]
+        check(page.property("count") == 0 and len(mains) == 1 and not mains[0].isEnabled(),
+              "choose, where one must be picked: with nothing ticked the main button is switched off")
+        key(Return, text="\r")              # the focus is on a row: Enter is the page's main action
+        yield P(0.3)
+        check(not got(rid), "choose, where one must be picked: Enter with nothing ticked does not continue")
+        key(K().Key_Escape)
+
+    def check_nothing(rid):
+        on = [b for b in controls("QQuickCheckBox") if not b.property("text") and b.property("checked")]
+        if not check(len(on) == 1, "check: one finding comes ticked"):
+            return
+        space(on[0])                        # no longer; the focus stays on the tick box
+        yield P(0.1)
+        check(prop("pageItem").property("count") == 0, "check: Space unticks the finding")
+        key(Return, text="\r")
+        yield P(0.3)
+        check(not got(rid), "check: Enter with nothing ticked sends no fix")
+        key(K().Key_Escape)
+
+    def wizard_no_folder(rid):
+        page = prop("pageItem")
+        key(Return, text="\r")              # "Start the check-up" on the Review step
+        yield P(0.3)
+        shown = [i.property("text") for i in items_under(page) if i.inherits("QQuickText") and i.isVisible()
+                 and "Choose a report folder below" in (i.property("text") or "")]
+        check(not got(rid) and page.property("step") == 2 and len(shown) == 1,
+              "wizard without a report folder: \"Start the check-up\" answers nothing and goes to Options, where a message asks for the folder")
+        yield from press(rid, [K().Key_Escape] * 4)
+
+    def copy_commands(rid):
+        from PySide6.QtGui import QGuiApplication
+        board = QGuiApplication.clipboard()
+        edit = control("the commands", lambda i: True, "QQuickTextEdit")
+        copy = button("Copy")
+        for how, use in (("clicked", click), ("pressed with Space", lambda b, what: space(b))):
+            board.setText("something else")
+            use(copy, "Copy")
+            yield P(0.2)
+            check(board.text() == S["confirm"]["commands"] and edit is not None and edit.property("selectedText") == "" and not got(rid),
+                  "confirm: Copy, %s, puts the commands on the clipboard, leaves nothing selected and answers nothing: %r" % (how, cut(board.text(), 60)))
+        click(button("Skip"), "Skip")
+
     wizard_keys = {"use", "fix", "deep", "report_dir", "action"}
     cases = [
         # name, mode, input, steps, status, what the answer must be
@@ -1040,6 +1166,19 @@ def sc_controls():
         ("dialog, list: another row, clicked", "dialog", S["dialog-list"], list_other, 0, lambda a: a == {"button": 1, "tag": state["tag"]}),
         ("dialog, list: Down, then the other button", "dialog", S["dialog-list"], list_down_cancel, 0,
          lambda a: state["tag"] is not None and a == {"button": 0, "tag": state["tag"]}),
+        ("dialog, list: End and Home, then Enter", "dialog", S["dialog-list"], list_end_home, 0,
+         lambda a: a == {"button": 1, "tag": S["dialog-list"]["items"][-1]["tag"]}),
+        ("choose, where one must be picked: nothing ticked, Enter, then Esc", "choose", dict(S["choose"], allow_none=False), choose_nothing, 1, None),
+        ("check: nothing ticked, Enter, then Esc", "check", S["check"], check_nothing, 0, lambda a: a == {"action": "back"}),
+        ("wizard without a report folder: Enter on Review, then Esc", "wizard",
+         dict(S["wizard"], start_step=3, answers=dict(wiz, report_dir="")), wizard_no_folder, 1, None),
+        # The root side rejects an answer with a key missing: the page fills them in.
+        ("wizard: an answer has every key, also those the input left out", "wizard",
+         dict(S["wizard"], start_step=3, answers={"report_dir": wiz["report_dir"]}), press_keys(Return), 0,
+         lambda a: a == {"use": [], "fix": True, "deep": False, "report_dir": wiz["report_dir"], "action": "start"}),
+        ("wizard: Settings, with answers the input left out", "wizard", dict(S["wizard"], answers={"report_dir": wiz["report_dir"]}),
+         wizard_settings, 0, lambda a: a == {"use": [], "fix": True, "deep": False, "report_dir": wiz["report_dir"], "action": "settings"}),
+        ("confirm: the Copy button", "confirm", S["confirm"], copy_commands, 0, lambda a: a == {"choice": "skip"}),
     ]
     for n, (what, mode, data, steps, status, answer) in enumerate(cases):
         rid = "c%d" % n
@@ -1099,6 +1238,51 @@ def spoken(root=None):
             walk(obj.child(n), depth + 1)
     walk(QAccessible.queryAccessibleInterface(root or shell), 0)
     return out
+
+
+def said_twice(root=None):
+    """Controls and texts with something inside them that has a name of its
+    own, which a screen reader would say after theirs: (the name, the name
+    inside it) of each."""
+    from PySide6.QtGui import QAccessible
+    whole = ("Button", "CheckBox", "RadioButton", "StaticText")
+    out = []
+
+    def walk(obj, depth, above):
+        if obj is None or depth > 80 or obj.state().invisible:
+            return
+        role, name = str(obj.role()).split(".")[-1], obj.text(QAccessible.Text.Name) or ""
+        if above is not None and name:
+            out.append((above, name))
+        for n in range(obj.childCount()):
+            walk(obj.child(n), depth + 1, above if above is not None else name if role in whole and name else None)
+    walk(QAccessible.queryAccessibleInterface(root or shell), 0, None)
+    return out
+
+
+def util_js():
+    """ui/qml/util.js, to call from here: an object with the text "a" and
+    the list "b", and what the functions make of them as properties."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtQml import QQmlComponent
+    source = b"""import QtQml
+import "util.js" as Util
+QtObject {
+    property string a
+    property var b: []
+    readonly property string esc: Util.esc(a)
+    readonly property string tip: Util.tip(a)
+    readonly property string mnemonic: Util.mnemonic(a)
+    readonly property string plain: Util.plain(a)
+    readonly property string fill: Util.fill(a, b)
+    readonly property string reflow: Util.reflow(a)
+}
+"""
+    component = QQmlComponent(appmod.TEST_HOOK.keep[1])
+    component.setData(source, QUrl.fromLocalFile(os.path.join(REPO, "ui", "qml", "util-test.qml")))
+    obj = component.create()
+    util_js.keep = (component, obj)
+    return obj
 
 
 def rings():
@@ -1167,6 +1351,8 @@ def sc_a11y():
             check(any(g and g.replace(" ", "") == want.replace(" ", "") for g in got_names), "%s: the text is spoken without its tags: %r" % (what, cut(want, 60)))
         area = page_root().property("scrollArea")
         check((area is not None and area.inherits("QQuickFlickable")) == scrolls, "%s: scrollArea is the page's scrolling area" % what)
+        twice = said_twice()
+        check(not twice, "%s: no control or text is said a second time by a label inside it%s" % (what, "" if not twice else ": " + cut(twice[:3], 240)))
         no_warnings(what)
 
     if (yield from show("y-d", "dashboard", tagged, "dashboard, texts from the PC")):
@@ -1267,8 +1453,62 @@ def sc_a11y():
                   and plain(landed.property("modelData")).get("area") == S["dashboard"]["areas"][1]["name"],
                   "dashboard: Enter on an area chip goes to the first check of that area, and answers nothing")
 
+    # ---- Choose: the rows are one Tab stop, and each is a check box with a name
+    if (yield from show("y-o", "choose", S["choose"], "choose, Tab stops")):
+        items = S["choose"]["items"]
+        stops = tab_stops()
+        rows_ = [i for i in stops if i.property("modelData") is not None]
+        check(len(rows_) == 1 and len(items) > 2 and len(stops) < 8,
+              "choose: %d rows are one Tab stop (%d rows among %d stops)" % (len(items), len(rows_), len(stops)))
+        if rows_:
+            rows_[0].forceActiveFocus(FOCUS_BY_TAB())
+            key(Down)
+            below = shell.activeFocusItem()
+            key(End)
+            last = shell.activeFocusItem()
+            key(Home)
+            check(plain(below.property("modelData")) == items[1] and plain(last.property("modelData")) == items[-1]
+                  and shell.activeFocusItem() is rows_[0], "choose: Down, End and Home move between the rows")
+            key(Down)
+            check([i for i in tab_stops() if i.property("modelData") is not None] == [below], "choose: Tab comes back to the row the arrows left")
+        risks = {"low": "Low risk", "medium": "Medium risk", "high": "High risk"}
+        want = [("CheckBox", "%s, %s" % (i["label"], risks[i["risk"]]) if i["risk"] else i["label"],
+                 ". ".join(t for t in (i.get("detail"), i.get("warn")) if t)) for i in items]
+        boxes = [o for o in spoken() if o[0] == "CheckBox"]
+        check(boxes == want, "choose: each row is a check box named after its item and its risk, with the detail and the warning as its description: %s"
+              % cut(boxes, 200))
+    # ---- Confirm: the command block and its Copy button are Tab stops; the severity is said
+    if (yield from show("y-k", "confirm", S["confirm"], "confirm, Tab stops")):
+        stops = tab_stops()
+        check(len([i for i in stops if i.inherits("QQuickTextEdit")]) == 1 and len([i for i in stops if i.property("text") == "Copy"]) == 1,
+              "confirm: the command block and its Copy button are Tab stops (%d stops)" % len(stops))
+        said = spoken()
+        check(("StaticText", "High severity", "") in said and S["confirm"]["sev"] == "high",
+              "confirm: the chip with the severity is a text named \"High severity\": %s" % cut([o for o in said if "everity" in o[1]], 200))
+
+    # ---- text from the PC in a tool tip and in the label of the main button
+    odd = "/home/player/<b>bold</b> & co/reports"
+    if (yield from show("y-p", "wizard", dict(S["wizard"], start_step=2, answers=dict(S["wizard"]["answers"], report_dir=odd)), "wizard, an odd folder")):
+        field = control("the report folder", lambda i: True, "QQuickTextField")
+        tips = [o.property("text") for o in field.children() if o.metaObject().className().startswith("QQuickToolTipAttached")] if field is not None else []
+        check(field is not None and field.property("text") == odd and tips == ["<span>/home/player/&lt;b&gt;bold&lt;/b&gt; &amp; co/reports</span>"],
+              "wizard: a folder name with tags in it is shown as it is, and escaped in the tool tip: %r" % tips)
+    util = util_js()
+    if check(util is not None, "ui/qml/util.js can be called from the test"):
+        for name, text, values, want in (
+                ("esc", "a <b> & </b>", [], "a &lt;b&gt; &amp; &lt;/b&gt;"),
+                ("tip", "/home/<i>x</i> & y\nz", [], "<span>/home/&lt;i&gt;x&lt;/i&gt; &amp; y<br>z</span>"),
+                ("mnemonic", "&Fix <b>it</b> && more", [], "<u>F</u>ix &lt;b&gt;it&lt;/b&gt; &amp; more"),
+                ("mnemonic", "Fix &<b>it</b> &more", [], "Fix <u>&lt;</u>b&gt;it&lt;/b&gt; more"),
+                ("plain", "<p>One<br>two &amp; <b>three</b></p>", [], "One two & three"),
+                ("fill", "%1 and %2", ["%2", "b"], "%2 and b"),
+                ("reflow", "a\nb\n\n- c\nd", [], "a b\n\n- c\nd")):
+            util.setProperty("a", text)
+            util.setProperty("b", values)
+            check(util.property(name) == want, "util.js: %s(%r) is %r" % (name, text, util.property(name)))
+
     # ---- the main button shows its Alt key, as the other buttons do
-    if (yield from show("y-m", "choose", S["choose"], "main button, Alt")):
+    if (yield from show("y-m", "choose", dict(S["choose"], ok="Remove <i>these</i>"), "main button, Alt")):
         main = main_button()
         label = next((i for i in items_under(main) if i.inherits("QQuickText")), None) if main is not None else None
         if label is not None:
@@ -1279,6 +1519,8 @@ def sc_a11y():
             yield P(0.2)
             check("<u>" in held_text and "<u>" not in label.property("text") and not got("y-m"),
                   "the main button underlines its Alt key while Alt is held: %r, then %r" % (held_text, label.property("text")))
+            check("&lt;i&gt;these&lt;/i&gt;" in held_text and "<i>" not in held_text and label.property("text").startswith("Remove <i>these</i>"),
+                  "the main button: tags in a label from the PC are text, with Alt held and without")
 
     # ---- a dialog whose buttons do not fit next to each other
     labels = ["Keep everything as it is on this PC now", "Undo only the change to the firewall", "Undo every change made in this run"]
@@ -1342,21 +1584,13 @@ def sc_guard():
                               ("a program", lambda press=True, release=True: [key_event(p, k, text) for p in (True, False)
                                                                                  if (press if p else release)])):
             what = "%s from %s" % (name, how)
-            rid = yield from at_once(base + how[-1], "choose", choose, send_key, what + " at once")
-            if rid is None:
-                continue
             # On and on: every key event, a press as much as a release,
             # starts the wait again. Four presses, four releases, then the
-            # key once more. (Not where this machine was too slow: the page
-            # may have settled.)
-            last = time.monotonic()
-            for n in range(9):
-                yield P(0.15)
-                if time.monotonic() - last > 0.3:
-                    say("     note: %s on and on: stopped after %d key events, this machine stalled" % (what, n))
-                    break
-                last = time.monotonic()
-                send_key(press=n < 4 or n == 8, release=n >= 4)
+            # key once more.
+            steps = [lambda n=n, send_key=send_key: send_key(press=n < 4 or n == 8, release=n >= 4) for n in range(9)]
+            rid = yield from on_and_on(base + how[-1], "choose", choose, send_key, steps, what)
+            if rid is None:
+                continue
             yield P(0.2)
             no_answer(rid, "%s, pressed the moment a page appears, with a key event every 150 ms after it, does not answer it" % what)
             yield from settled(what)
@@ -1364,19 +1598,10 @@ def sc_guard():
                 key(Return if k == Space else k)
                 yield from answered(rid, "%s after the pause" % name)
                 expect(rid, 1 if k == Escape else 0, "a key pressed after the pause answers")
-    rid = yield from at_once("g4", "confirm", data, lambda: click(button("Skip"), "Skip"), "a click at once")
+    # Clicking on and on: every click starts the wait again.
+    skip = lambda: click(button("Skip"), "Skip")
+    rid = yield from on_and_on("g4", "confirm", data, skip, [skip] * 5, "a click")
     if rid is not None:
-        # Clicking on and on: every click starts the wait again. (A click
-        # that this machine was too slow for is left out: the page may
-        # have settled before it.)
-        last = time.monotonic()
-        for n in range(5):
-            yield P(0.15)
-            if time.monotonic() - last > 0.3:
-                say("     note: clicking on and on: stopped after %d clicks, this machine stalled" % (n + 1))
-                break
-            last = time.monotonic()
-            click(button("Skip"), "Skip")
         yield P(0.2)
         no_answer(rid, "a click in the moment a page appears, and a click every 150 ms after it, are dropped")
         yield from settled("a click at once")
@@ -1396,20 +1621,16 @@ def sc_guard():
         for c, k in letters:
             typed(k, alt, c.lower())
 
-    def every_letter_slowly(rid, what, repeat=False):
-        """Alt and each letter in turn, 150 ms apart: a shortcut holds its
-        button down for a moment before it clicks, and two at once get in
-        each other's way. Every key starts the settle pause again, so this
-        stops where this machine was too slow for that."""
-        last = time.monotonic()
+    def every_letter_held(rid):
+        """Alt and each letter in turn as a held key (a repeat), 150 ms
+        apart: a shortcut holds its button down for a moment before it
+        clicks, and two at once get in each other's way. A repeat is
+        refused on its own, settle pause or not, so a machine that stalls
+        between two of them changes nothing."""
         for c, k in letters:
             if got(rid):
                 break
-            if time.monotonic() - last > 0.3:
-                say("     note: %s: stopped before Alt+%s, this machine stalled" % (what, c))
-                break
-            last = time.monotonic()
-            typed(k, alt, c.lower(), repeat=repeat)
+            typed(k, alt, c.lower(), repeat=True)
             yield P(0.15)
 
     def one_letter(rid, what):
@@ -1424,9 +1645,12 @@ def sc_guard():
         yield from answered(rid, what)
         check(got(rid), "%s: Alt+%s presses a button (the test's keys do reach the shortcuts)" % (what, used[0] if used else "?"))
 
-    rid = yield from at_once("g7", "confirm", data, every_letter, "Alt+letter at once")
+    # Then Alt and each letter in turn, 150 ms apart: a shortcut holds its
+    # button down for a moment before it clicks, and two at once get in
+    # each other's way.
+    rid = yield from on_and_on("g7", "confirm", data, every_letter,
+                               [lambda c=c, k=k: typed(k, alt, c.lower()) for c, k in letters], "Alt+letter")
     if rid is not None:
-        yield from every_letter_slowly(rid, "Alt+letter at once")
         yield P(0.3)
         no_answer(rid, "Alt and a letter (a button's shortcut), pressed the moment a page appears and on and on after it, does not answer it")
         yield from settled("Alt+letter at once")
@@ -1444,7 +1668,7 @@ def sc_guard():
             c = marked[0].upper()
             typed(getattr(K(), "Key_" + c), alt, c.lower(), repeat=True)
             yield P(0.15)
-        yield from every_letter_slowly("g8", "held Alt+letter", repeat=True)
+        yield from every_letter_held("g8")
         yield P(0.3)
         no_answer("g8", "Alt and a letter held down (repeating) does not answer a page")
         yield from settled("after the held Alt+letter")
@@ -1751,6 +1975,34 @@ BAD_LINES = [
     ("input that is a list", {"id": "m7", "mode": "confirm", "data": [1]}, ["m7"]),
     ("no input", {"id": "m8", "mode": "confirm"}, ["m8"]),
 ]
+# JSON that Python's parser gives up on with a RecursionError, which is not
+# a ValueError as for every other line that is not JSON: lists nested deeper
+# than it takes.
+DEEP = 200000
+DEEP_LINE = '{"id":"m10","mode":"confirm","data":' + "[" * DEEP + "]" * DEEP + "}"
+BAD_LINES.append(("JSON nested %d deep" % DEEP, DEEP_LINE, [""]))
+
+
+def pipe_room():
+    """How many bytes the request pipe of this test takes in one write."""
+    try:
+        import fcntl
+        return fcntl.fcntl(req_w, fcntl.F_GETPIPE_SZ)
+    except (ImportError, AttributeError, OSError):
+        return 65536
+
+
+def deep_line_fits():
+    """DEEP_LINE is what it is meant to be here (a check: a test that cannot
+    do its work fails, it is not skipped)."""
+    try:
+        json.loads(DEEP_LINE)
+        error = "none"
+    except Exception as e:
+        error = type(e).__name__
+    ok = check(error == "RecursionError", "JSON nested %d deep is a RecursionError for this Python's parser (it is: %s; "
+               "if not, DEEP in the test must grow)" % (DEEP, error))
+    return ok
 
 
 def sc_malformed():
@@ -1761,6 +2013,8 @@ def sc_malformed():
     allowed.append(re.compile(r"^(?!.*(qml|QML|Binding loop)).*$"))
     for n, (what, line, ids) in enumerate(BAD_LINES):
         before = len(replies) if n else 0       # the first one was sent before the front end started
+        if line is DEEP_LINE and not deep_line_fits():
+            continue
         if n:
             send(line)
         ok = yield W(lambda: (pump(), len(replies) > before)[1], "%s: answered (silence makes the root side wait for ever)" % what, 3.0)
@@ -1786,15 +2040,22 @@ def sc_broken():
     window goes on."""
     Return = K().Key_Return
     allowed.extend(re.compile(p) for p in (
-        r"Security Check: ", r"Check\.qml", r"Confirm\.qml", r"Choose\.qml", r"Dialog\.qml",
+        r"Security Check: ", r"Check\.qml", r"Confirm\.qml", r"Choose\.qml", r"Dialog\.qml", r"Settings\.qml",
         r"NoSuchComponent", r"^\s+\^|^\s+this is not QML|^\s+NoSuch"))
-    for rid, mode, what in (("b1", "check", "a page file with a syntax error"),
-                            ("b2", "confirm", "a page that uses a component that does not exist"),
-                            ("b3", "choose", "a file that is not an Item"),
-                            ("b4", "dialog", "an Item without finished() and cancelled()")):
+    # The Shell refuses a file in three places: it does not load, it is not
+    # a page, or setting it up fails (the catch in showRequest()). Each
+    # says so in its own words, which is how the test tells them apart.
+    for rid, mode, what, why in (("b1", "check", "a page file with a syntax error", "cannot load "),
+                                 ("b2", "confirm", "a page that uses a component that does not exist", "cannot load "),
+                                 ("b3", "choose", "a file that is not an Item", "Choose.qml is not a page"),
+                                 ("b4", "settings", "an Item without finished() and cancelled()", "Settings.qml is not a page"),
+                                 ("b6", "dialog", "a dialog the Shell fails to set up", "cannot show ")):
+        seen = len(stderr_text())
         ask(rid, mode, {"title": "t"})
         yield from answered(rid, what, 5.0)
         expect(rid, 3, what + ": status 3")
+        said = [line for line in stderr_text()[seen:].splitlines() if "Security Check: " in line]
+        check(len(said) == 1 and why in said[0], "%s: the Shell says why (\"%s…\"): %s" % (what, why, cut(" | ".join(said))))
     check(prop("pendingId") == "", "nothing is left waiting for an answer")
     # Why a page did not load must reach the run log, which is this
     # process's stderr. Qt writes there by itself only on a terminal; this
@@ -1809,6 +2070,23 @@ def sc_broken():
         key(Return)
     yield from answered("b5", "a good page after the broken ones")
     expect("b5", 0, "a good page after the broken ones is shown and answered", lambda a: a.get("via") == "primary")
+    # The same dialog over a page. Nothing of either is left in the window,
+    # unseen: not the one that was to be the whole content, not this one.
+    if (yield from show("b7", "wizard", {"n": 7}, "a page for the dialog")):
+        ask("b8", "dialog", {"title": "t"})
+        yield from answered("b8", "a dialog over a page that the Shell fails to set up", 5.0)
+        expect("b8", 3, "a dialog over a page that the Shell fails to set up: status 3")
+        expect("b7", 1, "the page under it was answered \"cancelled\" first")
+        check(prop("dialogItem") is None and prop("dialogSlot") is None, "no dialog is over the page")
+        yield P(0.3)
+        left = [i for i in items_under(shell.contentItem()) if i.objectName() == "cannot-be-set-up"]
+        check(not left, "nothing of the dialogs that could not be set up is left in the window (%d found)" % len(left))
+    if (yield from show("b9", "wizard", {"n": 9}, "the next page")):
+        click(button("Other"), "the page's second button")
+    yield from answered("b9", "a click on the next page")
+    expect("b9", 0, "the next page takes a click on its button", lambda a: a == {"via": "button"})
+    w = new_warnings()
+    check(not w, "only the expected warnings to the end%s" % ("" if not w else ": " + cut(" | ".join(w[:2]), 300)))
     send({"quit": True})
 
 
@@ -2097,6 +2375,233 @@ def sc_oneshot_odd():
     key(K().Key_Return)
 
 
+def first_lines(*lines):
+    """Several lines for the front end in ONE write, made before it starts:
+    it reads them together with the first one."""
+    def text():
+        out = "\n".join(json.dumps(line() if callable(line) else line) for line in lines)
+        if len(out) >= 4096:
+            raise RuntimeError("these lines are too long to arrive in one read")
+        return out
+    return text
+
+
+def sc_first_lines():
+    """Lines that arrive in the same read as the first one are handled too,
+    in their order: a busy label and two requests, written at once."""
+    Return = K().Key_Return
+    yield W(lambda: got("f1") and prop("pendingId") == "f2" and shell.isVisible(),
+            "three lines written at once before the front end started: the last request is shown")
+    expect("f1", 1, "the request before it was answered \"cancelled\"")
+    yield from settled("the last request")
+    key(Return)
+    yield from answered("f2", "the last request")
+    expect("f2", 0, "the last request is answered", lambda a: a == CHOOSE_ENTER)
+    check(len(replies) == 2, "two answer lines for the two requests: %s" % cut(replies))
+    no_warnings("the whole scenario")
+    send({"quit": True})
+
+
+def sc_deep_first():
+    """The first line is JSON nested too deep for the parser: one answer
+    with status 3, and the front end goes on."""
+    Return = K().Key_Return
+    # What the front end itself logs about a bad line is not a QML warning.
+    allowed.append(re.compile(r"^(?!.*(qml|QML|Binding loop)).*$"))
+    if deep_line_fits():
+        yield W(lambda: (pump(), len(replies) > 0)[1], "JSON nested too deep as the first line: answered", 5.0)
+        check(replies == ['{"id":"","status":3,"answer":null}'], "JSON nested too deep as the first line: one answer line, status 3: %s"
+              % cut(" | ".join(replies)))
+    if (yield from show("p1", "choose", SAMPLES["choose"], "a page after it")):
+        key(Return)
+    yield from answered("p1", "a page after it")
+    expect("p1", 0, "a page after it is shown and answered", lambda a: a == CHOOSE_ENTER)
+    no_warnings("the whole scenario")
+    send({"quit": True})
+
+
+def sc_answer_closed():
+    """The root side no longer reads the answers (that pipe is closed at
+    its end) while the request pipe stays open: an answer cannot be
+    written, and the front end leaves instead of going on unheard."""
+    global rep_r
+    yield W(lambda: prop("pendingId") == "x1" and shell.isVisible(), "page shown")
+    yield from settled("page shown")
+    os.close(rep_r)
+    rep_r = -1
+    key(K().Key_Escape)
+    check(prop("pendingId") == "", "Esc answers the page, with nobody to read the answer")
+
+
+def after_answer_closed(rc):
+    check(rc == 0 and not replies, "an answer that cannot be written: app.py serve ended by itself, with status %r (0 expected)" % (rc,))
+    no_warnings("the answer pipe closed")
+
+
+def after_crash(rc):
+    """ui/app.py as a program of its own, started without a stdin: main()
+    fails at its first step. (The other scenarios call main() and never
+    get to the lines below it.)"""
+    status, out, err = "not run", b"", ""
+    try:
+        p = subprocess.run(["/bin/sh", "-c", 'exec "$0" -I "$1" serve <&-', sys.executable, APP],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        status, out, err = p.returncode, p.stdout, p.stderr.decode("utf-8", "replace")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        status = repr(e)
+    check(status == 3 and out == b"", "app.py that fails with an exception ends with status %r (3: \"cannot run here\"; 1 would be "
+          "\"cancelled\"), nothing printed" % (status,))
+    check("Traceback (most recent call last)" in err and "OSError" in err, "the exception is written to stderr: %s" % cut(err.strip().splitlines()[-1:]))
+
+
+# A page with text fields: two that can be edited (the one-line field takes
+# Enter as "done") and one that cannot. It asks for the keyboard focus on
+# the field its input names.
+STUB_TYPING = """// Test stub: a page with text fields.
+import QtQuick
+import QtQuick.Controls as QQC2
+import QtQuick.Layouts
+Item {
+    id: page
+    required property var input
+    property string iconSource: ""
+    readonly property string title: "Typing stub"
+    signal finished(var answer)
+    signal cancelled()
+    function primary() { finished({ "via": "primary" }) }
+    function dismiss() { cancelled() }
+    function initialFocus() { return input.start === "field" ? field : input.start === "area" ? area : null }
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 16
+        QQC2.TextField { id: field; objectName: "field"; Layout.fillWidth: true; onAccepted: page.finished({ "via": "field" }) }
+        QQC2.TextArea { id: area; objectName: "area"; Layout.fillWidth: true }
+        QQC2.TextArea { objectName: "fixed"; Layout.fillWidth: true; readOnly: true; text: "fixed" }
+        QQC2.Button { objectName: "other"; text: "Other"; onClicked: page.finished({ "via": "button" }) }
+        Item { Layout.fillHeight: true }
+    }
+}
+"""
+STUBS_TYPING = {"Wizard.qml": STUB_TYPING}
+
+
+def sc_typing():
+    """A key held down in a text field that can be edited types, as in any
+    text field: the guard against held keys (Shell.qml: hold()) leaves it
+    alone, and it answers nothing. Every key that does not type there is
+    still refused while it repeats."""
+    Key, alt = K(), MOD().AltModifier
+    Return, Escape, Space, A = Key.Key_Return, Key.Key_Escape, Key.Key_Space, Key.Key_A
+
+    def named(name):
+        for item in items_under(page_root()):
+            if item.objectName() == name:
+                return item
+        check(False, "the stub page has an item named %s" % name)
+        return None
+
+    def quiet(rid, item, what):
+        """The page is as it was: not answered, taking input, the focus still in ITEM."""
+        return check(not got(rid) and prop("settling") is False and shell.activeFocusItem() == item,
+                     "%s: no answer, the page still takes input and the focus stays in the field (answered: %r, settling: %r, focus: %s)"
+                     % (what, got(rid), prop("settling"), focus_text()))
+
+    # 1. Space and Enter held down where they type. As the keyboard sends
+    # the events, and as a program hands them to the window.
+    for how in ("the keyboard", "a program"):
+        rid = "t1" + how[-1]
+        if not (yield from show(rid, "wizard", {}, "typing (%s)" % how)):
+            continue
+        if how == "the keyboard":
+            down = lambda k, text: typed(k, text=text, release=False)
+            up = lambda k, text: typed(k, text=text, press=False)
+            repeats = held
+        else:
+            down = lambda k, text: key_event(True, k, text)
+            up = lambda k, text: key_event(False, k, text)
+            repeats = hold
+        for name, k, text, word in (("field", Space, " ", "Space"), ("area", Space, " ", "Space"), ("area", Return, "\r", "Enter")):
+            item = named(name)
+            if item is None:
+                continue
+            item.setProperty("text", "")
+            item.forceActiveFocus()
+            yield P(0.05)
+            down(A, "a")
+            up(A, "a")
+            down(k, text)
+            yield from repeats(k, text, 0.6)
+            now = item.property("text")
+            what = "%s held down in a text %s (from %s)" % (word, name, how)
+            quiet(rid, item, what)
+            up(k, text)
+            yield P(0.1)
+            check(re.fullmatch("a[ \n]{4,}", now) is not None and set(now[1:]) == {" " if k == Space else "\n"},
+                  "%s types with every repeat: the field holds %r" % (what, cut(now, 40)))
+            quiet(rid, item, what + ", let go")
+        # 2. What does not type is refused while it repeats, in a text
+        # field as anywhere else (the press itself was not seen here: held
+        # since the page before).
+        for name, k, mod, text, word in (("fixed", Space, None, " ", "Space in a text area that is read-only"),
+                                         ("field", Return, None, "\r", "Enter in a one-line field (which takes Enter as \"done\")"),
+                                         ("field", Escape, None, "", "Esc in a one-line field"),
+                                         ("area", Escape, None, "", "Esc in a text area"),
+                                         ("area", Key.Key_O, alt, "o", "Alt+O (the shortcut of a button) in a text area"),
+                                         ("area", Space, alt, " ", "Alt+Space in a text area")):
+            item = named(name)
+            if item is None or got(rid) or (mod is not None and how != "the keyboard"):
+                continue                    # a shortcut is the keyboard's alone
+            item.forceActiveFocus()
+            yield P(0.05)
+            before = item.property("text")
+            for _ in range(3):
+                if how == "the keyboard":
+                    typed(k, mod, text, release=False, repeat=True)
+                else:
+                    key_event(False, k, text, True)
+                    key_event(True, k, text, True)
+                yield P(0.03)
+            check(not got(rid) and prop("settling") is True and item.property("text") == before,
+                  "%s, repeating (from %s): refused, the page takes no input until the key is up (answered: %r, settling: %r)"
+                  % (word, how, got(rid), prop("settling")))
+            yield from settled("after " + word)
+            check(shell.activeFocusItem() == item, "after that the keyboard focus is back in the field (it is on: %s)" % focus_text())
+        # Pressed once, Enter is the one-line field's own.
+        if not got(rid):
+            field = named("field")
+            field.forceActiveFocus()
+            yield P(0.05)
+            down(Return, "\r")
+            up(Return, "\r")
+        yield from answered(rid, "Enter pressed once in the one-line field")
+        expect(rid, 0, "Enter pressed once in the one-line field is the field's", lambda a: a == {"via": "field"})
+
+    # 3. A key held since the page before, on a page that puts the
+    # keyboard focus in a text field by itself: Space only types there,
+    # Esc and Enter answer nothing.
+    for start, k, text, word in (("area", Space, " ", "Space"), ("field", Return, "\r", "Enter"), ("area", Escape, "", "Esc")):
+        rid = "t3" + word
+        if not (yield from show(rid, "wizard", {"start": start}, "a page that starts in a text field")):
+            continue
+        item = named(start)
+        check(shell.activeFocusItem() == item, "the page starts with the keyboard focus in its text %s (it is on: %s)" % (start, focus_text()))
+        for _ in range(3):
+            typed(k, text=text, release=False, repeat=True)
+            yield P(0.03)
+        yield P(0.2)
+        check(not got(rid), "%s held since the page before, repeating in the text %s the page starts in, does not answer it" % (word, start))
+        if k == Space:
+            check(item.property("text") == "   ", "it types there: the field holds %r" % cut(item.property("text"), 40))
+        typed(k, text=text, press=False)
+        yield from settled("after " + word)
+        if not got(rid):
+            typed(Escape)
+        yield from answered(rid, "Esc pressed once")
+        expect(rid, 1, "Esc pressed once cancels")
+    no_warnings("the whole scenario")
+    send({"quit": True})
+
+
 def sc_parent_gone():
     """The process that started the front end (runuser) is gone: the kernel
     hands the front end to another parent. Nothing else tells it here: no
@@ -2214,6 +2719,483 @@ def sc_variants():
         expect(rid, 1, "%s: Esc cancels" % what)
     no_warnings("the whole scenario")
     send({"quit": True})
+
+
+# ---- what stays in view, what can be seen, what fits -------------------------
+def scene_rect(item):
+    """ITEM as a rectangle in its window."""
+    from PySide6.QtCore import QRectF
+    return item.mapRectToScene(QRectF(0, 0, item.width(), item.height()))
+
+
+def shown_rect(item):
+    """The part of ITEM (an item of the main window) that shows there: cut
+    to the window and to every item above it that clips. None when nothing
+    of it shows."""
+    from PySide6.QtCore import QRectF
+    r = scene_rect(item).intersected(QRectF(0, 0, shell.width(), shell.height()))
+    up = item.parentItem()
+    while up is not None:
+        if up.clip():
+            r = r.intersected(scene_rect(up))
+        up = up.parentItem()
+    return r if r.width() >= 1 and r.height() >= 1 else None
+
+
+def top_in_view(item):
+    """ITEM shows from its top left corner on."""
+    full, part = scene_rect(item), shown_rect(item)
+    return part is not None and abs(part.top() - full.top()) < 1 and abs(part.left() - full.left()) < 1
+
+
+def named(item):
+    """A control and where it is in the window, for a failure message."""
+    r = scene_rect(item)
+    return "%s %r from y %d to %d" % (item.metaObject().className().split("_")[0], cut(item.property("text") or "", 30), r.top(), r.bottom())
+
+
+def unfold():
+    """Open what a page keeps folded, so that what is in it is a Tab stop too."""
+    for label in ("Show all details", "How to fix it yourself", "Show details"):
+        for b in [i for i in controls() if (i.property("text") or "") == label]:
+            space(b)
+
+
+def smallest_window():
+    """The window as small as it goes."""
+    shell.setWidth(shell.minimumWidth())
+    shell.setHeight(shell.minimumHeight())
+    yield P(0.3)
+    return "%d x %d" % (shell.width(), shell.height())
+
+
+def sc_reveal():
+    """A control that gets the keyboard focus is in view, from its top edge
+    on: Tab and Shift+Tab through every stop of every page and the arrow
+    keys through its lists in the smallest window, Tab again in a larger
+    one. The cursor of a command block shows, and the page follows it."""
+    from PySide6.QtCore import QMetaObject, Qt
+    Tab, Backtab, Down, Up = K().Key_Tab, K().Key_Backtab, K().Key_Down, K().Key_Up
+    S = SAMPLES
+    many_lines = "".join("line %d of the details\n" % n for n in range(1, 41))
+    pages = [
+        ("wizard, Welcome", "wizard", S["wizard"]),
+        ("wizard, Your PC", "wizard", dict(S["wizard"], start_step=1)),
+        ("wizard, Options", "wizard", dict(S["wizard"], start_step=2)),
+        ("wizard, Review", "wizard", dict(S["wizard"], start_step=3)),
+        ("settings", "settings", S["settings"]),
+        ("dashboard", "dashboard", S["dashboard"]),
+        ("check", "check", S["check"]),
+        ("choose", "choose", S["choose"]),
+        ("confirm", "confirm", S["confirm"]),
+        ("dialog, list", "dialog", S["dialog-list"]),
+        ("dialog, error with its details", "dialog", dict(S["dialog-error"], details=many_lines)),
+    ]
+
+    def walk(back):
+        """Once around the page: (the stops, those that were not in view)."""
+        QMetaObject.invokeMethod(shell, "unfocus")
+        seen, bad = [], []
+        for _ in range(90):
+            if back:
+                typed(Backtab, Qt.KeyboardModifier.ShiftModifier)
+            else:
+                key(Tab)
+            yield P(0.02)
+            item = shell.activeFocusItem()
+            if item is None or item in seen:
+                break
+            seen.append(item)
+            if not top_in_view(item):
+                bad.append(named(item))
+        return seen, bad
+
+    def along(start, k):
+        """From a row of a list with an arrow key, as far as it goes."""
+        start.forceActiveFocus(FOCUS_BY_TAB())
+        bad = []
+        for _ in range(60):
+            before = shell.activeFocusItem()
+            key(k)
+            yield P(0.02)
+            item = shell.activeFocusItem()
+            if item is before or item is None:
+                break
+            if not top_in_view(item):
+                bad.append(named(item))
+        return bad
+
+    def not_in_view(bad):
+        return "" if not bad else " - not: " + cut("; ".join(bad), 300)
+
+    for small in (True, False):
+        size = None
+        for n, (what, mode, data) in enumerate(pages):
+            if not (yield from show("v%d-%d" % (small, n), mode, data, what)):
+                continue
+            if size is None:
+                if small:
+                    size = yield from smallest_window()
+                else:
+                    shell.setWidth(max(900, shell.minimumWidth()))
+                    shell.setHeight(max(720, shell.minimumHeight()))
+                    yield P(0.3)
+                    size = "%d x %d" % (shell.width(), shell.height())
+            unfold()
+            yield P(0.2)
+            seen, bad = yield from walk(False)
+            check(len(seen) >= 2 and not bad, "%s, %s: each of the %d Tab stops is in view when it gets the keyboard focus%s"
+                  % (what, size, len(seen), not_in_view(bad)))
+            if small:
+                back, bad = yield from walk(True)
+                check(len(back) >= 2 and not bad, "%s, %s: and each of the %d that Shift+Tab stops at%s" % (what, size, len(back), not_in_view(bad)))
+                rows_ = [i for i in seen if i.property("modelData") is not None and i.property("index") is not None]
+                bad = []
+                for item in rows_:
+                    bad += yield from along(item, Down)
+                    bad += yield from along(item, Up)
+                if rows_:
+                    check(not bad, "%s, %s: each row the arrow keys go to is in view%s" % (what, size, not_in_view(bad)))
+            no_warnings(what)
+
+    # ---- the cursor of a command block
+    commands = "".join("command-%d --with an-option\n" % n for n in range(1, 61))
+    if (yield from show("v-c", "confirm", dict(S["confirm"], commands=commands), "confirm, many commands")):
+        yield from smallest_window()
+        edit = control("the command block", lambda i: True, "QQuickTextEdit")
+        if edit is not None:
+            QMetaObject.invokeMethod(shell, "unfocus")
+            yield P(0.1)
+            hidden = edit.property("cursorVisible")
+            edit.forceActiveFocus(FOCUS_BY_TAB())
+            yield P(0.2)
+            check(hidden is False and edit.property("cursorVisible") is True,
+                  "confirm: the command block shows its cursor while it has the keyboard focus, and only then")
+            area = page_root().property("scrollArea")
+            start, y0, lost = edit.property("cursorPosition"), scroll_y()[0], 0
+            for _ in range(45):
+                key(Down)
+                yield P(0.02)
+                if not scene_rect(area).adjusted(0, -1, 0, 1).contains(edit.mapRectToScene(edit.property("cursorRectangle"))):
+                    lost += 1
+            check(edit.property("cursorPosition") > start and scroll_y()[0] > y0 and lost == 0,
+                  "confirm: Down moves the cursor of the command block and the page scrolls along with it (the cursor was out of view %d of 45 times)" % lost)
+    no_warnings("the whole scenario")
+    send({"quit": True})
+
+
+def luminance(c):
+    def part(v):
+        v /= 255.0
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * part(c[0]) + 0.7152 * part(c[1]) + 0.0722 * part(c[2])
+
+
+def contrast(a, b):
+    """The contrast of two colours (red, green, blue), as WCAG works it out: 1 to 21."""
+    la, lb = luminance(a), luminance(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def colours(img, rect):
+    """The colours of the pixels of RECT in a picture of the window, the most frequent first."""
+    from collections import Counter
+    count = Counter()
+    for y in range(max(0, int(rect.top())), min(img.height(), int(rect.top() + rect.height() + 0.999))):
+        for x in range(max(0, int(rect.left())), min(img.width(), int(rect.left() + rect.width() + 0.999))):
+            p = img.pixel(x, y)
+            count[((p >> 16) & 255, (p >> 8) & 255, p & 255)] += 1
+    return [c for c, n in count.most_common()]
+
+
+def hex_colour(c):
+    return "#%02x%02x%02x" % tuple(c)
+
+
+def ring_contrast(img, ring, deep=0):
+    """How a focus ring that shows stands out, from the pixels along its top
+    edge: (its contrast against the line of pixels outside it, against the
+    line inside it, its colour, the colour outside, the colour inside).
+    DEEP: the line that many pixels further in (past the gap and the frame
+    of a card, on its fill). None when its top edge is not in view."""
+    from PySide6.QtCore import QRectF
+    full, part = scene_rect(ring), shown_rect(ring)
+    line = int(ring.property("line"))
+    bend = float(ring.property("radius") or 0) + 4        # the corners are round
+    if part is None or abs(part.top() - full.top()) >= 1 or full.top() < 1 or full.width() < bend * 2 + 8:
+        return None
+    top, x, w = round(full.top()), full.left() + bend, full.width() - bend * 2
+    own = colours(img, QRectF(x, top, w, line))[0]
+    outside = colours(img, QRectF(x, top - 1, w, 1))[0]
+    inside = colours(img, QRectF(x, top + line + deep, w, 1))[0]
+    return contrast(own, outside), contrast(own, inside), own, outside, inside
+
+
+def sc_contrast():
+    """What must be seen, measured from pictures of the window, in the
+    colours as they come here and, where the Breeze colour schemes are
+    installed, in the light and in the dark theme: a focus ring has 3:1
+    against what is outside it and against what is inside it, the
+    placeholder of the report folder 4.5:1, the tick of a finished step 3:1."""
+    from PySide6.QtCore import QMetaObject
+    from PySide6.QtGui import QIcon
+    S = SAMPLES
+    no_folder = dict(S["wizard"], start_step=2, answers=dict(S["wizard"]["answers"], report_dir=""))
+    state = {"theme": "", "n": 0}
+
+    def ringed(what, item, card=False):
+        """CARD: the ring is around a card (or inside one): it must stand
+        out from the card's fill too, three pixels further in."""
+        if item is None:
+            return check(False, "%s: there is such a control" % what)
+        QMetaObject.invokeMethod(shell, "unfocus")
+        item.forceActiveFocus(FOCUS_BY_TAB())
+        yield P(0.25)
+        img = shell.grabWindow()
+        seen = [ring_contrast(img, r) for r in rings()]
+        if len(seen) != 1 or seen[0] is None:
+            return check(False, "%s, %s: one focus ring shows, and its top edge is in view (%d rings)" % (what, state["theme"], len(seen)))
+        out, ins, own, c_out, c_in = seen[0]
+        fill, c_fill = ring_contrast(img, rings()[0], 3)[1::3] if card else (99, None)
+        return check(out >= 3 and ins >= 3 and fill >= 3,
+                     "%s, %s: the focus ring %s has %.2f:1 against %s outside it and %.2f:1 against %s inside it%s (3:1 needed)"
+                     % (what, state["theme"], hex_colour(own), out, hex_colour(c_out), ins, hex_colour(c_in),
+                        "" if not card else ", and %.2f:1 against the card's %s" % (fill, hex_colour(c_fill))))
+
+    def page(mode, data, what):
+        state["n"] += 1
+        return (yield from show("o%d" % state["n"], mode, data, what))
+
+    for label, theme in (("in the colours as they come", None), ("light theme", "light"), ("dark theme", "dark")):
+        state["theme"] = label
+        if theme is not None:
+            path = appmod._scheme_path(theme)
+            if not path:
+                say("     note: the Breeze colour scheme of the %s theme is not installed here: nothing measured in it" % theme)
+                continue
+            send({"theme": theme})
+            yield W(lambda: (app.property("KDE_COLOR_SCHEME_PATH") or "") == path, "the %s theme is set" % theme)
+            yield P(0.3)
+        if (yield from page("confirm", S["confirm"], "confirm")):
+            yield from ringed("confirm: the main button, on the page", main_button())
+            yield from ringed("confirm: the command block (the ring is inside it)", control("the command block", lambda i: True, "QQuickTextEdit"), True)
+            shot("contrast-%s-confirm" % (theme or "as-it-comes"))
+        if (yield from page("check", S["check"], "check")):
+            boxes = controls("QQuickCheckBox")
+            ticks = [b for b in boxes if not b.property("text")]
+            yield from ringed("check: Select all", next((b for b in boxes if b.property("text")), None))
+            yield from ringed("check: a finding that is not ticked (the ring is around its card)", next((b for b in ticks if not b.property("checked")), None), True)
+            yield from ringed("check: a finding that is ticked", next((b for b in ticks if b.property("checked")), None), True)
+            shot("contrast-%s-check" % (theme or "as-it-comes"))
+        if (yield from page("choose", S["choose"], "choose")):
+            yield from ringed("choose: a row that is ticked", row("tag", "a"), True)
+            yield from ringed("choose: a row that is not ticked", row("tag", "c"), True)
+        if (yield from page("dashboard", S["dashboard"], "dashboard")):
+            chips = [i for i in controls() if i.property("modelData") is not None and i.property("index") is not None and not i.inherits("QQuickItemDelegate")]
+            yield from ringed("dashboard: an area chip", chips[0] if chips else None, True)
+            yield from ringed("dashboard: a check (the ring is inside the row)",
+                              next((i for i in controls("QQuickItemDelegate") if i.property("number") is not None), None))
+        if (yield from page("wizard", dict(S["wizard"], start_step=1), "wizard, Your PC")):
+            cards = [i for i in controls() if i.property("switchedOn") is not None and i.property("checkable")]
+            yield from ringed("wizard: a card that is switched on", next((c for c in cards if c.property("switchedOn")), None), True)
+            yield from ringed("wizard: a card that is switched off", next((c for c in cards if not c.property("switchedOn")), None), True)
+            yield from ringed("wizard: a finished step (the ring is inside it, on the band at the top)",
+                              next((i for i in controls() if i.property("done") is True), None))
+        if (yield from page("settings", S["settings"], "settings")):
+            yield from ringed("settings: the tick box", next(iter(controls("QQuickCheckBox")), None))
+            link = [i for i in items_under(page_root()) if i.metaObject().className().startswith("UrlButton") and i.isVisible()]
+            yield from ringed("settings: the link", link[0] if link else None)
+        if (yield from page("dialog", S["dialog-list"], "a dialog over the page")):
+            yield from ringed("dialog: the main button, on the dialog's card", main_button())
+            key(K().Key_Escape)
+            yield P(0.3)
+
+        # The placeholder of the report folder, and the tick of a finished step.
+        if (yield from page("wizard", no_folder, "wizard, Options without a folder")):
+            field = control("the report folder", lambda i: True, "QQuickTextField")
+            if field is not None:
+                field.forceActiveFocus(FOCUS_BY_TAB())      # into view
+                QMetaObject.invokeMethod(shell, "unfocus")
+                yield P(0.3)
+                img = shell.grabWindow()
+                part = shown_rect(field)
+                seen = colours(img, part.adjusted(6, 4, -6, -4)) if part is not None else []
+                best = max([contrast(c, seen[0]) for c in seen] or [0])
+                check(field.property("text") == "" and "No folder" in (field.property("placeholderText") or "") and best >= 4.5,
+                      "wizard, %s: the placeholder %r has %.2f:1 on the field (4.5:1 needed; text %s on %s)"
+                      % (label, field.property("placeholderText"), best,
+                         hex_colour(max(seen, key=lambda c: contrast(c, seen[0]))) if seen else "?", hex_colour(seen[0]) if seen else "?"))
+            done = [i for i in items_under(page_root()) if i.property("done") is True and i.isVisible()]
+            discs = [i for i in items_under(done[0]) if i.inherits("QQuickRectangle") and i.width() > 8
+                     and abs(i.width() - i.height()) < 0.5 and abs((i.property("radius") or 0) - i.width() / 2) < 0.5] if done else []
+            if check(len(discs) == 1, "wizard, %s: a finished step has a filled circle" % label):
+                img = shell.grabWindow()
+                r = scene_rect(discs[0])
+                k = r.width() * 0.18
+                seen = colours(img, r.adjusted(k, k, -k, -k))
+                icon = [i for i in discs[0].childItems() if i.isVisible() and i.property("source") is not None]
+                tick = icon[0].property("color") if icon else None
+                wanted = contrast((tick.red(), tick.green(), tick.blue()), seen[0]) if tick is not None else 0
+                check(wanted >= 3, "wizard, %s: the colour of a finished step's tick has %.2f:1 on its circle %s (3:1 needed)" % (label, wanted, hex_colour(seen[0])))
+                best = max(contrast(c, seen[0]) for c in seen)
+                if icon and QIcon.hasThemeIcon("dialog-ok-apply"):
+                    check(best >= 3, "wizard, %s: the tick as it is drawn has %.2f:1 on its circle" % (label, best))
+                else:
+                    say("     note: no icon theme here: the tick is not drawn, only its colour was measured")
+            shot("contrast-%s-wizard" % (theme or "as-it-comes"))
+        no_warnings(label)
+    send({"quit": True})
+
+
+def sc_layout(large):
+    """What must fit in the smallest window. LARGE: with a font of 15 pt
+    instead of 9 or 10, as for a person who needs large text (the pages are made
+    after the font is set; the sizes Kirigami gives stay as they are, so
+    what is sized in grid units must follow the text by itself)."""
+    def script():
+        from PySide6.QtGui import QFont
+        S = SAMPLES
+        tag = ", large text" if large else ""
+        long_label = "After-the-fix-and-a-label-that-goes-on-without-a-space-in-it and then some more words"
+        long_intro = " ".join(["Each app keeps working, but may ask for a file or folder when it needs one."] * 12)
+        long_title = " ".join(["Choose the Flatpak permissions to remove"] * 8)
+        long_detail = " ".join(["Looking at the open ports of this PC"] * 8)
+        state = {"n": 0}
+
+        def texts(root):
+            return [i for i in items_under(root) if i.inherits("QQuickText") and i.isVisible() and (i.property("text") or "") != ""]
+
+        def of_class(name, root=None):
+            return [i for i in items_under(root or page_root()) if i.metaObject().className().startswith(name) and i.isVisible()]
+
+        def page(mode, data, what):
+            state["n"] += 1
+            ok = yield from show("l%d" % state["n"], mode, data, what)
+            if ok:
+                yield from smallest_window()
+            return ok
+
+        def footer(what, wanted):
+            """The bar at the bottom: the whole hint can be read, and the buttons are inside the window, next to each other."""
+            bars = of_class("FooterBar")
+            if not check(len(bars) == 1, "%s%s: one bar at the bottom" % (what, tag)):
+                return
+            hints = [t for t in texts(bars[0]) if wanted in t.property("text")]
+            check(len(hints) == 1 and hints[0].property("truncated") is False and top_in_view(hints[0])
+                  and scene_rect(hints[0]).bottom() <= shell.height(),
+                  "%s%s: the hint in the bar at the bottom is there once, and all of it can be read: %s"
+                  % (what, tag, cut([(t.property("text"), t.property("truncated")) for t in hints], 200)))
+            rects = sorted((scene_rect(b).left(), scene_rect(b).right()) for b in controls(root=bars[0]))
+            check(len(rects) >= 2 and rects[0][0] >= 0 and rects[-1][1] <= shell.width()
+                  and all(a[1] <= b[0] + 0.5 for a, b in zip(rects, rects[1:])),
+                  "%s%s: the buttons of the bar are inside the window, next to each other: %s" % (what, tag, [(round(a), round(b)) for a, b in rects]))
+
+        if large:
+            font = QFont(app.font())
+            check(font.pointSizeF() <= 11, "the font as it comes has %.1f pt: 15 pt is large text" % font.pointSizeF())
+            font.setPointSizeF(15)
+            app.setFont(font)
+            yield P(0.3)
+
+        # ---- the dashboard: the score in its ring
+        if (yield from page("dashboard", S["dashboard"], "dashboard")):
+            rings_ = [i for i in items_under(page_root()) if i.inherits("QQuickCanvasItem")]
+            if check(len(rings_) == 1, "dashboard%s: the ring of the score" % tag):
+                box = rings_[0].parentItem()
+                rects = [scene_rect(t) for t in texts(box)]
+                mid, reach = scene_rect(box).center(), box.width() / 2 - rings_[0].property("line")
+                far = max([((x - mid.x()) ** 2 + (y - mid.y()) ** 2) ** 0.5 for r in rects
+                           for x in (r.left(), r.right()) for y in (r.top(), r.bottom())] or [0])
+                check(len(rects) == 2 and rects[0].bottom() <= rects[1].top() + 0.5 and far <= reach + 0.5,
+                      "dashboard%s: the score is above the grade and both are inside the ring (their farthest corner is %d from the middle, the ring's inner edge %d)"
+                      % (tag, far, reach))
+            footer("dashboard", "exact commands")
+            shot("layout-dashboard" + ("-large" if large else ""))
+
+        # ---- the wizard: the numbers of the steps in their circles
+        for step in range(4):
+            if (yield from page("wizard", dict(S["wizard"], start_step=step), "wizard, step %d" % (step + 1))):
+                steps = [i for i in items_under(page_root()) if i.property("number") is not None and i.property("done") is not None and i.isVisible()]
+                bad, numbers = [], 0
+                for b in steps:
+                    for t in [t for t in texts(b) if t.property("text") == str(b.property("number") + 1)]:
+                        numbers += 1
+                        if not scene_rect(t.parentItem()).adjusted(-0.5, -0.5, 0.5, 0.5).contains(scene_rect(t)):
+                            bad.append(t.property("text"))
+                check(len(steps) == 4 and numbers == 4 - step and not bad and scene_rect(steps[-1]).right() <= shell.width(),
+                      "wizard, step %d%s: the numbers of the steps are inside their circles, and the steps inside the window%s"
+                      % (step + 1, tag, "" if not bad else " - not: %s" % bad))
+        no_folder = dict(S["wizard"], answers=dict(S["wizard"]["answers"], report_dir=""))
+        if (yield from page("wizard", no_folder, "wizard without a folder")):
+            footer("wizard without a folder", "report folder first")
+            shot("layout-wizard" + ("-large" if large else ""))
+
+        # ---- the hints of the other pages
+        for mode, wanted in (("check", "exact commands"), ("choose", "Nothing changes yet"), ("confirm", "Nothing changes until")):
+            if (yield from page(mode, S[mode], mode)):
+                footer(mode, wanted)
+                shot("layout-%s%s" % (mode, "-large" if large else ""))
+
+        # ---- a finding: a long label for the setting after the fix, and none
+        data = json.loads(json.dumps(S["check"]))
+        data["findings"][0]["after_label"] = long_label
+        del data["findings"][1]["after_label"]
+        if (yield from page("check", data, "check, a long label")):
+            grids = of_class("NowAfter")
+            if check(len(grids) >= 2, "check%s: a setting now and after the fix, for two findings" % tag):
+                g, ts = grids[0], texts(grids[0])
+                label = [t for t in ts if t.property("text") == long_label]
+                card = g.parentItem()
+                while card is not None and card.property("canFix") is None:
+                    card = card.parentItem()
+                area = page_root().property("scrollArea")
+                check(len(label) == 1 and label[0].property("lineCount") > 1 and label[0].width() <= g.width() * 0.4 + 1
+                      and all(scene_rect(t).right() <= scene_rect(g).right() + 0.5 for t in ts)
+                      and card is not None and scene_rect(g).right() <= scene_rect(card).right()
+                      and area.property("contentWidth") <= area.width() + 0.5,
+                      "check%s: a long label for the setting after the fix wraps in its column (%d of %d wide, %s lines) and the card keeps its width"
+                      % (tag, label[0].width() if label else -1, g.width(), label[0].property("lineCount") if label else "?"))
+                check("After the fix" in [t.property("text") for t in texts(grids[1])],
+                      "check%s: a finding without a label for it says \"After the fix\"" % tag)
+            shot("layout-check-long-label" + ("-large" if large else ""))
+
+        # ---- the band at the top: a long title and a long line under it
+        if (yield from page("choose", dict(S["choose"], title=long_title, intro=long_intro), "choose, long texts")):
+            bands = of_class("PageHeader")
+            title = [t for t in texts(bands[0]) if t.property("text") == long_title] if bands else []
+            intro = [t for t in texts(bands[0]) if t.property("text") == long_intro] if bands else []
+            area = page_root().property("scrollArea")
+            check(len(title) == 1 and len(intro) == 1 and title[0].property("lineCount") <= 3 and intro[0].property("lineCount") <= 4
+                  and intro[0].property("truncated") is True and area.height() >= shell.height() * 0.15,
+                  "choose%s: a long title is cut after three lines and the line under it after four, and the list keeps room (%d of %d high)"
+                  % (tag, area.height(), shell.height()))
+            shot("layout-choose-long" + ("-large" if large else ""))
+        no_warnings("the pages" + tag)
+
+        # ---- the progress window: its Hide button, with a detail of two lines
+        send({"progress": "start", "heading": "Checking your PC"})
+        send({"progress": "set", "line": "40\t0\tFirewall\t" + long_detail})
+        if (yield W(lambda: progress_window() is not None and progress_window().isVisible(), "the progress window shows")):
+            win = progress_window()
+            win.setProperty("canHide", True)        # as when the desktop has a tray
+            yield P(0.5)
+            hide = [i for i in items_under(win.contentItem()) if i.inherits("QQuickAbstractButton") and i.property("text") == "Hide" and i.isVisible()]
+            detail = [t for t in texts(win.contentItem()) if t.property("text") == long_detail]
+            r = scene_rect(hide[0]) if hide else None
+            check(len(hide) == 1 and len(detail) == 1 and detail[0].property("lineCount") == 2 and r.top() >= 0 and r.bottom() <= win.height(),
+                  "progress%s: with a detail of two lines the Hide button is inside the window (it ends at %s of %d)"
+                  % (tag, round(r.bottom()) if r is not None else "?", win.height()))
+            if SHOTS:
+                win.grabWindow().save(os.path.join(SHOTS, "layout-progress%s.png" % ("-large" if large else "")))
+            high = win.height()
+            send({"progress": "set", "line": "60\t0\tAccounts\t"})
+            yield P(0.4)
+            check(win.height() == high and win.property("detail") == "", "progress%s: the window keeps its height when the detail goes (%d, then %d)" % (tag, high, win.height()))
+        send({"busy": ""})
+        yield P(0.3)
+        no_warnings("the progress window" + tag)
+        send({"quit": True})
+    return script
 
 
 # Where the root side builds the input of each page (file, function). The
@@ -2334,7 +3316,16 @@ SCENARIOS = {
     "a11y": (["serve"], lambda: {"busy": ""}, None, sc_a11y, after_serve),
     "guard": (["serve"], lambda: {"busy": ""}, None, sc_guard, after_serve),
     "keys": (["serve"], lambda: {"busy": ""}, STUBS_KEYS, sc_keys, after_serve),
+    "typing": (["serve"], lambda: {"busy": ""}, STUBS_TYPING, sc_typing, after_serve),
     "malformed": (["serve"], lambda: BAD_LINES[0][1], None, sc_malformed, after_serve),
+    # (A line that does not fit in the pipe would block this test for ever: deep_line_fits() then fails instead.)
+    "deep-first": (["serve"], lambda: DEEP_LINE, None, sc_deep_first, after_serve),
+    "first-lines": (["serve"], first_lines({"busy": "Starting…"}, request("f1", "confirm", "confirm"), request("f2", "choose", "choose")),
+                    None, sc_first_lines, after_serve),
+    "first-lines-quit": (["serve"], first_lines({"busy": "Starting…"}, request("x1", "confirm", "confirm"), {"quit": True}),
+                         None, None, after_end("a request and quit, written together with the first line", 1)),
+    "answer-closed": (["serve"], request("x1", "confirm", "confirm"), None, sc_answer_closed, after_answer_closed),
+    "crash": (["serve"], None, None, None, after_crash),
     "broken-page": (["serve"], lambda: {"busy": ""}, STUBS_BROKEN, sc_broken, after_serve),
     "eof": (["serve"], request("x1", "confirm", "confirm"), None, sc_eof, after_end("end of input while a page waits", 1)),
     "eof-idle": (["serve"], None, None, None, after_no_qt("end of input before any request")),
@@ -2354,6 +3345,9 @@ SCENARIOS = {
     "oneshot-list": (["dialog"], lambda: "[1, 2]", None, None,
                      lambda rc: check(rc == 2 and not replies and app is None,
                                       "app.py dialog with input that is JSON but not an object: status %r (2 expected), nothing printed, no window" % (rc,))),
+    "oneshot-deep": (["dialog"], lambda: DEEP_LINE, None, None,
+                     lambda rc: check(deep_line_fits() and rc == 2 and not replies and app is None,
+                                      "app.py dialog with input that is JSON nested too deep: status %r (2 expected), nothing printed, no window" % (rc,))),
     "oneshot-odd": (["wizard"], lambda: {"what": "date"}, STUBS_ODD, sc_oneshot_odd,
                     lambda rc: check(rc == 3 and not replies, "app.py with a page whose answer is not JSON: status %r (3 expected), nothing printed" % (rc,))),
     "serve-edge": (["serve"], lambda: {"busy": ""}, None, sc_serve_edge, after_serve),
@@ -2363,6 +3357,10 @@ SCENARIOS = {
     "odd-answer": (["serve"], lambda: {"busy": ""}, STUBS_ODD, sc_odd_answer, after_serve),
     "parent-gone": (["serve"], request("x1", "confirm", "confirm"), None, sc_parent_gone, after_parent_gone),
     "variants": (["serve"], lambda: {"busy": ""}, None, sc_variants, after_serve),
+    "reveal": (["serve"], lambda: {"busy": ""}, None, sc_reveal, after_serve),
+    "contrast": (["serve"], lambda: {"busy": ""}, None, sc_contrast, after_serve),
+    "layout": (["serve"], lambda: {"busy": ""}, None, sc_layout(False), after_serve),
+    "large-text": (["serve"], lambda: {"busy": ""}, None, sc_layout(True), after_serve),
     "sample-keys": (["serve"], None, None, None, after_sample_keys),
 }
 # What a scenario needs done in its process before main() runs.
@@ -2398,6 +3396,13 @@ def run_scenario(name):
     # held here; its stderr goes to a file that is read for warnings.
     r, req_w = os.pipe()
     rep_r, w = os.pipe()
+    # Room for one very long request line: this process writes it and reads
+    # it, so a write that does not fit in the pipe would block for ever.
+    try:
+        import fcntl
+        fcntl.fcntl(req_w, fcntl.F_SETPIPE_SZ, 1 << 20)
+    except (ImportError, AttributeError, OSError):
+        pass                    # the default size: send() then writes a long line from a thread
     out_fd = os.dup(1)
     err_file = tempfile.TemporaryFile()
     os.dup2(r, 0)

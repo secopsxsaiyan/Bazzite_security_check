@@ -53,13 +53,21 @@ jobs:
     # tests/smoke.sh needs root and creates a test user, so it only runs on
     # a throwaway machine: a hosted runner is one.
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: make test
-        run: make test
+      # Twice, once for each state of SIGPIPE. A runner starts a step with
+      # it ignored, a terminal with the default, and the tool itself is
+      # started both ways (the weekly check's systemd service has it
+      # ignored). A shell cannot change that for itself afterwards, and what
+      # it starts inherits it, so a suite that only ever saw one state says
+      # nothing about the other: "env" sets each one for the whole run.
+      - name: make test (SIGPIPE at its default)
+        run: env --default-signal=PIPE make test
+      - name: make test (SIGPIPE ignored)
+        run: env --ignore-signal=PIPE make test
 
   ui:
     name: UI test

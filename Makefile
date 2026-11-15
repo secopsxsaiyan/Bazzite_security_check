@@ -15,6 +15,12 @@ shellcheck.sarif:
 
 # Simulated Bazzite PC with stubbed tools. Needs root and creates a test
 # user: run it only in a throwaway container or VM.
+#
+# The suite runs with SIGPIPE as it finds it: at its default from a
+# terminal, ignored on a CI runner. The tool is started both ways too (a
+# systemd service has it ignored), and bash cannot change it afterwards, so
+# both must pass. For the state you are not in:
+#   env --ignore-signal=PIPE make test    env --default-signal=PIPE make test
 test:
 	sudo tests/smoke.sh
 

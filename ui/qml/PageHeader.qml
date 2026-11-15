@@ -60,10 +60,18 @@ Rectangle {
                 QQC2.ToolTip.text: Util.tip(header.title)
                 HoverHandler { id: titleHover }
             }
+            // The same for the line under it: four lines, the page
+            // below must keep its room.
             QQC2.Label {
                 visible: header.subtitle !== ""
                 Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                maximumLineCount: 4; elide: Text.ElideRight
                 opacity: Util.dimText; text: header.subtitle
+                Accessible.name: header.subtitle
+                QQC2.ToolTip.visible: truncated && subtitleHover.hovered
+                QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
+                QQC2.ToolTip.text: Util.tip(header.subtitle)
+                HoverHandler { id: subtitleHover }
             }
             RowLayout {
                 id: extraRow

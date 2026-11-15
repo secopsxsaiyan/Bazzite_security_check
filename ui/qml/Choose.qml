@@ -145,6 +145,9 @@ Item {
                             FocusRing { target: row; cornerRadius: parent.radius }
                         }
 
+                        // The card says its label, risk, detail and warning
+                        // as its name and description: the labels in it
+                        // are not said a second time.
                         contentItem: RowLayout {
                             spacing: Kirigami.Units.largeSpacing
                             // Only the tick mark: the card is the control.
@@ -165,6 +168,7 @@ Item {
                                         Layout.fillWidth: true; wrapMode: Text.Wrap
                                         textFormat: Text.PlainText; font.weight: Font.DemiBold
                                         text: row.modelData.label
+                                        Accessible.ignored: true
                                     }
                                     StatusChip {
                                         visible: !!row.modelData.risk
@@ -177,6 +181,7 @@ Item {
                                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
                                     visible: text !== ""; opacity: Util.dimText
                                     text: row.modelData.detail || ""
+                                    Accessible.ignored: true
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true
@@ -194,6 +199,7 @@ Item {
                                     QQC2.Label {
                                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
                                         text: row.modelData.warn || ""
+                                        Accessible.ignored: true
                                     }
                                 }
                             }

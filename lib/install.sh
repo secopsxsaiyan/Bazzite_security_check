@@ -190,7 +190,7 @@ easy to run regularly.
 This copies the tool to ${INSTALL_DIR} (owned by root, so nothing
 running as you can change what later runs as administrator) and adds
 ${APP_DESKTOP} and ${APP_BIN}.
-Remove it any time with --uninstall." "${verb}" "Cancel" "y" || return 0
+Remove it any time with --uninstall." "${verb}" "Cancel" "y" careful || return 0
 
     _install_app_files "$SCRIPT_DIR" || return 1
     local extra=""
@@ -210,7 +210,7 @@ uninstall_app() {
     ui_yesno "Remove the Security Check app (menu entry and the bazzite-sec-audit command)?
 
 Reports, history and undo steps are kept.$(_timer_installed && printf '\nThe weekly check stays set up (remove it with --remove-timer).')" \
-        "Remove" "Cancel" "y" || return 0
+        "Remove" "Cancel" "y" careful || return 0
     rm -f -- "$APP_DESKTOP" "$APP_ICON_DIR/${APP_ID}.svg" "$APP_ICON_DIR/${APP_ID}-symbolic.svg" "$APP_ICON_22/${APP_ID}-symbolic.svg"
     [[ -L "$APP_BIN" ]] && rm -f -- "$APP_BIN"
     _remove_copy
@@ -228,7 +228,7 @@ saves the report in your report folder and shows a notification when it
 finds something new.
 
 This copies the tool to ${INSTALL_DIR} and adds
-/etc/systemd/system/${UNIT_NAME}.service and .timer." "Set it up" "Cancel" "y" || return 0
+/etc/systemd/system/${UNIT_NAME}.service and .timer." "Set it up" "Cancel" "y" careful || return 0
 
     _install_copy || return 1
 
@@ -271,7 +271,7 @@ remove_timer() {
         return 0
     fi
     ui_yesno "Remove the weekly security check (timer and service)?$(_app_installed || printf ' The copy in %s goes too.' "$INSTALL_DIR")" \
-        "Remove" "Cancel" "y" || return 0
+        "Remove" "Cancel" "y" careful || return 0
     systemctl disable --now "${UNIT_NAME}.timer" >/dev/null 2>&1 || true
     rm -f "/etc/systemd/system/${UNIT_NAME}.service" "/etc/systemd/system/${UNIT_NAME}.timer"
     systemctl daemon-reload

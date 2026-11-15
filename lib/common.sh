@@ -451,12 +451,25 @@ _user_env() {
 # be able to type into the administrator's terminal (TIOCSTI).
 _no_tty() {
     (
-        # CMD (a fix, a program of another account) must not keep the
-        # window's two pipes: the window would never see this tool end.
-        if [[ -n "${_UI_FRONT_W:-}" ]]; then exec {_UI_FRONT_W}>&- {_UI_FRONT_R}<&-; fi
-        _run_lock_close
+        _private_fds_close
         if _have setsid; then setsid --wait "$@"; else "$@"; fi
     )
+}
+
+# _private_fds_close — close what a program started from here must not
+# get, in the subshell that is about to become it: the window's two pipes
+# (a fix or a program of another account that kept them, or left something
+# behind that does, would keep the window from seeing this tool end, and
+# could answer in the window's place) and the run's lock.
+#
+# This is for fixes and for programs of another account. The tool's other
+# children (grep, find, systemctl and the like, run as root in the checks)
+# do inherit the three: they are root's own programs, they end before the
+# check that started them does, and bash has no way to mark a descriptor
+# "not for the programs I start" other than closing it for each of them.
+_private_fds_close() {
+    if [[ -n "${_UI_FRONT_W:-}" ]]; then exec {_UI_FRONT_W}>&- {_UI_FRONT_R}<&-; fi
+    _run_lock_close
 }
 
 # _run_lock_close — close this shell's copy of the run's lock (see
@@ -482,8 +495,7 @@ _as_user() {
         # No runuser needed, but CMD gets as little as through _no_tty:
         # neither the window's two pipes nor the run's lock.
         (
-            if [[ -n "${_UI_FRONT_W:-}" ]]; then exec {_UI_FRONT_W}>&- {_UI_FRONT_R}<&-; fi
-            _run_lock_close
+            _private_fds_close
             exec env -i "${_UENV[@]}" "$@"
         )
     else

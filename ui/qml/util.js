@@ -68,14 +68,16 @@ function reflow(s) {
 }
 
 // Scroll FLICKABLE so that ITEM (somewhere inside it) is in view, with GAP
-// around it. Used when an item gets the keyboard focus.
+// around it. Used when an item gets the keyboard focus. An item that is
+// taller than the room there is shows its top: that is where a card has
+// its tick box and its title, and where a text starts.
 function reveal(flickable, item, gap) {
     if (!flickable || !item)
         return
     var g = gap || 0
     var top = item.mapToItem(flickable.contentItem, 0, 0).y
     var last = Math.max(0, flickable.contentHeight - flickable.height)
-    if (top - g < flickable.contentY)
+    if (top - g < flickable.contentY || item.height + g * 2 > flickable.height)
         flickable.contentY = Math.max(0, Math.min(last, top - g))
     else if (top + item.height + g > flickable.contentY + flickable.height)
         flickable.contentY = Math.max(0, Math.min(last, top + item.height + g - flickable.height))

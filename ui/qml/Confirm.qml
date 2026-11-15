@@ -85,7 +85,7 @@ Item {
                 Notice {
                     kind: page.d.undo === true ? "positive" : "error"
                     title: page.d.undo === true ? qsTr("Can be undone") : qsTr("No automatic undo.")
-                    text: page.d.undo === true ? qsTr("later: dashboard → Undo, or run the tool with --undo.") : ""
+                    text: page.d.undo === true ? qsTr("later: “Undo changes…” on the Check-up result page, or run the tool with --undo.") : ""
                 }
 
                 QQC2.Label {

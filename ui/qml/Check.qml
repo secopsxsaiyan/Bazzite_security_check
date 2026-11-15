@@ -221,7 +221,7 @@ Item {
                                 NowAfter {
                                     now: card.f.now || ""
                                     after: card.f.after || ""
-                                    afterLabel: card.f.after_label || qsTr("After")
+                                    afterLabel: card.f.after_label || ""
                                 }
 
                                 // ---- description: the first lines, the rest on request
