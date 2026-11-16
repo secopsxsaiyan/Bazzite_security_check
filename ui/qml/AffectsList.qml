@@ -44,11 +44,13 @@ Section {
                         wrapMode: Text.Wrap
                         textFormat: Text.PlainText; font.weight: Font.DemiBold
                         text: row.modelData.name
+                        Accessible.ignored: true    // the row's name says all of it
                     }
                     StatusChip {
                         Layout.alignment: Qt.AlignTop
                         Layout.maximumWidth: Kirigami.Units.gridUnit * 12
                         text: row.modelData.how
+                        Accessible.ignored: true
                         tint: row.inUse ? Kirigami.Theme.negativeTextColor
                             : row.modelData.mark === "+" ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
                     }
@@ -57,10 +59,12 @@ Section {
                 QQC2.Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
                     opacity: Util.dimLabel; text: row.modelData.where
+                    Accessible.ignored: true
                 }
                 QQC2.Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
                     opacity: Util.dimSentence; text: row.modelData.sentence
+                    Accessible.ignored: true
                 }
             }
         }

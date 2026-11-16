@@ -1254,7 +1254,7 @@ def said_twice(root=None):
     own, which a screen reader would say after theirs: (the name, the name
     inside it) of each."""
     from PySide6.QtGui import QAccessible
-    whole = ("Button", "CheckBox", "RadioButton", "StaticText")
+    whole = ("Button", "CheckBox", "RadioButton", "StaticText", "ListItem")
     out = []
 
     def walk(obj, depth, above):

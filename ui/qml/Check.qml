@@ -101,7 +101,7 @@ Item {
                                 Accessible.role: Accessible.ListItem
                                 Accessible.name: String(modelData)
                                 QQC2.Label { text: "•"; opacity: Util.dimLabel; Layout.alignment: Qt.AlignTop; Accessible.ignored: true }
-                                QQC2.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: String(parent.modelData) }
+                                QQC2.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: String(parent.modelData); Accessible.ignored: true }
                             }
                         }
                     }
