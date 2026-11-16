@@ -485,6 +485,18 @@ def main_button():
     return control("the main button", is_main)
 
 
+def alt_keys():
+    """The Alt key of every button of the page that has one: label -> letter."""
+    from PySide6.QtQml import QQmlExpression, qmlContext
+    keys = {}
+    for b in controls():
+        got_ = QQmlExpression(qmlContext(b), b, "Kirigami.MnemonicData.sequence.toString()").evaluate()
+        seq = got_[0] if isinstance(got_, tuple) else got_
+        if b.property("text") and seq:
+            keys[b.property("text")] = str(seq).replace("Alt+", "")
+    return keys
+
+
 def row(field, value):
     """The row (card, list entry) that shows the input's item whose FIELD is VALUE."""
     def test(i):
@@ -1692,6 +1704,35 @@ def sc_guard():
         no_answer("g8", "Alt and a letter held down (repeating) does not answer a page")
         yield from settled("after the held Alt+letter")
         yield from one_letter("g8", "Alt+letter let go and pressed again")
+    # A button has the same Alt key on every page, also on a page that
+    # follows one with the same buttons (the old page is still there, and
+    # holds its letters, when the new one is made). And the main button,
+    # which draws its own label, shows its key on a page that appears while
+    # Alt is held, as the other buttons do.
+    if (yield from show("g9", "confirm", data, "Alt keys, first page")):
+        first = alt_keys()
+        check(len(first) >= 3 and len(set(first.values())) == len(first) and all(t in first for t in ("Stop reviewing", "Skip", "Apply")),
+              "every button of the page has an Alt key of its own: %r" % first)
+        c = first.get("Skip", "S")
+        k = getattr(K(), "Key_" + c)
+        typed(K().Key_Alt, alt, release=False)
+        typed(k, alt, c.lower(), release=False)
+        yield from answered("g9", "Alt+%s, the Skip button" % c)
+        ask("g10", "confirm", data)
+        if (yield W(lambda: prop("pendingId") == "g10", "Alt keys, the page after: shown")):
+            yield from held(k, c.lower(), 0.5, mod=alt)
+            apply_ = main_button()
+            check(apply_ is not None and apply_.property("showsKey") is True,
+                  "the main button of a page that appears while Alt is held shows its Alt key")
+            check(alt_keys().get("Apply") == first.get("Apply"), "and it is the key it had on the page before: %r, before %r" % (alt_keys(), first))
+            typed(k, alt, c.lower(), press=False)
+            typed(K().Key_Alt, press=False)
+            check(apply_ is not None and apply_.property("showsKey") is False, "and no longer when Alt is let go")
+            yield from settled("Alt keys, the page after")
+            check(alt_keys() == first, "a page that follows one with the same buttons has the same Alt keys: %r, before %r" % (alt_keys(), first))
+            no_answer("g10", "the key held since the page before did not answer it")
+            key(Escape)
+            yield from answered("g10", "Alt keys, the page after: Esc")
 
     # 3. Auto-repeat alone, handed to the window by a program (the press
     # itself was never seen here).
