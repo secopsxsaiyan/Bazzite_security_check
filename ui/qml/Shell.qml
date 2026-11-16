@@ -52,8 +52,10 @@ Kirigami.ApplicationWindow {
     property bool resumeRing: false     // ... with a focus ring
 
     readonly property Item current: dialogItem || pageItem
-    readonly property real compactWidth: pageItem ? pageItem.implicitWidth : Kirigami.Units.gridUnit * 22
-    readonly property real compactHeight: pageItem ? pageItem.implicitHeight : Kirigami.Units.gridUnit * 8
+    // Only a dialog has a size of its own. A width or height of 0 must never
+    // reach the window: a Wayland compositor ends a program that asks for it.
+    readonly property real compactWidth: pageItem && pageIsDialog && pageItem.implicitWidth > 0 ? pageItem.implicitWidth : Kirigami.Units.gridUnit * 22
+    readonly property real compactHeight: pageItem && pageIsDialog && pageItem.implicitHeight > 0 ? pageItem.implicitHeight : Kirigami.Units.gridUnit * 8
     // More than any screen: no upper limit.
     readonly property int unlimited: 16777215
 
@@ -184,13 +186,15 @@ Kirigami.ApplicationWindow {
             var old = pageSlot
             var resized = compact
             if (dialogSlot) { dialogSlot.destroy(); dialogSlot = null; dialogItem = null }
-            pageSlot = slot
-            pageItem = item
+            // In this order: the size limits are lifted before the window
+            // learns of a page that has no size of its own.
             pageIsDialog = isDialog
             if (!isDialog && compact) {
-                compact = false     // lifts the size limits first
+                compact = false
                 fit()
             }
+            pageSlot = slot
+            pageItem = item
             if (old) {
                 // The new page fades in over the old one, which then goes.
                 // No fade when the window changes its size with the page.

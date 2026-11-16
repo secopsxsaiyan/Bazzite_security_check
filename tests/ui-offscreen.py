@@ -717,6 +717,13 @@ def sc_shell():
     ok = yield W(lambda: got("d1") or (prop("pendingId") == "d1" and shell.isVisible()), "dialog first: shown")
     yield from settled("dialog first")
     small = (shell.width(), shell.height())
+    # Every size the window takes from here on (a Wayland compositor ends a
+    # program whose window asks for a width or height of 0).
+    # Off-screen the size itself is not seen to change, but the limits the
+    # window is given are, and they come from the same values.
+    sizes = [small]
+    shell.minimumWidthChanged.connect(lambda *a: sizes.append((shell.minimumWidth(), shell.minimumHeight())))
+    shell.minimumHeightChanged.connect(lambda *a: sizes.append((shell.minimumWidth(), shell.minimumHeight())))
     check(prop("compact") is True and prop("dialogItem") is None, "dialog first: a small window of its own (%dx%d)" % small)
     check(shell.title() == S["dialog"]["title"], "dialog first: window title %r" % shell.title())
     shot("shell-dialog-first")
@@ -743,6 +750,8 @@ def sc_shell():
         big = (shell.width(), shell.height())
         check(prop("compact") is False and big[0] > small[0] and big[1] > small[1], "first page: the window grew to %dx%d" % big)
         check(prop("busyShown") is False, "first page: no longer busy")
+        empty = [x for x in sizes if x[0] <= 0 or x[1] <= 0]
+        check(not empty, "from the small window to the first page: the window was never told to have no width or height: %s" % empty[:3])
         # A label while a page waits for its answer is dropped.
         send({"busy": "Later"})
         yield P(0.3)
@@ -3540,7 +3549,9 @@ def main():
         f.write("[Colors:Window]\nBackgroundNormal=abc\n")
     env = dict(os.environ)
     env.update({
-        "QT_QPA_PLATFORM": "offscreen",
+        # BSA_UI_TEST_PLATFORM=wayland (or xcb) runs the same scenarios in
+        # real windows of the session, for a look at them on a real desktop.
+        "QT_QPA_PLATFORM": os.environ.get("BSA_UI_TEST_PLATFORM", "offscreen"),
         "QT_FORCE_STDERR_LOGGING": "1",
         # Qt's messages as they are, whatever the person has set.
         "QT_MESSAGE_PATTERN": "%{if-category}%{category}: %{endif}%{message}",
