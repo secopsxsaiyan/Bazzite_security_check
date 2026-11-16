@@ -1,23 +1,30 @@
-// Security Check - progress while checks (or a fix) run. The root side
-// sends progress lines; ui/app.py sets these properties. Closing the
-// window never stops the work: it hides the window when a tray icon can
-// bring it back (the icon keeps the progress), else minimises it.
+// Security Check - progress while the checks run: the one window besides
+// the main one (Shell.qml), which is hidden meanwhile. The root side sends
+// progress lines; ui/app.py sets these properties. Closing the window never
+// stops the work: it hides the window when a tray icon can bring it back
+// (the icon keeps the progress), else minimises it.
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
 Kirigami.ApplicationWindow {
     id: root
-    title: "Security Check"
+    title: qsTr("Security Check")
+    // As high as its content needs (the detail line always has the room of
+    // two lines, so the window does not grow and shrink with it), and no
+    // lower: the Hide button is never cut off.
+    readonly property real contentHeight: Math.ceil(body.implicitHeight) + Kirigami.Units.gridUnit * 2
     width: Kirigami.Units.gridUnit * 30
-    height: Kirigami.Units.gridUnit * 10
+    height: Math.max(Kirigami.Units.gridUnit * 10, contentHeight)
     minimumWidth: Kirigami.Units.gridUnit * 24
-    minimumHeight: Kirigami.Units.gridUnit * 9
+    minimumHeight: Math.max(Kirigami.Units.gridUnit * 9, contentHeight)
     pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
 
-    property string heading: (bridge.input && bridge.input.heading) || "Checking your PC"
-    property string label: "Starting…"
+    property string iconSource: ""     // file URL of the app icon
+    property string heading: qsTr("Checking your PC")
+    property string label: qsTr("Starting…")
     property string detail: ""
     property int percent: -1          // -1: no steps (a fix being applied)
     property bool slow: false          // a long step (malware scan): spinner
@@ -32,26 +39,35 @@ Kirigami.ApplicationWindow {
         titleDelegate: Item {}
 
         ColumnLayout {
+            id: body
             anchors.fill: parent
             spacing: Kirigami.Units.largeSpacing
 
             RowLayout {
                 spacing: Kirigami.Units.largeSpacing
                 Kirigami.Icon {
-                    source: bridge.iconSource
+                    source: root.iconSource
                     implicitWidth: Kirigami.Units.iconSizes.huge
                     implicitHeight: implicitWidth
+                    Accessible.ignored: true      // decoration; the heading says it
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: Kirigami.Units.smallSpacing
-                    Kirigami.Heading { text: root.heading; level: 2; textFormat: Text.PlainText }
+                    Kirigami.Heading {
+                        Layout.fillWidth: true
+                        text: root.heading
+                        level: 2
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                    }
                     RowLayout {
                         QQC2.BusyIndicator {
                             visible: root.slow || root.percent < 0
                             running: visible
                             implicitWidth: Kirigami.Units.iconSizes.smallMedium
                             implicitHeight: implicitWidth
+                            Accessible.name: qsTr("Working")
                         }
                         QQC2.Label {
                             Layout.fillWidth: true
@@ -62,12 +78,18 @@ Kirigami.ApplicationWindow {
                         }
                     }
                     QQC2.Label {
+                        id: detailLabel
                         Layout.fillWidth: true
-                        visible: root.detail !== ""
                         text: root.detail
                         textFormat: Text.PlainText
-                        wrapMode: Text.Wrap
-                        opacity: 0.75
+                        // It comes from a check: two lines of it at most,
+                        // and the room of two lines is always there.
+                        wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
+                        Layout.preferredHeight: twoLines.implicitHeight
+                        verticalAlignment: Text.AlignTop
+                        opacity: Util.dimLabel
+                        // Never shown: how high two lines of it are.
+                        QQC2.Label { id: twoLines; visible: false; font: detailLabel.font; text: "1\n2"; textFormat: Text.PlainText }
                     }
                 }
             }
@@ -81,12 +103,14 @@ Kirigami.ApplicationWindow {
                     from: 0; to: 100
                     value: Math.max(0, root.percent)
                     indeterminate: root.percent < 0
+                    Accessible.name: root.percent >= 0 ? qsTr("Progress: %1%").arg(root.percent) : qsTr("Working")
+                    Accessible.description: root.label
                     // A solid accent fill, so 40% and 90% are easy to tell
                     // apart in the light theme too.
                     background: Rectangle {
                         implicitHeight: Kirigami.Units.gridUnit * 0.6
                         radius: height / 2
-                        color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.15)
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
                     }
                     contentItem: Item {
                         implicitHeight: Kirigami.Units.gridUnit * 0.6
@@ -98,20 +122,26 @@ Kirigami.ApplicationWindow {
                         }
                         Rectangle {
                             visible: bar.indeterminate
-                            width: parent.width * 0.3; height: parent.height
+                            id: sweep
+                            width: parent.width * share; height: parent.height
                             radius: height / 2
                             color: Kirigami.Theme.linkColor
+                            // One pass of the bar from side to side, in ms.
+                            readonly property int sweepTime: 900
+                            // How much of the track the moving bar covers.
+                            readonly property real share: 0.3
                             SequentialAnimation on x {
                                 running: bar.indeterminate; loops: Animation.Infinite
-                                NumberAnimation { from: 0; to: bar.width * 0.7; duration: 900; easing.type: Easing.InOutQuad }
-                                NumberAnimation { from: bar.width * 0.7; to: 0; duration: 900; easing.type: Easing.InOutQuad }
+                                NumberAnimation { from: 0; to: bar.width * (1 - sweep.share); duration: sweep.sweepTime; easing.type: Easing.InOutQuad }
+                                NumberAnimation { from: bar.width * (1 - sweep.share); to: 0; duration: sweep.sweepTime; easing.type: Easing.InOutQuad }
                             }
                         }
                     }
                 }
                 QQC2.Label {
                     visible: root.percent >= 0
-                    text: root.percent + "%"
+                    text: qsTr("%1%").arg(root.percent)
+                    Accessible.ignored: true      // the bar already says it
                     font.bold: true
                     Layout.minimumWidth: Kirigami.Units.gridUnit * 2.5
                     horizontalAlignment: Text.AlignRight
@@ -124,17 +154,19 @@ Kirigami.ApplicationWindow {
                 Layout.fillWidth: true
                 QQC2.Label {
                     Layout.fillWidth: true
-                    text: root.percent >= 0 ? "Nothing on this PC is changed while it checks." : ""
-                    opacity: 0.7
+                    text: root.percent >= 0 ? qsTr("Nothing on this PC is changed while it checks.") : ""
+                    opacity: Util.dimQuiet
                     wrapMode: Text.Wrap
                 }
                 QQC2.Button {
                     visible: root.canHide
-                    text: "Hide"
+                    text: qsTr("Hide")
                     icon.name: "window-minimize"
                     onClicked: root.hide()
-                    QQC2.ToolTip.text: "Keep working; the progress stays in the system tray."
+                    QQC2.ToolTip.text: qsTr("Keep working; the progress stays in the system tray.")
+                    Accessible.description: QQC2.ToolTip.text
                     QQC2.ToolTip.visible: hovered
+                    QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
                 }
             }
         }

@@ -79,7 +79,7 @@ run_settings() {
     fi
     UI_THEME="$theme"; UPDATE_CHECK="$check"
     save_settings
-    ui_theme_prepare
+    ui_theme_changed
     log "settings: theme=${UI_THEME} update_check=${UPDATE_CHECK}"
     [[ "$action" == update ]] && { update_run; [[ $? -eq 10 ]] && exit 0; }
     return 0

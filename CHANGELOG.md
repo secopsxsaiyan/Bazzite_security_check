@@ -6,11 +6,113 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- An off-screen test of the real windows, `make test-ui`
+  (`tests/ui-offscreen.py`): it shows every page in the real front end,
+  answers it with the keyboard and the mouse, through every button, row and
+  tick box, and checks each answer line; a QML warning fails it. CI runs it
+  as the new "UI test" job, in a Fedora container.
+- `docs/ui.md` describes the front end for developers: the protocol between
+  the root side and the window, what a page is, and how to add one.
+
 ### Changed
 
+- Security Check now has one window for the whole run. The setup wizard, the
+  dashboard, a check's page, the lists of fixes, the "Apply this fix?" page
+  and Settings are pages of that window, and questions, messages and errors
+  appear over the current page. Before, every page was a new window and the
+  app went away between them. While the tool works between two pages (a fix
+  being applied, a download) the last page stays, dimmed, with a spinner and
+  what is being done. Only the scan's progress bar is still a small window of
+  its own, with its tray icon.
+- Every page was reworked to one layout: a header, the content, and a bar at
+  the bottom with one main button that stands out. Every control can be
+  reached with the keyboard and has a name for screen readers. The wizard
+  has four steps (the report folder moved into Options), the check and
+  "Apply this fix?" pages show what a fix affects in the same way, and texts
+  are marked for translation (no translations ship yet).
+- A question or message that comes before any page (for example from
+  "Install", "Uninstall" or "Update" in the menu) shows as a small window of
+  its own size, which grows into the main window when the first page comes.
+- Closing the window answers the current page as "cancelled", as before. It
+  never stops a fix that is being applied.
+- Enter does the page's main action and Esc goes back or cancels on every
+  page, except that Esc does nothing on the result page (going back from a
+  check must not end the run) and that Enter alone never applies a fix (see
+  below). Enter in a text field stays with that field,
+  and Enter on a focused button presses that button. In a list of fixes
+  and on the wizard's option cards, Space ticks the row or card and Enter
+  goes on.
+- A key or click meant for one page cannot answer the next. A page that has
+  just appeared ignores keys, the buttons' Alt+letter shortcuts and clicks
+  for a moment, and a key or mouse button that is still held down from the
+  page before cannot answer it however long it is held: the page takes
+  input once everything has been let go. A held-down key counts once, on
+  the page it was pressed on.
+- PageUp, PageDown, Home, End and the arrow keys scroll every page and
+  dialog, so text that does not fit can be read without a mouse.
+- The "Apply this fix?" page starts with the keyboard focus on no button,
+  and Enter applies the fix only while the Apply button itself has the
+  keyboard focus. A fix is applied by a click on Apply, by Alt+A, or by
+  Enter or Space after moving to the button (Shift+Tab goes straight to
+  it): an Enter or Space meant for the page before cannot apply a fix. Esc
+  cancels as on every page.
+- Easier to read and to use without a mouse. Coloured text (severity and
+  risk labels, counts, the score, warnings, the value after a fix) is now
+  dark enough to read in the light theme and the dark one; the colour stays
+  in the fill, the frame and the icon. Tick boxes and the link in Settings
+  show a ring when they have the keyboard focus. On the result page the
+  area chips and the list of checks are one Tab stop each, and the arrow
+  keys move inside them. The main button underlines its Alt key while Alt
+  is held. Screen readers get the messages in boxes and the text of a
+  dialog as plain text. A dialog whose buttons do not fit next to each
+  other stacks them. The control with the keyboard focus is always in view:
+  a finding that is taller than the window shows its tick box and title,
+  not its end. The focus ring, the placeholder of the report folder and the
+  tick of a finished step are dark enough in the light theme. A card, row or
+  button is read out once, not a second time label by label. Home and End
+  work in a dialog's list, and a block of commands shows its cursor.
+- Pages hold up with a larger font: the score ring and the step numbers grow
+  with the text, a hint that has no room next to the buttons goes above
+  them, and the progress window is high enough for its Hide button.
+- Changing the theme in Settings switches the open window at once.
 - CI uploads ShellCheck and Scorecard results to code scanning on pull
   requests, so the `Protect main` ruleset can pass without an administrator
   bypass. The ruleset and its thresholds are unchanged.
+
+### Security
+
+- Programs the tool starts as the desktop user (the windows, kdialog, the
+  browser for the report) and the fixes it runs no longer get a copy of the
+  run's lock. Such a program could release the lock while the run was going
+  on, or keep it after the run, so that the next one stopped with "Another
+  security check is already running".
+- The run log is never handed to a program of another account. What the
+  window and an undo step print is copied into the log by the tool itself,
+  cut to size: at most 256 KiB from the window, and the end of an undo
+  step's output (where the reason for a failure is) rather than all of it.
+- When the tool closes its window it signals only processes it has checked
+  to be the ones it started (by process id and start time), and the window's
+  own processes are signalled as the desktop user, not as root. A process
+  that merely got the same id later cannot be hit.
+- The tool no longer waits for ever on a window that has gone: one that
+  ended while a program it started still held one of its pipes or kept
+  writing. It carries on with KDE dialogs. When the tool ends, also after
+  Ctrl-C pressed twice, a window that hangs or is stopped does not hold it
+  up: it always removes its private folder and gives up its lock.
+- A stray Enter or Space can no longer start a change in a question window.
+  Where "Yes" changes the PC there and then (applying a fix in the plain
+  dialog, each undo step, "Undo anyway", rolling back a failed fix, install,
+  remove, update), no button or the "No" button is the one Enter presses,
+  and the kdialog version is the warning dialog, whose default is "No".
+- What a fix prints is copied into the run log like an undo step's output:
+  only the end of it, cut to size and marked `fix:`. What kdialog or a
+  one-page window prints is read only up to the size of an answer.
+- Started with SIGPIPE ignored (the weekly check's systemd service does
+  that), the tool starts itself again with the signal at its default.
+  Before, `find | head` in the deep checks went on through every folder in
+  that case, up to its time limit. CI runs the smoke test in both states.
 
 ## [1.5.0] - 2026-11-14
 

@@ -91,7 +91,7 @@ update_run() {
 
 Update now? It is downloaded from GitHub (${APP_REPO}), its signature and
 checksums are verified, and it is installed as the app in ${INSTALL_DIR}.
-The new version is used the next time you start Security Check." "Update" "Not now" "y" || return 0
+The new version is used the next time you start Security Check." "Update" "Not now" "y" careful || return 0
     d=$(mktemp -d "${RUN_TMP:-/tmp}/update.XXXXXX") || { ui_error "Could not create a private folder for the download."; return 1; }
     ui_busy_start "Downloading Security Check ${latest}…"
     for f in "bazzite-sec-audit-${latest}.tar.gz" SHA256SUMS SHA256SUMS.sig; do

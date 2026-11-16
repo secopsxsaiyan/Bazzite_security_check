@@ -1,0 +1,47 @@
+// Security Check - a small rounded label. Set "sev" for the severity of a
+// finding or "risk" for the risk of changing an item (text and colour
+// follow), or set text and tint yourself. The tint is the colour of the
+// fill and the frame only: the words are in the text colour, because the
+// state colours are too pale to read as small text (in the light theme
+// most of all), and the words say what the colour says.
+import QtQuick
+import QtQuick.Controls as QQC2
+import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
+import "util.js" as Util
+
+Rectangle {
+    id: chip
+    property string sev: ""            // high | medium | low | info
+    property string risk: ""           // high | medium | low
+    property string text: sev !== "" ? Util.sevName(sev) : Util.riskText(risk)
+    property color tint: sev !== "" ? Util.sevColor(Kirigami.Theme, sev) : Util.riskColor(Kirigami.Theme, risk)
+    // Frame only, no fill: a count of none, which needs no attention.
+    property bool quiet: false
+    // How strong the fill and the outline are, as a share of the tint.
+    readonly property real fillStrength: 0.2
+    readonly property real edgeStrength: 0.7
+    readonly property real quietEdgeStrength: 0.45
+
+    radius: height / 2
+    implicitHeight: row.implicitHeight + Kirigami.Units.smallSpacing
+    implicitWidth: row.implicitWidth + Kirigami.Units.largeSpacing * 2
+    color: quiet ? "transparent" : Qt.alpha(tint, fillStrength)
+    border.color: Qt.alpha(tint, quiet ? quietEdgeStrength : edgeStrength)
+    Accessible.role: Accessible.StaticText
+    Accessible.name: text
+
+    RowLayout {
+        id: row
+        anchors.centerIn: parent
+        // A chip made narrower than its text (Layout.maximumWidth) cuts it.
+        width: Math.min(implicitWidth, chip.width - Kirigami.Units.largeSpacing * 2)
+        // The text may come from the PC: never markup.
+        QQC2.Label {
+            Layout.fillWidth: true; elide: Text.ElideRight
+            text: chip.text; textFormat: Text.PlainText
+            font: Kirigami.Theme.smallFont; color: Kirigami.Theme.textColor
+            Accessible.ignored: true
+        }
+    }
+}

@@ -33,6 +33,33 @@ log() {
     printf '%s %s\n' "$(date '+%H:%M:%S')" "$1" >> "$RUN_LOG" 2>/dev/null || true
 }
 
+# _log_foreign PREFIX TEXT — append what a program of another account wrote
+# (the window's stderr, the output of an undo step that runs as the user)
+# to the run log. Such a program never gets the log file itself: it could
+# cut it, fill the disk, or add lines that look like this tool's own. Every
+# line is cut to _LOG_FOREIGN_LINE bytes and starts with the time and
+# PREFIX; control characters are removed and bytes outside ASCII become
+# "?"; at most _LOG_FOREIGN_LINES lines of TEXT are taken.
+_LOG_FOREIGN_LINE=2000
+_LOG_FOREIGN_LINES=200
+_log_foreign() {
+    [[ -n "${RUN_LOG:-}" && -n "$2" ]] || return 0
+    local LC_ALL=C line n=0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if (( ++n > _LOG_FOREIGN_LINES )); then
+            printf '%(%H:%M:%S)T %s(more lines were dropped)\n' -1 "$1" >> "$RUN_LOG" 2>/dev/null || true
+            break
+        fi
+        line=${line:0:_LOG_FOREIGN_LINE}
+        line=${line//$'\t'/ }
+        line=${line//[[:cntrl:]]/}
+        line=${line//[^ -~]/?}
+        [[ -n "$line" ]] || continue
+        printf '%(%H:%M:%S)T %s%s\n' -1 "$1" "$line" >> "$RUN_LOG" 2>/dev/null || true
+    done <<< "$2"
+    return 0
+}
+
 # ====================== ESCAPING ======================
 # _json_str TEXT — TEXT as a JSON string literal (with quotes).
 _json_str() {
@@ -423,7 +450,39 @@ _user_env() {
 # its controlling terminal: a program running as another account must not
 # be able to type into the administrator's terminal (TIOCSTI).
 _no_tty() {
-    if _have setsid; then setsid --wait "$@"; else "$@"; fi
+    (
+        _private_fds_close
+        if _have setsid; then setsid --wait "$@"; else "$@"; fi
+    )
+}
+
+# _private_fds_close — close what a program started from here must not
+# get, in the subshell that is about to become it: the window's two pipes
+# (a fix or a program of another account that kept them, or left something
+# behind that does, would keep the window from seeing this tool end, and
+# could answer in the window's place) and the run's lock.
+#
+# This is for fixes and for programs of another account. The tool's other
+# children (grep, find, systemctl and the like, run as root in the checks)
+# do inherit the three: they are root's own programs, they end before the
+# check that started them does, and bash has no way to mark a descriptor
+# "not for the programs I start" other than closing it for each of them.
+_private_fds_close() {
+    if [[ -n "${_UI_FRONT_W:-}" ]]; then exec {_UI_FRONT_W}>&- {_UI_FRONT_R}<&-; fi
+    _run_lock_close
+}
+
+# _run_lock_close — close this shell's copy of the run's lock (see
+# _init_state). For the subshell that is about to become another program:
+# whoever holds a copy holds the lock, so a program of the desktop user
+# that got one could release root's lock in the middle of a run, or keep
+# it after the run ("already running"). The same goes for anything a fix
+# leaves behind. Does nothing before the lock is taken.
+_RUN_LOCK_FD=""
+_run_lock_close() {
+    [[ -n "$_RUN_LOCK_FD" ]] || return 0
+    exec {_RUN_LOCK_FD}>&-
+    _RUN_LOCK_FD=""
 }
 
 # _as_user USER CMD... — run CMD as USER in USER's session environment.
@@ -433,7 +492,12 @@ _as_user() {
     local -a _UENV=()
     _user_env "$u" || return 1
     if [[ "$(id -u)" -eq "$(id -u "$u")" ]]; then
-        env -i "${_UENV[@]}" "$@"
+        # No runuser needed, but CMD gets as little as through _no_tty:
+        # neither the window's two pipes nor the run's lock.
+        (
+            _private_fds_close
+            exec env -i "${_UENV[@]}" "$@"
+        )
     else
         _no_tty runuser -u "$u" -- env -i "${_UENV[@]}" "$@"
     fi

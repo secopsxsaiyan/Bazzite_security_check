@@ -259,8 +259,9 @@ apply_change() {
         esac
     fi
     if [[ "$rc" == 255 ]]; then
+        # Apply changes the PC: never the button a stray Enter presses.
         ui_choice3 "$html" "" "Apply" "Skip" "Stop reviewing" \
-            "$([[ ${#warns[@]} -gt 0 ]] && echo warn)"
+            "$([[ ${#warns[@]} -gt 0 ]] && echo warn || echo careful)"
         rc=$?
     fi
     case "$rc" in
@@ -294,10 +295,13 @@ _run_change() {
     # the fix runs as another account get no access to this terminal.
     # An interruption waits until the fix has ended and its undo step is
     # on record: the fix itself is not stopped by one.
+    # What it prints goes to the log through this shell, cut to size (see
+    # _run_logged): a fix can run a program as another account too.
     _signals_hold
-    out=$(_no_tty bash "$tmpfile" 2>&1 < /dev/null) || rc=$?
+    _run_logged "fix: " bash "$tmpfile" || rc=$?
+    out=$_RUN_OUT
     rm -f -- "$tmpfile"
-    log "--- output (exit ${rc}) ---"$'\n'"${out}"
+    log "--- end of the output (exit ${rc}) ---"
     if [[ $rc -eq 0 ]]; then
         [[ -n "$undo" ]] && _undo_record "$title" "$undo"
     elif [[ $_SIGNAL_PENDING -eq 1 && -n "$undo" ]]; then
@@ -325,8 +329,10 @@ _run_change() {
 
 Output:
 $(tail -n 15 <<< "$out")"
-    if [[ -n "$undo" ]] && ui_yesno "Put back what this fix may already have changed?" "Roll back" "Leave it" "y"; then
-        if _no_tty bash -c "$undo" >> "$RUN_LOG" 2>&1 < /dev/null; then
+    if [[ -n "$undo" ]] && ui_yesno "Put back what this fix may already have changed?" "Roll back" "Leave it" "y" careful; then
+        local undo_rc=0
+        _undo_run bash -c "$undo" || undo_rc=$?
+        if [[ $undo_rc -eq 0 ]]; then
             print_status "OK" "Rolled back: ${title}"
         else
             ui_error "Rolling back \"${title}\" failed too - see the run log: ${RUN_LOG}"
@@ -334,6 +340,36 @@ $(tail -n 15 <<< "$out")"
     fi
     return 3
 }
+
+# _run_logged PREFIX CMD... — run a fix or an undo step (see _no_tty) and
+# write the end of what it printed to the run log, each line marked PREFIX;
+# returns CMD's status and leaves that end in _RUN_OUT. A fix or an undo
+# step can run a program as another account, so it never gets the log file
+# itself (see _log_foreign), and what it prints is limited where it is
+# read, not afterwards: "tail" keeps the last _RUN_OUT_MAX bytes and reads
+# to the end, so a step that prints without end costs no memory and a step
+# that prints a lot is not ended by a closed pipe. Of those bytes the last
+# _LOG_FOREIGN_LINES lines are logged: when a step fails, the reason is
+# at the end.
+_RUN_OUT_MAX=400000
+_RUN_OUT=""
+_run_logged() {
+    local prefix="$1" out rc=0 n
+    shift
+    _RUN_OUT=$(set -o pipefail
+               _no_tty "$@" 2>&1 < /dev/null | tail -c "$_RUN_OUT_MAX" | tr -d '\000') || rc=$?
+    out=$_RUN_OUT
+    n=$(wc -l <<< "$out")
+    if (( n > _LOG_FOREIGN_LINES )); then
+        _log_foreign "$prefix" "(the last ${_LOG_FOREIGN_LINES} lines of the output)"
+        out=$(tail -n "$_LOG_FOREIGN_LINES" <<< "$out")
+    fi
+    _log_foreign "$prefix" "$out"
+    return "$rc"
+}
+
+# _undo_run CMD... — run an undo step; returns its status (see _run_logged).
+_undo_run() { _run_logged "undo: " "$@"; }
 
 # ====================== CHOOSING AND REVIEWING ======================
 # _fix_candidates — findings with a fix that is not applied yet (open, or
@@ -705,7 +741,7 @@ _sync_undone() {
 run_undo() {
     local base="$STATE_DIR/undo" r count label choice f title
     local -a items=() runs=()
-    local d i
+    local d i undo_rc
     for d in "$base"/*/; do [[ -d "$d" ]] && runs+=("$(basename "$d")"); done
     for (( i = ${#runs[@]} - 1; i >= 0; i-- )); do
         r="${runs[$i]}"
@@ -732,7 +768,7 @@ run_undo() {
 Undoing an older run first can overwrite them when both changed the same
 file. Undo the newest run first unless you are sure.
 
-Undo this older run anyway?" "Undo anyway" "Cancel" "n"; then
+Undo this older run anyway?" "Undo anyway" "Cancel" "n" warn; then
         return 0
     fi
     local undone=0 failed=0
@@ -743,7 +779,7 @@ Undo this older run anyway?" "Undo anyway" "Cancel" "n"; then
         title=$(sed -n 's/^# TITLE: //p' "$f")
         ui_choice3 "<h3>Undo: $(_html "$title")</h3>$(_pre "$(_undo_body "$f")" 30)" \
             "Undo: ${title}"$'\n'"$(_undo_body "$f" | sed 's/^/    /')" \
-            "Undo it" "Keep it" "Stop"
+            "Undo it" "Keep it" "Stop" careful
         case $? in
             0) ;;
             1) continue ;;
@@ -752,7 +788,9 @@ Undo this older run anyway?" "Undo anyway" "Cancel" "n"; then
         # As with a fix: an interruption waits until the step has ended
         # and is marked as done (it would be offered, and run, again).
         _signals_hold
-        if _no_tty bash "$f" >> "$RUN_LOG" 2>&1 < /dev/null; then
+        undo_rc=0
+        _undo_run bash "$f" || undo_rc=$?
+        if [[ $undo_rc -eq 0 ]]; then
             mv -f -- "$f" "${f%.sh}.done"
             _signals_release
             undone=$((undone + 1))

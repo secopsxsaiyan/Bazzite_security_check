@@ -1,194 +1,112 @@
-// Security Check - confirm one fix (Kirigami), in the wizard's style: the
-// setting now and after, what it affects on Bazzite, the side effects, the
-// exact commands and whether it can be undone. Apply / Skip / Stop.
-// bridge.finish({choice: "apply" | "skip" | "stop"}) answers.
+// Security Check - confirm one fix (a page of the main window): the setting
+// now and after, what it affects on Bazzite, the side effects, the exact
+// commands and whether it can be undone. Apply / Skip / Stop reviewing.
+// finished({choice: "apply" | "skip" | "stop"}) answers.
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
-Kirigami.ApplicationWindow {
-    id: root
-    title: "Security Check"
-    width: Kirigami.Units.gridUnit * 48
-    height: Kirigami.Units.gridUnit * 40
-    minimumWidth: Kirigami.Units.gridUnit * 32
-    minimumHeight: Kirigami.Units.gridUnit * 26
-    pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
+Item {
+    id: page
+    required property var input
+    property string iconSource: ""
+    readonly property string title: qsTr("Apply this fix?")
+    signal finished(var answer)
+    signal cancelled()
+    // This is the one page where Enter is not the main button from
+    // anywhere: a fix is applied only by a click on Apply, by its Alt key,
+    // or by Enter or Space while Apply itself has the keyboard focus. (The
+    // window presses a focused button on Enter, so a focused "Skip" skips;
+    // with the focus anywhere else Enter comes here and does nothing.) A
+    // fix may be a risky one, and an Enter too many on the page before
+    // must never run it.
+    function primary() { if (applyButton.activeFocus) answer("apply") }
+    function dismiss() { cancelled() }
+    // No button starts with the keyboard focus either. Space presses the
+    // focused button, and the fixes come one after the other: with the
+    // focus on Apply, the Space meant for "Skip" on the fix before would
+    // apply this one. Applying takes a deliberate move to the button: Tab
+    // goes through the page to it, Shift+Tab goes straight to it (it is
+    // the last control).
+    function initialFocus() { return null }
+    readonly property Item scrollArea: scroll.contentItem
 
-    readonly property var d: bridge.input
-    property bool more: false
-    function esc(s) { return String(s === undefined ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
-    function sevColor(s) {
-        return s === "high" ? Kirigami.Theme.negativeTextColor : s === "medium" ? Kirigami.Theme.neutralTextColor
-             : s === "low" ? Kirigami.Theme.linkColor : Kirigami.Theme.disabledTextColor
-    }
-    function answer(c) { bridge.finish({ "choice": c }) }
+    readonly property var d: input || ({})
+    function answer(c) { finished({ "choice": c }) }
 
-    // Descriptions are wrapped at about 78 columns in the checks: join
-    // those lines again (list lines and blank lines stay).
-    function reflow(s) {
-        var out = [], lines = String(s === undefined ? "" : s).split("\n")
-        for (var n = 0; n < lines.length; n++) {
-            var l = lines[n], prev = out.length ? out[out.length - 1] : ""
-            if (out.length && l.trim() !== "" && prev.trim() !== "" && !/^\s*[-•*]\s/.test(l) && !/^\s*[-•*]\s/.test(prev))
-                out[out.length - 1] = prev + " " + l.trim()
-            else
-                out.push(l)
+    ColumnLayout {
+        anchors.fill: parent
+        spacing: 0
+
+        PageHeader {
+            iconSource: page.iconSource
+            // Without a title the question is the title.
+            eyebrow: page.d.title ? qsTr("Apply this fix?") : ""
+            title: page.d.title || qsTr("Apply this fix?")
+            StatusChip { sev: page.d.sev || "info" }
         }
-        return out.join("\n")
-    }
 
-    onClosing: bridge.cancel()
+        QQC2.ScrollView {
+            id: scroll
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentWidth: availableWidth
+            clip: true
 
-    pageStack.initialPage: Kirigami.Page {
-        padding: 0
-        titleDelegate: Item {}
+            ColumnLayout {
+                // Left-aligned, and no wider than is comfortable to read.
+                x: Kirigami.Units.gridUnit
+                width: Math.min(scroll.availableWidth - Kirigami.Units.gridUnit * 2, Kirigami.Units.gridUnit * 48)
+                spacing: Kirigami.Units.largeSpacing
 
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 0
+                Item { implicitHeight: Kirigami.Units.smallSpacing }
 
-            Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: head.implicitHeight + Kirigami.Units.gridUnit * 1.5
-                color: Kirigami.Theme.alternateBackgroundColor
-                Kirigami.Theme.colorSet: Kirigami.Theme.Header
-                Kirigami.Theme.inherit: false
-                RowLayout {
-                    id: head
-                    anchors.fill: parent
-                    anchors.margins: Kirigami.Units.gridUnit
-                    spacing: Kirigami.Units.gridUnit
-                    Kirigami.Icon {
-                        source: "tools-wizard"
-                        Layout.alignment: Qt.AlignTop
-                        implicitWidth: Kirigami.Units.iconSizes.large; implicitHeight: implicitWidth
-                    }
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: Kirigami.Units.smallSpacing
-                        QQC2.Label { text: "Apply this fix?"; opacity: 0.75 }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: Kirigami.Units.smallSpacing
-                            Rectangle {
-                                radius: height / 2
-                                implicitHeight: sev.implicitHeight + Kirigami.Units.smallSpacing
-                                implicitWidth: sev.implicitWidth + Kirigami.Units.largeSpacing * 2
-                                color: Qt.rgba(root.sevColor(root.d.sev).r, root.sevColor(root.d.sev).g, root.sevColor(root.d.sev).b, 0.15)
-                                border.color: root.sevColor(root.d.sev)
-                                QQC2.Label { id: sev; anchors.centerIn: parent; text: (root.d.sev || "info").toUpperCase() + " SEVERITY"; font: Kirigami.Theme.smallFont; color: root.sevColor(root.d.sev) }
-                            }
-                            Kirigami.Heading { Layout.fillWidth: true; level: 2; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: root.d.title || "" }
-                        }
-                    }
-                }
-            }
-            Kirigami.Separator { Layout.fillWidth: true }
+                NowAfter { now: page.d.now || ""; after: page.d.after || "" }
 
-            QQC2.ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                contentWidth: availableWidth
-                clip: true
+                ExpandableText { text: page.d.detail || ""; flickable: scroll.contentItem }
 
-                ColumnLayout {
-                    width: parent.width - Kirigami.Units.gridUnit * 2
-                    x: Kirigami.Units.gridUnit
-                    spacing: Kirigami.Units.largeSpacing
+                AffectsList { model: page.d.affects || [] }
 
-                    Item { implicitHeight: Kirigami.Units.smallSpacing }
-                    GridLayout {
-                        Layout.fillWidth: true
-                        visible: !!(root.d.now || root.d.after)
-                        columns: 2
-                        columnSpacing: Kirigami.Units.largeSpacing
-                        QQC2.Label { visible: !!root.d.now; text: "Now"; font.bold: true; Layout.alignment: Qt.AlignTop }
-                        QQC2.Label { visible: !!root.d.now; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: root.d.now || "" }
-                        QQC2.Label { visible: !!root.d.after; text: "After"; font.bold: true; Layout.alignment: Qt.AlignTop }
-                        QQC2.Label { visible: !!root.d.after; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: root.d.after || ""; color: Kirigami.Theme.positiveTextColor }
-                    }
+                WarningsBox { warnings: page.d.warnings || [] }
 
+                Section {
+                    title: qsTr("Commands")
+                    visible: (page.d.commands || "") !== ""
                     QQC2.Label {
                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                        text: root.reflow(root.d.detail)
-                        maximumLineCount: root.more ? 100000 : 6
-                        elide: Text.ElideRight
+                        opacity: Util.dimText
+                        text: qsTr("These run as administrator. You are not asked for your password again.")
                     }
-                    QQC2.Button {
-                        visible: (root.d.detail || "").split("\n").length > 6 || (root.d.detail || "").length > 600
-                        flat: true
-                        text: root.more ? "Show less" : "Show all details"
-                        icon.name: root.more ? "go-up" : "go-down"
-                        onClicked: root.more = !root.more
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        visible: (root.d.affects || []).length > 0
-                        spacing: Kirigami.Units.smallSpacing
-                        QQC2.Label { text: "What this affects on Bazzite"; font.bold: true }
-                        Repeater {
-                            model: root.d.affects || []
-                            delegate: ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 0
-                                QQC2.Label {
-                                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                    font.weight: Font.DemiBold
-                                    color: modelData.stops && modelData.status === "in" ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
-                                    text: modelData.name + " - " + modelData.how + " (" + modelData.where + ")"
-                                }
-                                QQC2.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; opacity: 0.85; text: modelData.sentence }
-                            }
-                        }
-                    }
-
-                    Kirigami.InlineMessage {
-                        Layout.fillWidth: true
-                        visible: (root.d.warnings || []).length > 0
-                        type: Kirigami.MessageType.Warning
-                        text: "<b>Before you apply:</b><br>" + (root.d.warnings || []).map(function (w) {
-                            return "<b>" + root.esc(w.tag) + "</b> - " + root.esc(w.text) }).join("<br>")
-                    }
-
-                    QQC2.Label {
-                        text: "Commands (run as administrator; you are not asked for your password again)"
-                        font.bold: true
-                    }
-                    QQC2.TextArea {
-                        Layout.fillWidth: true
-                        readOnly: true
-                        wrapMode: TextEdit.Wrap
-                        textFormat: TextEdit.PlainText
-                        font: Kirigami.Theme.fixedWidthFont
-                        text: root.d.commands || ""
-                    }
-
-                    Kirigami.InlineMessage {
-                        Layout.fillWidth: true
-                        visible: true
-                        type: root.d.undo === true ? Kirigami.MessageType.Positive : Kirigami.MessageType.Error
-                        text: root.d.undo === true ? "<b>Can be undone</b> later: dashboard → Undo, or run the tool with --undo."
-                                                   : "<b>No automatic undo.</b>"
-                    }
-                    QQC2.Label {
-                        Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                        visible: !!root.d.note; font.italic: true; text: root.d.note || ""
-                    }
-                    Item { implicitHeight: Kirigami.Units.smallSpacing }
+                    CodeBlock { text: page.d.commands || ""; flickable: scroll.contentItem }
                 }
-            }
 
-            Kirigami.Separator { Layout.fillWidth: true }
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.margins: Kirigami.Units.largeSpacing
-                QQC2.Button { text: "Stop reviewing"; icon.name: "process-stop"; onClicked: root.answer("stop") }
-                Item { Layout.fillWidth: true }
-                QQC2.Button { text: "Skip"; icon.name: "go-next"; onClicked: root.answer("skip") }
-                QQC2.Button { text: "Apply"; icon.name: "dialog-ok-apply"; highlighted: true; font.bold: true; onClicked: root.answer("apply") }
+                Notice {
+                    kind: page.d.undo === true ? "positive" : "error"
+                    title: page.d.undo === true ? qsTr("Can be undone") : qsTr("No automatic undo.")
+                    text: page.d.undo === true ? qsTr("later: “Undo changes…” on the Check-up result page, or run the tool with --undo.") : ""
+                }
+
+                QQC2.Label {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                    visible: text !== ""; font.italic: true; text: page.d.note || ""
+                }
+
+                Item { implicitHeight: Kirigami.Units.smallSpacing }
+            }
+        }
+
+        FooterBar {
+            // Enter alone does not apply (see primary()): say what does.
+            hint: qsTr("Nothing changes until you press Apply. With the keyboard: Tab to Apply, then Enter.")
+            leading: QQC2.Button { text: qsTr("Stop reviewing"); icon.name: "process-stop"; onClicked: page.answer("stop") }
+            QQC2.Button { text: qsTr("Skip"); icon.name: "go-next"; onClicked: page.answer("skip") }
+            PrimaryButton {
+                id: applyButton
+                text: qsTr("Apply"); icon.name: "dialog-ok-apply"
+                Accessible.description: qsTr("Runs the commands shown on this page")
+                onClicked: page.answer("apply")
             }
         }
     }

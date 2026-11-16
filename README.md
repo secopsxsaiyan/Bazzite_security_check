@@ -29,7 +29,7 @@ It is a desktop-friendly counterpart to [ubuntu-sec-audit](https://github.com/se
 
 - **Adapts to the PC.** Gaming, game streaming, development, SSH, file sharing and portable (laptop) use each change what is checked and how strict it is, and the wizard pre-selects what it detects.
 - **Fixes you approve one by one.** Every fix shows the current setting, the result, side effects and the exact commands. Nothing changes without your OK, each fix is verified afterwards, and `--undo` reverts it.
-- **Native Plasma look.** Kirigami windows for the wizard, progress, dashboard and settings, following the system theme or a forced light/dark theme; plain kdialog or the terminal when Kirigami is not available.
+- **Native Plasma look.** One Kirigami window for the whole run: the wizard, dashboard, fixes and settings are pages of it, questions appear over the current page, and only the scan's progress bar is a small window of its own. It follows the system theme or a forced light/dark theme; plain kdialog or the terminal when Kirigami is not available.
 - **Knows what a fix touches.** Each fix names the Bazzite features it affects (Steam Remote Play, Sunshine, KDE Connect, SSH, containers, ...) and whether this PC uses them. A fix that would stop a feature you use starts unticked, and you can keep a setting on purpose so later checks stop counting it.
 - **Reports you can keep.** An HTML and Markdown report per run, a score with a grade, and what changed since the last check.
 - **Signed updates.** Settings → Updates installs a new release only after its SSH signature and SHA-256 checksums are verified.
@@ -72,9 +72,11 @@ install updates from Settings → Updates (or `--update`): a new release is
 installed only after its signature and checksums are verified. `--uninstall`
 removes the app; reports, history and undo steps are kept.
 
-The setup wizard and Settings use a Kirigami (Plasma) window when PySide6 and
-Kirigami are installed, as on Bazzite's KDE images; Settings chooses the theme
-of Security Check's windows (follow the system, light or dark).
+The setup wizard, the dashboard, the fixes and Settings are pages of one
+Kirigami (Plasma) window when PySide6 and Kirigami are installed, as on
+Bazzite's KDE images; without them, or if that window fails, the same
+questions come as kdialog windows or on the terminal. Settings chooses the
+theme of Security Check's window (follow the system, light or dark).
 
 For a background check once a week (report only, with a notification), add
 `--install-timer`.
@@ -97,7 +99,7 @@ For a background check once a week (report only, with a notification), add
 
 ## What a fix can affect
 
-Fixes that touch a Bazzite feature say so, in the fix list, the Apply dialog, each check's page and the report. For each one it says how the fix touches it (**stops it**, **changes it**, **you choose** in the fix, **helps it**, or **left as it is** when only the manual steps would change it) and whether this PC uses it, for example *"in use here: Steam is installed"*.
+Fixes that touch a Bazzite feature say so, in the fix list, the "Apply this fix?" page, each check's page and the report. For each one it says how the fix touches it (**stops it**, **changes it**, **you choose** in the fix, **helps it**, or **left as it is** when only the manual steps would change it) and whether this PC uses it, for example *"in use here: Steam is installed"*.
 
 | Feature | Checks that can touch it | How "in use" is detected |
 | --- | --- | --- |

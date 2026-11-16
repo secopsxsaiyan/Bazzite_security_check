@@ -1,28 +1,34 @@
-// Security Check - settings (Kirigami). The release check runs here, as
+// Security Check - settings, a page of the main window. finished({action,
+// theme, update_check}) answers, with action "save" or "update"; the root
+// side validates it. The release check runs here, as
 // the desktop user; installing an update is done by the root side of the
 // tool, which verifies the release's signature and checksums first.
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "util.js" as Util
 
-Kirigami.ApplicationWindow {
-    id: root
-    title: "Security Check - Settings"
-    width: Kirigami.Units.gridUnit * 42
-    height: Kirigami.Units.gridUnit * 34
-    minimumWidth: Kirigami.Units.gridUnit * 26
-    minimumHeight: Kirigami.Units.gridUnit * 22
-    pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
+Item {
+    id: page
+    required property var input
+    property string iconSource: ""
+    readonly property string title: qsTr("Settings")
+    signal finished(var answer)
+    signal cancelled()
 
-    readonly property var input: bridge.input
     readonly property string version: input.version || "0"
     readonly property string repo: input.repo || ""
-    property string theme: input.theme || "system"
+    // Only a real "owner/name" is asked about or linked to.
+    readonly property bool repoOk: /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)
+    // Anything but a known theme counts as "system", as the combo box shows it.
+    property string theme: ["light", "dark"].indexOf(input.theme) >= 0 ? input.theme : "system"
     property bool updateCheck: input.update_check === true || input.update_check === "1"
     property string latest: ""
     property string latestNotes: ""
     property string checkState: "idle"      // idle | checking | done | error
+    readonly property bool updateAvailable: checkState === "done" && newer(latest, version)
+    readonly property real maxTextWidth: Kirigami.Units.gridUnit * 48
 
     // a > b for "1.2.3"-style versions
     function newer(a, b) {
@@ -34,7 +40,7 @@ Kirigami.ApplicationWindow {
         return false
     }
     function check() {
-        if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) { checkState = "error"; return }
+        if (!repoOk) { checkState = "error"; return }
         checkState = "checking"
         var xhr = new XMLHttpRequest()
         xhr.onreadystatechange = function () {
@@ -52,92 +58,226 @@ Kirigami.ApplicationWindow {
         xhr.send()
     }
     function save(action) {
-        bridge.finish({ "action": action, "theme": theme, "update_check": updateCheck })
+        page.finished({ "action": action, "theme": theme, "update_check": updateCheck })
+    }
+    function primary() { save("save") }
+    function dismiss() { page.cancelled() }
+    function initialFocus() { return mainButton }
+
+    // A control that gets the keyboard focus comes into view. (A text
+    // field or a link cannot say whether the focus came from the keyboard:
+    // it is brought into view either way.)
+    readonly property Item scrollArea: scroll.contentItem
+    Connections {
+        target: page.Window.window
+        function onActiveFocusItemChanged() {
+            var f = page.Window.activeFocusItem
+            if (f && f.visualFocus !== false && Util.within(f, page.scrollArea))
+                Util.reveal(page.scrollArea, f, Kirigami.Units.gridUnit)
+        }
     }
 
-    onClosing: bridge.cancel()
-    Component.onCompleted: if (input.check_now) check()
+    ColumnLayout {
+        anchors.fill: parent
+        spacing: 0
 
-    pageStack.initialPage: Kirigami.ScrollablePage {
-        titleDelegate: Item {}
+        PageHeader {
+            iconSource: page.iconSource
+            title: qsTr("Settings")
+            subtitle: qsTr("Security Check %1").arg(page.version)
+        }
 
-        Kirigami.FormLayout {
-            Kirigami.Separator { Kirigami.FormData.label: "Appearance"; Kirigami.FormData.isSection: true }
-            QQC2.ComboBox {
-                Kirigami.FormData.label: "Theme:"
-                textRole: "text"; valueRole: "value"
-                model: [
-                    { text: "Follow the system", value: "system" },
-                    { text: "Light", value: "light" },
-                    { text: "Dark", value: "dark" }
-                ]
-                Component.onCompleted: currentIndex = indexOfValue(root.theme)
-                onActivated: root.theme = currentValue
-            }
-            QQC2.Label {
-                text: "Used by Security Check's windows from the next one you open."
-                opacity: 0.7; wrapMode: Text.Wrap
-                Layout.maximumWidth: Kirigami.Units.gridUnit * 18
-            }
+        QQC2.ScrollView {
+            id: scroll
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentWidth: availableWidth
+            clip: true
+            QQC2.ScrollBar.horizontal.policy: QQC2.ScrollBar.AlwaysOff
 
-            Kirigami.Separator { Kirigami.FormData.label: "Updates"; Kirigami.FormData.isSection: true }
-            QQC2.Label { Kirigami.FormData.label: "Installed version:"; text: root.version }
-            RowLayout {
-                Kirigami.FormData.label: "Latest release:"
-                QQC2.BusyIndicator { visible: root.checkState === "checking"; running: visible; implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth }
-                QQC2.Label {
-                    text: root.checkState === "idle" ? "Not checked yet"
-                        : root.checkState === "checking" ? "Checking…"
-                        : root.checkState === "error" ? "Could not reach GitHub"
-                        : root.newer(root.latest, root.version) ? root.latest + " - an update is available"
-                        : root.latest + " - you have the latest version"
-                    color: root.checkState === "done" && root.newer(root.latest, root.version) ? Kirigami.Theme.positiveTextColor
-                         : root.checkState === "error" ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
-                }
-            }
-            RowLayout {
-                QQC2.Button { text: "Check now"; icon.name: "view-refresh"; enabled: root.checkState !== "checking"; onClicked: root.check() }
-                QQC2.Button {
-                    text: "Install update…"
-                    icon.name: "update-none"
-                    highlighted: true
-                    visible: root.checkState === "done" && root.newer(root.latest, root.version)
-                    onClicked: root.save("update")
-                }
-            }
-            QQC2.Label {
-                visible: root.latestNotes !== "" && root.newer(root.latest, root.version)
-                text: root.latestNotes
-                textFormat: Text.PlainText
-                wrapMode: Text.Wrap; opacity: 0.85
-                Layout.maximumWidth: Kirigami.Units.gridUnit * 20
-            }
-            QQC2.Label {
-                text: "Updates are downloaded from GitHub and installed only after their signature and checksums are verified."
-                opacity: 0.7; wrapMode: Text.Wrap
-                Layout.maximumWidth: Kirigami.Units.gridUnit * 18
-            }
-            QQC2.CheckBox {
-                text: "Check for updates when Security Check starts"
-                checked: root.updateCheck
-                onToggled: root.updateCheck = checked
-            }
+            ColumnLayout {
+                width: Math.min(scroll.availableWidth, page.maxTextWidth + Kirigami.Units.gridUnit * 2)
+                spacing: 0
 
-            Kirigami.Separator { Kirigami.FormData.label: "About"; Kirigami.FormData.isSection: true }
-            RowLayout {
-                Kirigami.Icon { source: bridge.iconSource; implicitWidth: Kirigami.Units.iconSizes.large; implicitHeight: implicitWidth }
                 ColumnLayout {
-                    Kirigami.Heading { text: "Security Check " + root.version; level: 3 }
-                    QQC2.Label { text: "A security check-up for Bazzite gaming and development PCs. GPL-3.0."; opacity: 0.8 }
-                    Kirigami.UrlButton { url: "https://github.com/" + root.repo; visible: root.repo !== "" }
+                    Layout.fillWidth: true
+                    Layout.margins: Kirigami.Units.gridUnit
+                    spacing: Kirigami.Units.gridUnit * 1.25
+
+                    // ---- appearance ------------------------------------
+                    Section {
+                        title: qsTr("Appearance")
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Kirigami.Units.largeSpacing
+                            QQC2.Label { text: qsTr("Theme:") }
+                            QQC2.ComboBox {
+                                Layout.minimumWidth: Kirigami.Units.gridUnit * 12
+                                textRole: "text"; valueRole: "value"
+                                model: [
+                                    { text: qsTr("Follow the system"), value: "system" },
+                                    { text: qsTr("Light"), value: "light" },
+                                    { text: qsTr("Dark"), value: "dark" }
+                                ]
+                                Accessible.name: qsTr("Theme")
+                                Component.onCompleted: currentIndex = Math.max(0, indexOfValue(page.theme))
+                                onActivated: page.theme = currentValue
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+                        Hint { text: qsTr("Applied as soon as you save.") }
+                    }
+
+                    Kirigami.Separator { Layout.fillWidth: true }
+
+                    // ---- updates ---------------------------------------
+                    Section {
+                        title: qsTr("Updates")
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: Kirigami.Units.largeSpacing
+                            rowSpacing: Kirigami.Units.smallSpacing
+                            QQC2.Label { text: qsTr("Installed version:"); opacity: Util.dimText }
+                            QQC2.Label { Layout.fillWidth: true; text: page.version; textFormat: Text.PlainText; elide: Text.ElideRight }
+                            QQC2.Label { text: qsTr("Latest release:"); opacity: Util.dimText; Layout.alignment: Qt.AlignTop }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+                                QQC2.BusyIndicator {
+                                    visible: page.checkState === "checking"; running: visible
+                                    implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
+                                    Accessible.ignored: true
+                                }
+                                Kirigami.Icon {
+                                    visible: page.checkState === "done" || page.checkState === "error"
+                                    source: page.checkState === "error" ? "dialog-error" : page.updateAvailable ? "update-none" : "dialog-ok-apply"
+                                    implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth
+                                    Layout.alignment: Qt.AlignTop
+                                    Accessible.ignored: true
+                                }
+                                QQC2.Label {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.Wrap; textFormat: Text.PlainText
+                                    text: page.checkState === "idle" ? qsTr("Not checked yet")
+                                        : page.checkState === "checking" ? qsTr("Checking…")
+                                        : page.checkState === "error" ? qsTr("Could not reach GitHub")
+                                        : page.updateAvailable ? qsTr("%1 - an update is available").arg(page.latest)
+                                        : qsTr("%1 - you have the latest version").arg(page.latest)
+                                    // The icon in front says how it went; the colour is one
+                                    // that can be read as text (Util.ink).
+                                    color: page.updateAvailable ? Util.ink(Kirigami.Theme, Kirigami.Theme.positiveTextColor)
+                                         : page.checkState === "error" ? Util.ink(Kirigami.Theme, Kirigami.Theme.negativeTextColor)
+                                         : Kirigami.Theme.textColor
+                                    Accessible.name: qsTr("Latest release: %1").arg(text)
+                                }
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Layout.topMargin: Kirigami.Units.smallSpacing
+                            spacing: Kirigami.Units.smallSpacing
+                            QQC2.Button {
+                                text: qsTr("Check now"); icon.name: "view-refresh"
+                                enabled: page.checkState !== "checking"
+                                onClicked: page.check()
+                            }
+                            // Saves the settings too, then the root side installs the update.
+                            QQC2.Button {
+                                text: qsTr("Install update…")
+                                icon.name: "update-none"
+                                visible: page.updateAvailable
+                                onClicked: page.save("update")
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+                        // What is new in the release. The text comes from GitHub: plain text only.
+                        Rectangle {
+                            visible: page.updateAvailable && page.latestNotes !== ""
+                            Layout.fillWidth: true
+                            Layout.topMargin: Kirigami.Units.smallSpacing
+                            implicitHeight: notes.implicitHeight + Kirigami.Units.largeSpacing * 2
+                            radius: Kirigami.Units.cornerRadius
+                            Kirigami.Theme.colorSet: Kirigami.Theme.View
+                            Kirigami.Theme.inherit: false
+                            color: Kirigami.Theme.backgroundColor
+                            border.width: 1
+                            border.color: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, Kirigami.Theme.frameContrast)
+                            ColumnLayout {
+                                id: notes
+                                anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                                anchors.margins: Kirigami.Units.largeSpacing
+                                spacing: Kirigami.Units.smallSpacing
+                                QQC2.Label {
+                                    Layout.fillWidth: true; elide: Text.ElideRight
+                                    font.weight: Font.DemiBold; textFormat: Text.PlainText
+                                    text: qsTr("New in %1").arg(page.latest)
+                                }
+                                QQC2.Label {
+                                    Layout.fillWidth: true
+                                    text: page.latestNotes
+                                    textFormat: Text.PlainText
+                                    wrapMode: Text.Wrap; opacity: Util.dimSentence
+                                }
+                            }
+                        }
+                        QQC2.CheckBox {
+                            id: updateBox
+                            // As wide as its label (and no wider than the
+                            // page), so that the focus ring is around it.
+                            Layout.maximumWidth: parent.width
+                            Layout.topMargin: Kirigami.Units.smallSpacing
+                            text: qsTr("Check for updates when Security Check starts")
+                            checked: page.updateCheck
+                            onToggled: page.updateCheck = checked
+                            // The style shows no keyboard focus on a tick box.
+                            FocusRing { target: updateBox }
+                        }
+                        Hint { text: qsTr("Updates are downloaded from GitHub and installed only after their signature and checksums are verified.") }
+                    }
+
+                    Kirigami.Separator { Layout.fillWidth: true }
+
+                    // ---- about -----------------------------------------
+                    Section {
+                        title: qsTr("About")
+                        QQC2.Label {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap
+                            text: qsTr("A security check-up for Bazzite gaming and development PCs.")
+                        }
+                        Hint { text: qsTr("License: GPL-3.0") }
+                        Kirigami.UrlButton {
+                            id: projectLink
+                            // As wide as the address (and no wider than the
+                            // page), so that the focus ring is around it.
+                            Layout.maximumWidth: parent.width
+                            horizontalAlignment: Text.AlignLeft
+                            elide: Text.ElideMiddle
+                            url: "https://github.com/" + page.repo
+                            // Only a link to a real "owner/name" repository is offered.
+                            visible: page.repoOk
+                            activeFocusOnTab: visible
+                            // The link colour made readable as text (it is
+                            // underlined: a link not by its colour alone).
+                            normalColor: Util.ink(Kirigami.Theme, Kirigami.Theme.linkColor)
+                            Accessible.name: qsTr("Project page: %1").arg(url)
+                            FocusRing { target: projectLink }
+                        }
+                    }
                 }
             }
         }
 
-        footer: QQC2.DialogButtonBox {
-            standardButtons: QQC2.DialogButtonBox.Save | QQC2.DialogButtonBox.Cancel
-            onAccepted: root.save("save")
-            onRejected: bridge.cancel()
+        FooterBar {
+            QQC2.Button { text: qsTr("Cancel"); icon.name: "dialog-cancel"; onClicked: page.dismiss() }
+            PrimaryButton { id: mainButton; text: qsTr("Save"); icon.name: "document-save"; onClicked: page.primary() }
         }
+    }
+
+    // A dimmed line that explains the control above it.
+    component Hint: QQC2.Label {
+        Layout.fillWidth: true
+        wrapMode: Text.Wrap
+        opacity: Util.dimQuiet
     }
 }
