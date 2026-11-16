@@ -181,8 +181,10 @@ Without a display, save a picture of every page:
 | Command | What it covers | Needs |
 |---|---|---|
 | `make lint` | ShellCheck on the scripts; `ui/app.py` and `tests/ui-offscreen.py` parse | shellcheck |
-| `make test-ui` | The real front end, off-screen (`tests/ui-offscreen.py`) | PySide6 with Qt Quick, Kirigami, qqc2-desktop-style; no root, no display |
+| `make test-ui` | The real front end, off-screen (`tests/ui-offscreen.py`), then the tool's own functions asking that front end for pages (`tests/ui-e2e.sh`) | PySide6 with Qt Quick, Kirigami, qqc2-desktop-style; no root, no display |
 | `make test` | The root side against a fake front end and fake system tools (`tests/smoke.sh`): `lib/ui.sh`, answer validation, the kdialog fallback | root, a throwaway container or VM |
+
+`tests/ui-e2e.sh` is the one place where the two halves meet: it sources the tool, starts the real front end with `ui_front_start` and asks it for questions and pages through `ui_app`, `ui_yesno` and `ui_radiolist`, with a key pressed for it. A change to the request or answer form on one side only fails there.
 
 `tests/ui-offscreen.py` loads `ui/app.py` as a module and runs its `main()` with stdin and stdout replaced by pipes, one process per scenario. It sends request lines, presses keys and clicks in the window and checks every answer line against the pattern `lib/ui.sh` uses. Any QML warning fails the scenario it appears in, every wait has a time limit, and a scenario that does not end is killed and reported. It uses the test interface of `ui/app.py`: `PAGE_DIR` (the folder the page files come from, for stub pages), `TEST_HOOK(app, shell, host)` and `main()`. `Shell.qml` and `Progress.qml` are never taken from `PAGE_DIR`: they always come from `ui/qml/`. So the two scenarios that need `Progress.qml` to fail (`no-progress-window`, `progress-broken`) replace the function that loads it, `_Ui.load`, in the loaded module.
 

@@ -322,6 +322,9 @@ _init_state() {
 }
 
 _cleanup() {
+    # A signal that comes now (Ctrl-C pressed again) is only noted: the
+    # clean-up takes a few seconds with a window that hangs, and must end.
+    _SIGNALS_HELD=$(( ${_SIGNALS_HELD:-0} + 1 ))
     # The window closes with the tool.
     declare -F ui_front_stop >/dev/null && ui_front_stop
     [[ -n "$RUN_TMP" && -d "$RUN_TMP" ]] && rm -rf -- "$RUN_TMP"
@@ -473,7 +476,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     # older one the tool runs as it was started: the same results, later).
     # _BSA_SIGPIPE_RESTART: once only, should the restart not change it.
     if [[ -z "${_BSA_SIGPIPE_RESTART:-}" ]] && _sigpipe_ignored && /usr/bin/env --default-signal=PIPE true 2>/dev/null; then
-        exec /usr/bin/env --default-signal=PIPE _BSA_SIGPIPE_RESTART=1 "$BASH" "$0" "$@"
+        exec /usr/bin/env --default-signal=PIPE _BSA_SIGPIPE_RESTART=1 "$BASH" -- "$0" "$@"
     fi
     unset _BSA_SIGPIPE_RESTART
     main "$@"

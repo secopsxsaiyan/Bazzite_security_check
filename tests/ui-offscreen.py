@@ -1312,6 +1312,16 @@ def sc_a11y():
     Tab, Right, Down, End, Home = K().Key_Tab, K().Key_Right, K().Key_Down, K().Key_End, K().Key_Home
     S = SAMPLES
     QAccessible.setActive(True)
+    # A page that starts with the focus on a row, not on a plain button
+    # (nothing ticked, and something must be): the row shows its ring from
+    # the start, so Space never ticks a row not shown as focused.
+    unticked = dict(S["choose"], allow_none=False, items=[dict(i, on=False) for i in S["choose"]["items"]])
+    if (yield from show("f1", "choose", unticked, "choose with nothing ticked")):
+        first = shell.activeFocusItem()
+        check(first is not None and first.property("checkable") is True and first.property("visualFocus") is True and len(rings()) == 1,
+              "choose with nothing ticked: the row that starts with the focus shows its ring (%d shown)" % len(rings()))
+        key(K().Key_Escape)
+    yield from answered("f1", "choose with nothing ticked")
     markup = re.compile(r"<[A-Za-z!/]|&(amp|lt|gt|nbsp|quot);")
     undone = dict(S["confirm"], undo=False)
     notes = dict(S["dashboard"], reboot_reasons="A service was switched off", report_note="The folder could not be written",

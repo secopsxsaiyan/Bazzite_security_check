@@ -2296,6 +2296,19 @@ case "$1" in
         ) > /dev/null 2>&1 &
         a=$(ui_app wizard '{"hang":true}'); echo "page-status-$?"
         ;;
+    signal-twice)
+        # As above, and the signal comes again a second later (Ctrl-C
+        # pressed twice), while the tool is still ending the front end:
+        # the clean-up must finish all the same.
+        (
+            until grep -qx hanging "$FL"; do sleep 0.1; done
+            fpid=$(awk '$1 == "pid" { print $2 }' "$FL")
+            for _ in $(seq 1 100); do grep -q "^$fpid " "$RUN_TMP/ui-front-seen" 2>/dev/null && break; sleep 0.1; done
+            trap '' TERM        # this sender is in the group too, and has a second signal to send
+            kill -TERM 0; sleep 1; kill -TERM "$$"
+        ) > /dev/null 2>&1 &
+        a=$(ui_app wizard '{"hang":true}'); echo "page-status-$?"
+        ;;
 esac
 exit 0
 FEEOF
@@ -2365,6 +2378,12 @@ if [[ $FE_RC -eq 130 && -z "$FE_LEFT" ]] && grep -qx hanging "$W/fe-hung-first-p
     ok "a front end that hangs on the first page is ended after a signal to every process of the tool"
 else
     bad "front end hung on the first page, then a signal: exit $FE_RC, left '$FE_LEFT', $(tr '\n' ' ' < "$W/fe-hung-first-page.out")"
+fi
+front_end_case signal-twice
+if [[ $FE_RC -eq 130 && -z "$FE_LEFT" ]] && grep -qx hanging "$W/fe-signal-twice.log" && front_end_clean signal-twice; then
+    ok "a second signal while the tool ends a hung front end does not cut the clean-up short"
+else
+    bad "a second signal during the clean-up: exit $FE_RC, left '$FE_LEFT', $(tr '\n' ' ' < "$W/fe-signal-twice.out")"
 fi
 
 # Started with SIGPIPE ignored (the weekly check's systemd service, a CI

@@ -1,11 +1,11 @@
 .PHONY: lint test test-ui shellcheck.sarif
 
-SHELLCHECK_ARGS := -x -S warning -e SC2034 bazzite-sec-audit.sh lib/*.sh checks/*.sh tests/smoke.sh
+SHELLCHECK_ARGS := -x -S warning -e SC2034 bazzite-sec-audit.sh lib/*.sh checks/*.sh tests/smoke.sh tests/ui-e2e.sh
 
 # ShellCheck every script (modules are followed from the entry script).
 lint:
 	shellcheck $(SHELLCHECK_ARGS)
-	python3 -c "import ast, sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" ui/app.py tests/ui-offscreen.py
+	python3 -c "import ast, sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" ui/app.py tests/ui-offscreen.py tests/ui/e2e-front.py
 
 # The same findings as SARIF, for GitHub code scanning. ShellCheck exits
 # non-zero when it finds something; the file is still written then, and
@@ -31,3 +31,4 @@ test:
 # name, pictures of the pages: make test-ui UI_TEST_ARGS="--shots /tmp/shots pages"
 test-ui:
 	python3 -I tests/ui-offscreen.py $(UI_TEST_ARGS)
+	bash tests/ui-e2e.sh

@@ -270,7 +270,10 @@ Kirigami.ApplicationWindow {
             }
             slot.forceActiveFocus()
             var first = root.current && root.current.initialFocus ? root.current.initialFocus() : null
-            if (root.usable(first)) first.forceActiveFocus()
+            // A plain button shows that it has the focus by itself. A tick
+            // box or a row does not: it gets its ring, as after Tab, or
+            // Space would tick something never shown as focused.
+            if (root.usable(first)) first.forceActiveFocus(first.checkable === false ? Qt.OtherFocusReason : Qt.TabFocusReason)
         }
     }
 

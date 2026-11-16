@@ -96,11 +96,11 @@ All notable changes to this project are listed here. The format follows
   to be the ones it started (by process id and start time), and the window's
   own processes are signalled as the desktop user, not as root. A process
   that merely got the same id later cannot be hit.
-- The tool no longer waits for ever on a window that has gone or stopped
-  responding in an unusual way: one that ended while a program it started
-  still held one of its pipes, one that was stopped with a full pipe, one
-  that hung on the first page. It carries on with KDE dialogs, and when it
-  ends it always removes its private folder and gives up its lock.
+- The tool no longer waits for ever on a window that has gone: one that
+  ended while a program it started still held one of its pipes or kept
+  writing. It carries on with KDE dialogs. When the tool ends, also after
+  Ctrl-C pressed twice, a window that hangs or is stopped does not hold it
+  up: it always removes its private folder and gives up its lock.
 - A stray Enter or Space can no longer start a change in a question window.
   Where "Yes" changes the PC there and then (applying a fix in the plain
   dialog, each undo step, "Undo anyway", rolling back a failed fix, install,
