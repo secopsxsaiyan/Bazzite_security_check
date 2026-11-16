@@ -65,7 +65,8 @@ All notable changes to this project are listed here. The format follows
   show a ring when they have the keyboard focus. On the result page the
   area chips and the list of checks are one Tab stop each, and the arrow
   keys move inside them. The main button underlines its Alt key while Alt
-  is held. Screen readers get the messages in boxes and the text of a
+  is held, and a button has the same Alt key on every "Apply this fix?"
+  page. Screen readers get the messages in boxes and the text of a
   dialog as plain text. A dialog whose buttons do not fit next to each
   other stacks them. The control with the keyboard focus is always in view:
   a finding that is taller than the window shows its tick box and title,

@@ -34,6 +34,11 @@ ColumnLayout {
     // again), whatever the length of the text.
     QQC2.Button {
         visible: label.truncated || box.expanded
+        // No Alt key: this button is there on one page and not on the
+        // next, and would take a letter from a button that is always
+        // there (and, until the page has its size, it is there for a
+        // moment under a text that fits).
+        Kirigami.MnemonicData.enabled: false
         flat: true
         // Its icon lines up with the text above: the style keeps
         // about this much room left of the icon of a flat button

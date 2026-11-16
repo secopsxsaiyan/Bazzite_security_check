@@ -46,8 +46,10 @@ Kirigami.ApplicationWindow {
     readonly property int settleTime: 350
     // True until the page shown can be operated (tests wait for false).
     readonly property bool settling: settle.running
-    // Alt is held down, as far as the key events of this window tell. For
-    // the main button of a page that appears while it is: see
+    // Alt is held down, as far as the key events of this window tell (a
+    // release that never came here leaves it true until the next key
+    // event). It shows an underline and answers nothing: for the main
+    // button of a page that appears while Alt is held, see
     // PrimaryButton.qml.
     property bool altDown: false
     onActiveChanged: if (!active) altDown = false
@@ -157,10 +159,10 @@ Kirigami.ApplicationWindow {
         var over = isDialog && pageItem !== null && !pageIsDialog
         // The slot is made switched off, and switched on below, when what
         // it replaces is switched off: a button gets its Alt+letter key
-        // when it is switched on, from the letters no other button holds
-        // at that moment, and keeps it. So a button has the same key on
-        // every page, also on one that follows a page with the same
-        // buttons. (And once more when the page has settled: see deal().)
+        // when it is switched on, and the buttons of what is replaced
+        // would still hold their letters. So a page that follows one with
+        // the same buttons gives them the same keys. (A dialog that is
+        // replaced was switched off before: finish().)
         var slot = (over ? dialogSlotComponent : pageSlotComponent).createObject(over ? dialogLayer : pageLayer, { "enabled": false })
         made.slot = slot
         var item = component.createObject(slot, { "input": input, "iconSource": root.iconSource })
@@ -189,14 +191,14 @@ Kirigami.ApplicationWindow {
             })
         }
         if (over) {
-            if (dialogSlot) { dialogSlot.enabled = false; dialogSlot.destroy() }
+            if (dialogSlot) dialogSlot.destroy()
             dialogSlot = slot
             dialogItem = item
             slot.item = item        // the card takes the dialog's size
         } else {
             var old = pageSlot
             var resized = compact
-            if (dialogSlot) { dialogSlot.enabled = false; dialogSlot.destroy(); dialogSlot = null; dialogItem = null }
+            if (dialogSlot) { dialogSlot.destroy(); dialogSlot = null; dialogItem = null }
             // In this order: the size limits are lifted before the window
             // learns of a page that has no size of its own.
             pageIsDialog = isDialog
@@ -277,7 +279,6 @@ Kirigami.ApplicationWindow {
             var back = root.resume, ring = root.resumeRing
             root.resume = null
             if (!slot || root.pendingId === "") return
-            root.deal(slot)
             if (root.usable(back) && root.inside(back, slot)) {
                 // Straight to the control, not to its page first: inside
                 // the page it still has the focus, and would get the
@@ -292,17 +293,6 @@ Kirigami.ApplicationWindow {
             // Space would tick something never shown as focused.
             if (root.usable(first)) first.forceActiveFocus(first.checkable === false ? Qt.OtherFocusReason : Qt.TabFocusReason)
         }
-    }
-
-    // deal SLOT - the buttons of the page in SLOT get their Alt+letter keys
-    // afresh, in the order they are in on the page. A button that was
-    // there only until the page had its size (a "Show all details" under
-    // a text that fits after all) took a letter and gave it back to
-    // nobody. Nothing is drawn in between, and no control of the page has
-    // the keyboard focus at this moment.
-    function deal(slot) {
-        slot.enabled = false
-        slot.enabled = true
     }
 
     // The keyboard focus leaves the pages and stays with the window, where

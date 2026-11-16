@@ -1719,12 +1719,16 @@ def sc_guard():
         typed(k, alt, c.lower(), release=False)
         yield from answered("g9", "Alt+%s, the Skip button" % c)
         ask("g10", "confirm", data)
-        if (yield W(lambda: prop("pendingId") == "g10", "Alt keys, the page after: shown")):
+        shown = yield W(lambda: prop("pendingId") == "g10", "Alt keys, the page after: shown")
+        if not shown:
+            typed(k, alt, c.lower(), press=False)
+            typed(K().Key_Alt, press=False)
+        else:
             yield from held(k, c.lower(), 0.5, mod=alt)
             apply_ = main_button()
             check(apply_ is not None and apply_.property("showsKey") is True,
                   "the main button of a page that appears while Alt is held shows its Alt key")
-            check(alt_keys().get("Apply") == first.get("Apply"), "and it is the key it had on the page before: %r, before %r" % (alt_keys(), first))
+            check(alt_keys() == first, "a page that follows one with the same buttons has the same Alt keys, from the moment it appears: %r, before %r" % (alt_keys(), first))
             typed(k, alt, c.lower(), press=False)
             typed(K().Key_Alt, press=False)
             check(apply_ is not None and apply_.property("showsKey") is False, "and no longer when Alt is let go")
@@ -1733,6 +1737,29 @@ def sc_guard():
             no_answer("g10", "the key held since the page before did not answer it")
             key(Escape)
             yield from answered("g10", "Alt keys, the page after: Esc")
+        # A text too long for its lines brings a "Show all details" button:
+        # it takes no letter from the buttons that are on every page.
+        if (yield from show("g11", "confirm", dict(data, detail="A long line of text about this fix. " * 60), "Alt keys, a long text")):
+            more = button("Show all details")
+            keys = alt_keys()
+            check(more is not None and "Show all details" not in keys and dict(keys) == first,
+                  "a page with a \"Show all details\" button has the same Alt keys: %r, before %r" % (keys, first))
+            key(Escape)
+            yield from answered("g11", "Alt keys, a long text: Esc")
+    # The same for what replaces a dialog: a dialog after a dialog, and a
+    # page after a dialog, with the labels of that page on the dialog's
+    # buttons.
+    same = {"kind": "question", "title": "Go on?", "html": "Skip or apply?", "buttons": [{"label": "Skip"}, {"label": "Apply"}]}
+    if (yield from show("g12", "choose", choose, "Alt keys, a page under a dialog")):
+        if (yield from show("g13", "dialog", same, "Alt keys, a dialog")):
+            one = alt_keys()
+            check(len(one) == 2 and len(set(one.values())) == 2, "both buttons of a dialog have an Alt key of their own: %r" % one)
+            if (yield from show("g14", "dialog", same, "Alt keys, a dialog after a dialog")):
+                check(alt_keys() == one, "a dialog that replaces one with the same buttons has the same Alt keys: %r, before %r" % (alt_keys(), one))
+                if (yield from show("g15", "confirm", data, "Alt keys, a page after a dialog")):
+                    check(alt_keys() == first, "a page that replaces a dialog with its buttons' labels has its usual Alt keys: %r, usually %r" % (alt_keys(), first))
+                    key(Escape)
+                    yield from answered("g15", "Alt keys, a page after a dialog: Esc")
 
     # 3. Auto-repeat alone, handed to the window by a program (the press
     # itself was never seen here).
@@ -3592,7 +3619,7 @@ def main():
     env.update({
         # BSA_UI_TEST_PLATFORM=wayland (or xcb) runs the same scenarios in
         # real windows of the session, for a look at them on a real desktop.
-        "QT_QPA_PLATFORM": os.environ.get("BSA_UI_TEST_PLATFORM", "offscreen"),
+        "QT_QPA_PLATFORM": os.environ.get("BSA_UI_TEST_PLATFORM") or "offscreen",
         "QT_FORCE_STDERR_LOGGING": "1",
         # Qt's messages as they are, whatever the person has set.
         "QT_MESSAGE_PATTERN": "%{if-category}%{category}: %{endif}%{message}",
