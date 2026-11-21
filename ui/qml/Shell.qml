@@ -200,12 +200,13 @@ Kirigami.ApplicationWindow {
             var resized = compact
             if (dialogSlot) { dialogSlot.destroy(); dialogSlot = null; dialogItem = null }
             // In this order: the size limits are lifted before the window
-            // learns of a page that has no size of its own.
-            pageIsDialog = isDialog
+            // learns of a page that has no size of its own (and while the
+            // small window still has the size of what it shows).
             if (!isDialog && compact) {
                 compact = false
                 fit()
             }
+            pageIsDialog = isDialog
             pageSlot = slot
             pageItem = item
             if (old) {
@@ -376,6 +377,9 @@ Kirigami.ApplicationWindow {
         return !!item && item.visible && item.enabled && item.focusPolicy !== Qt.NoFocus
     }
     function sawKey(event, down) {
+        // A held key that repeats comes as a release and a press: the
+        // release half of a repeating Alt does not mean Alt is up.
+        if (event.key === Qt.Key_Alt && event.isAutoRepeat) return
         altDown = event.key === Qt.Key_Alt ? down : (event.modifiers & Qt.AltModifier) !== 0
     }
     function keyPressed(event) {

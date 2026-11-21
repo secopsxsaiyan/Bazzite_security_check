@@ -35,6 +35,8 @@ All notable changes to this project are listed here. The format follows
 - A question or message that comes before any page (for example from
   "Install", "Uninstall" or "Update" in the menu) shows as a small window of
   its own size, which grows into the main window when the first page comes.
+  On the way it is never given a width or height of 0, which a Wayland
+  desktop answers by closing the program.
 - Closing the window answers the current page as "cancelled", as before. It
   never stops a fix that is being applied.
 - Enter does the page's main action and Esc goes back or cancels on every

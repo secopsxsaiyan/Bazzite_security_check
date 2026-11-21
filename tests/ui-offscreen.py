@@ -1732,11 +1732,21 @@ def sc_guard():
         else:
             # Before any repeat: Alt is still known to be down from its press.
             apply_ = main_button()
-            check(prop("altDown") is True and apply_ is not None and apply_.property("showsKey") is True,
+            drawn = next((i for i in items_under(apply_) if i.inherits("QQuickText")), None) if apply_ is not None else None
+
+            def underlined():
+                """The main button says it shows its Alt key, and its label draws it."""
+                return (apply_ is not None and apply_.property("showsKey") is True
+                        and drawn is not None and "<u>" in (drawn.property("text") or ""))
+            check(prop("altDown") is True and underlined(),
                   "the main button of a page that appears while Alt is held shows its Alt key at once (from the press, before a repeat)")
+            # Alt itself held long enough to repeat: the release half of a
+            # repeat is not Alt let go.
+            typed(K().Key_Alt, alt, press=False, repeat=True)
+            check(prop("altDown") is True and underlined(), "the release half of a repeating Alt leaves Alt down and the key shown")
+            typed(K().Key_Alt, alt, release=False, repeat=True)
             yield from held(k, c.lower(), 0.5, mod=alt)
-            check(apply_ is not None and apply_.property("showsKey") is True,
-                  "the main button of a page that appears while Alt is held shows its Alt key")
+            check(underlined(), "the main button of a page that appears while Alt is held shows its Alt key")
             check(alt_keys() == first, "a page that follows one with the same buttons has the same Alt keys, from the moment it appears: %r, before %r" % (alt_keys(), first))
             typed(k, alt, c.lower(), press=False)
             typed(K().Key_Alt, press=False)
@@ -1744,6 +1754,26 @@ def sc_guard():
             yield from settled("Alt keys, the page after")
             check(alt_keys() == first, "a page that follows one with the same buttons has the same Alt keys: %r, before %r" % (alt_keys(), first))
             no_answer("g10", "the key held since the page before did not answer it")
+            # Alt held when another window takes over (Alt+Tab): its release
+            # goes there, so the window forgets Alt when it is no longer active.
+            if shell.isActive():
+                from PySide6.QtGui import QWindow
+                other = QWindow()
+                other.resize(50, 50)
+                typed(K().Key_Alt, alt, release=False)
+                down = prop("altDown") is True
+                other.show()
+                other.requestActivate()
+                left = yield W(lambda: not shell.isActive(), "Alt keys: another window takes over")
+                # (Kirigami's own MnemonicData.active is its business: it
+                # too never saw the release.)
+                check(down and left and prop("altDown") is False,
+                      "Alt held when another window takes over: the window forgets it (down before %s, left %s, altDown %s)"
+                      % (down, left, prop("altDown")))
+                other.destroy()
+                shell.requestActivate()
+                yield W(lambda: shell.isActive(), "Alt keys: the window is active again")
+                typed(K().Key_Alt, press=False)     # leave nothing held for the steps after
             key(Escape)
             yield from answered("g10", "Alt keys, the page after: Esc")
         # A text too long for its lines brings a "Show all details" button:
