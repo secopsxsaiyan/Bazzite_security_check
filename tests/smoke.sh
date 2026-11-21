@@ -803,8 +803,8 @@ Update failed for custom database URL: ${P2}"; case_
     # As freshclam words a refusal (403): two updates are needed, one is a note.
     printf 'DatabaseCustomURL %s\nDatabaseCustomURL %s\n' "$P1" "$P2" > "$CR/etc/freshclam.conf"
     F403="WARNING: Can't download x.ndb.old from ${P2}
-FreshClam received error code 403 from the ClamAV Content Delivery Network (CDN).
-You are on cool-down until after: 2026-11-21 02:00:00"
+WARNING: FreshClam received error code 403 from the ClamAV Content Delivery Network (CDN).
+WARNING: You are on cool-down until after: 2026-11-21 02:00:00"
     FCLOG="${RUN}"$'\n'"${F403}"; case_
     [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"x.ndb.old (HTTP 403); it may work next time"* ]] && echo "refusal-once-is-a-note"
     FCLOG="${RUN}"$'\n'"${F403}"$'\n'"${RUN}"$'\n'"${F403}"; case_
@@ -812,6 +812,10 @@ You are on cool-down until after: 2026-11-21 02:00:00"
     # A rate limit (429) is never "gone"; something that is not a database is, after two updates.
     F429="${F403//403/429}"; FCLOG="${RUN}"$'\n'"${F429}"$'\n'"${RUN}"$'\n'"${F429}"; case_
     [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"(HTTP 429); it may work next time"* ]] && echo "rate-limit-is-a-note"
+    # freshclam goes on after a rate limit: the source after it is not said to be left out.
+    printf 'DatabaseCustomURL %s\nDatabaseCustomURL https://later.example/after.hdb\n' "$P2" > "$CR/etc/freshclam.conf"; case_
+    [[ "${CHECK_NOTE[check_deep_malware]:-}" == *"(HTTP 429); it may work next time."* && "${CHECK_NOTE[check_deep_malware]:-}" != *"stopped there"* ]] && echo "rate-limit-stops-nothing"
+    printf 'DatabaseCustomURL %s\nDatabaseCustomURL %s\n' "$P1" "$P2" > "$CR/etc/freshclam.conf"
     NOTDB="Unexpected error when attempting to update from custom database URL: ${P2}"
     FCLOG="${RUN}"$'\n'"${NOTDB}"$'\n'"${RUN}"$'\n'"${NOTDB}"; case_
     [[ "${F_DETAIL[0]:-}" == *"x.ndb.old (not a database)"* ]] && echo "not-a-database-in-two-updates"
@@ -841,6 +845,7 @@ WARNING: downloadFile: Unexpected response (410) from https://b.example/b.ndb"; 
     # A user name and password, and a quoted address.
     [[ "$(_clamav_url_label "https://api:SECRET@sigs.example/db.ndb")" == "sigs.example/db.ndb" && "$(_clamav_url_label "https://SECRET@api.example/v1/x/db.ndb")" == "api.example/…/db.ndb" \
        && "$(_clamav_custom_file "https://q.example/a/q.ndb?key=SECRET")" == "q.ndb?key=SECRET" && "$(_clamav_url_label "https://q.example/a/q.ndb?key=SECRET")" == "q.example/…/q.ndb" \
+       && "$(_clamav_custom_file "https://q.example/a/f.hdb#frag")" == "f.hdb#frag" \
        && "$(_clamav_custom_urls | tail -n 1)" == "https://z.example/z.ndb" ]] && echo "labels-without-credentials-and-quotes"
     # The fix, run on a copy of a freshclam.conf: only the failing line gets a #, the rest stays; undo puts it back.
     STATE_DIR="$W/clam-state"; RUN_ID=t5b; CURRENT_FINDING=0
@@ -887,7 +892,7 @@ for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-no
          extra-source-fix-fails-when-nothing-matches refusal-once-is-a-note refusal-in-two-updates-is-a-finding file-there-means-it-worked \
          logtime-failure-counts logtime-success-clears official-line-clears-no-source no-promise-while-an-earlier-source-fails \
          definitions-fix-follows-exclusions restart-failure-keeps-the-change rate-limit-is-a-note not-a-database-in-two-updates \
-         undo-restart-failure-keeps-the-restore; do
+         undo-restart-failure-keeps-the-restore rate-limit-stops-nothing; do
     expect "$W/clam.out" "$t" "$t"
 done
 

@@ -452,10 +452,10 @@ _clamav_custom_urls() {
     return 0
 }
 
-# _clamav_custom_file URL — the name freshclam saves URL's database under.
+# _clamav_custom_file URL — the name freshclam saves URL's database under:
+# all after the last "/", a query or fragment included.
 _clamav_custom_file() {
-    local u="${1%%#*}"
-    printf '%s' "${u##*/}"
+    printf '%s' "${1##*/}"
 }
 
 # _clamav_url_label URL — URL as the report shows it: the host and the
@@ -495,7 +495,7 @@ _clamav_custom_failed() {
     _clamav_fc_log | python3 -I -c '
 import re, sys
 urls = sys.argv[1:]
-files = {u: u.split("#")[0].rsplit("/", 1)[-1] for u in urls}
+files = {u: u.rsplit("/", 1)[-1] for u in urls}
 state, runs, worked, run, last = {}, {}, set(), 0, None
 stamp = re.compile(r"^[A-Z][a-z]{2} [A-Z][a-z]{2} +\d+ \d\d:\d\d:\d\d \d{4} -> ")
 for line in sys.stdin:
@@ -557,9 +557,12 @@ _clamav_custom_check() {
         why["$u:g"]="$g"
     done < <(_clamav_custom_failed "${urls[@]}")
     for u in "${urls[@]}"; do
-        if [[ -n "${why[$u]:-}" ]]; then
+        # freshclam goes on after a rate limit (429), and stops at any other failure.
+        if [[ -n "${why[$u]:-}" && "${why[$u]}" != "HTTP 429" ]]; then
             [[ -z "$first" ]] && firstgone="${why[$u:g]}"
             first=1
+        elif [[ -n "${why[$u]:-}" ]]; then
+            :
         elif [[ -n "$first" ]]; then
             after+="${after:+, }$(_clamav_url_label "$u")"
         elif [[ ! -f "$(_r "$dir")/$(_clamav_custom_file "$u")" ]]; then
