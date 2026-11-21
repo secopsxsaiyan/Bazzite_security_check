@@ -365,30 +365,44 @@ _clamav_db_dir() {
 }
 
 # _clamav_defs_age DIR — days since the daily definitions in DIR were last
-# written; status 1 (and nothing) when DIR lacks the main or the daily set,
-# which ClamAV needs both of.
+# written. Status 1 with "none" (no definitions at all) or "partial" (the
+# main or the daily set is missing: ClamAV needs both) instead.
 _clamav_defs_age() {
-    local dir f t newest=0 main=0
+    local dir f t newest=0 main=0 any=0
     dir=$(_r "$1")
     for f in "$dir/main.cvd" "$dir/main.cld"; do
-        [[ -f "$f" && ! -L "$f" && -s "$f" ]] && main=1
+        [[ -f "$f" && ! -L "$f" && -s "$f" ]] && { main=1; any=1; }
     done
     for f in "$dir/daily.cvd" "$dir/daily.cld"; do
         [[ -f "$f" && ! -L "$f" && -s "$f" ]] || continue
+        any=1
         t=$(stat -c %Y -- "$f" 2>/dev/null) || continue
         (( t > newest )) && newest=$t
     done
-    (( main == 1 && newest > 0 )) || return 1
+    if (( main == 0 || newest == 0 )); then
+        (( any )) && printf 'partial' || printf 'none'
+        return 1
+    fi
     t=$(( ( $(date +%s) - newest ) / 86400 ))
     (( t < 0 )) && t=0
     printf '%s' "$t"
 }
 
-# _clamav_pending — ClamAV is layered in a system image that has not been
-# started yet (the fix below ran, the restart did not).
+# _clamav_pending PACKAGE... — those of PACKAGE that a system image ahead
+# of the running one requests: layered, waiting for the restart. The
+# rollback image (behind the running one) does not count.
 _clamav_pending() {
-    [[ -n "${RPMOSTREE_JSON:-}" ]] || return 1
-    [[ "$(_pyjson 'any(not x.get("booted") and "clamav" in (x.get("requested-packages") or []) for x in d.get("deployments", []))' <<< "$RPMOSTREE_JSON" 2>/dev/null)" == "true" ]]
+    [[ -n "${RPMOSTREE_JSON:-}" ]] || return 0
+    python3 -I -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except ValueError:
+    sys.exit(0)
+deps = [x for x in (d.get("deployments") or []) if isinstance(x, dict)]
+booted = next((i for i, x in enumerate(deps) if x.get("booted")), 0)
+ahead = [x for i, x in enumerate(deps) if x.get("staged") or i < booted]
+print(" ".join(p for p in sys.argv[1:] if any(p in (x.get("requested-packages") or []) for x in ahead)))' "$@" <<< "$RPMOSTREE_JSON" 2>/dev/null || true
 }
 
 # _clamav_not_set_up CLAMUI HOST MISSING... — part of ClamAV is not
@@ -423,7 +437,7 @@ Flathub brings its own ClamAV; ClamUI uses the system's (this fix)."
 systemctl reboot
 Then run the check again: it offers to download the virus definitions." \
             fix_clamav_install "${missing[@]}"
-        finding_change "not installed: ${missing[*]}" "layered on the system image: ${missing[*]} (after a restart)" "$W_DOWNLOAD"
+        finding_change "not installed: ${missing[*]}" "layered on the system image: ${missing[*]} (after a restart)" "$W_DOWNLOAD" "$W_REBOOT"
     else
         finding "$sev" "$title" "$detail" "sudo dnf install ${missing[*]}
 sudo freshclam"
@@ -440,40 +454,59 @@ fix_clamav_install() {
         "layer ClamAV on the system image"
 }
 
-# fix_clamav_defs SERVICE_STATE — download the virus definitions now and
-# keep them up to date with clamav-freshclam.service. The service is
-# stopped while freshclam runs (both would take the same lock).
-fix_clamav_defs() {
-    local prev="$1" unit="clamav-freshclam.service" script="" undo=""
-    script+="systemctl stop ${unit} 2>/dev/null || true"$'\n'
-    script+="freshclam"$'\n'
-    case "$prev" in
-        enabled|enabled-runtime|static|indirect|alias) script+="systemctl start ${unit}" ;;
-        masked) script+="systemctl unmask ${unit}"$'\n'"systemctl enable --now ${unit}"
-                undo="systemctl disable --now ${unit}"$'\n'"systemctl mask ${unit}" ;;
-        missing) script="freshclam" ;;
-        *) script+="systemctl enable --now ${unit}"
-           undo="systemctl disable --now ${unit}" ;;
+# _freshclam_plan STATE — what fix_clamav_defs does with
+# clamav-freshclam.service in this state (systemctl is-enabled): "on"
+# (it already runs or starts with the system), "masked",
+# "masked-runtime", "none" (not installed) or "off".
+_freshclam_plan() {
+    case "$1" in
+        enabled|enabled-runtime|static|indirect|alias|generated|transient) echo on ;;
+        masked|masked-runtime) echo "$1" ;;
+        missing|not-found|bad|"") echo none ;;
+        *) echo off ;;
     esac
+}
+
+# fix_clamav_defs SERVICE_STATE — download the virus definitions now and
+# keep them up to date with clamav-freshclam.service. freshclam and the
+# service take the same lock, so the service is stopped while freshclam
+# runs. It is started (or turned on) afterwards even when the download
+# fails: the fix then fails, but the automatic updates are not left off.
+fix_clamav_defs() {
+    local unit="clamav-freshclam.service" script="rc=0"$'\n' undo=""
+    case "$(_freshclam_plan "$1")" in
+        on)   script+="systemctl stop ${unit} 2>/dev/null || true"$'\n'"freshclam || rc=\$?"$'\n'"systemctl start ${unit}" ;;
+        masked)
+              script+="freshclam || rc=\$?"$'\n'"systemctl unmask ${unit}"$'\n'"systemctl enable --now ${unit}"
+              undo="systemctl disable --now ${unit}"$'\n'"systemctl mask ${unit}" ;;
+        masked-runtime)
+              script+="freshclam || rc=\$?"$'\n'"systemctl unmask --runtime ${unit}"$'\n'"systemctl enable --now ${unit}"
+              undo="systemctl disable --now ${unit}"$'\n'"systemctl mask --runtime ${unit}" ;;
+        none) script+="freshclam || rc=\$?" ;;
+        *)    script+="systemctl stop ${unit} 2>/dev/null || true"$'\n'"freshclam || rc=\$?"$'\n'"systemctl enable --now ${unit}"
+              undo="systemctl disable --now ${unit}" ;;
+    esac
+    script+=$'\n'"exit \"\$rc\""
     apply_change "$script" "$undo" \
         "$([[ -n $undo ]] && echo "Undo turns the automatic updates off again; the downloaded definitions stay.")"
 }
 
-# _clamav_defs_finding SEV TITLE DETAIL DIR — a finding whose fix downloads
-# the definitions (and turns on their automatic update).
+# _clamav_defs_finding SEV TITLE DETAIL DIR NOW — a finding whose fix
+# downloads the definitions (and turns on their automatic update); NOW is
+# what the definitions in DIR are like at present.
 _clamav_defs_finding() {
-    local sev="$1" title="$2" detail="$3" dir="$4" svc after
+    local sev="$1" title="$2" detail="$3" dir="$4" now="$5" svc after manual="sudo freshclam"
     svc=$(_unit_state clamav-freshclam.service)
     after="definitions downloaded now"
-    case "$svc" in
-        enabled|enabled-runtime|static|indirect|alias|missing) ;;
-        *) after+=", then updated automatically (clamav-freshclam.service)" ;;
+    case "$(_freshclam_plan "$svc")" in
+        on|none) ;;
+        masked*) after+=", then updated automatically (clamav-freshclam.service)"
+                 manual+=$'\n'"sudo systemctl unmask clamav-freshclam.service"$'\n'"sudo systemctl enable --now clamav-freshclam.service   (keeps them up to date)" ;;
+        *)       after+=", then updated automatically (clamav-freshclam.service)"
+                 manual+=$'\n'"sudo systemctl enable --now clamav-freshclam.service   (keeps them up to date)" ;;
     esac
-    finding "$sev" "$title" "$detail" \
-"sudo freshclam
-sudo systemctl enable --now clamav-freshclam.service   (keeps them up to date)" \
-        fix_clamav_defs "$svc"
-    finding_change "${dir}: $5" "$after" "$W_DOWNLOAD"
+    finding "$sev" "$title" "$detail" "$manual" fix_clamav_defs "$svc"
+    finding_change "${dir}: ${now}" "$after" "$W_DOWNLOAD"
 }
 
 check_deep_malware() {
@@ -490,12 +523,21 @@ check_deep_malware() {
     # What is missing matters with ClamUI (which needs the system's
     # ClamAV), for the system's clamscan without freshclam, and when there
     # is no scanner at all. ClamTk alone brings both.
+    # A package already layered in the image that waits for the restart is
+    # not offered again; the note says so.
+    local pending="" p
+    local -a still=()
     if [[ ${#missing[@]} -gt 0 ]] && [[ $clamui -eq 1 || $host -eq 1 || ${#scanner[@]} -eq 0 ]]; then
-        if _clamav_pending; then
-            [[ ${#scanner[@]} -eq 0 ]] && { mark_skip "ClamAV is in the system update that waits for a restart; restart the PC, then run the check again"; return 0; }
-        else
-            _clamav_not_set_up "$clamui" "$host" "${missing[@]}"
-        fi
+        pending=$(_clamav_pending "${missing[@]}")
+        for p in "${missing[@]}"; do
+            [[ " ${pending} " == *" ${p} "* ]] || still+=("$p")
+        done
+        [[ -n "$pending" ]] && check_note "Layered, waiting for the restart: ${pending}"
+        [[ ${#still[@]} -gt 0 ]] && _clamav_not_set_up "$clamui" "$host" "${still[@]}"
+    fi
+    if [[ ${#scanner[@]} -eq 0 && " ${pending} " == *" clamav "* ]]; then
+        mark_skip "ClamAV is in the system update that waits for a restart; restart the PC, then run the check again"
+        return 0
     fi
     if [[ ${#scanner[@]} -eq 0 ]]; then
         mark_skip "ClamAV is not installed$([[ $clamui -eq 0 ]] && echo " (ClamTk from Flathub brings its own; ClamUI needs the system's ClamAV)")"
@@ -505,22 +547,23 @@ check_deep_malware() {
         db=$(_clamav_db_dir)
         svc=$(_unit_state clamav-freshclam.service)
         if ! age=$(_clamav_defs_age "$db"); then
+            local what="no virus definitions"
+            [[ "$age" == partial ]] && what="an incomplete set of virus definitions (main and daily are both needed)"
             if ! _have freshclam; then
-                mark_skip "ClamAV has no virus definitions in ${db}, and freshclam, which downloads them, is not installed"
+                mark_skip "ClamAV has ${what} in ${db}, and freshclam, which downloads them, is not installed"
                 return 0
             fi
-            _clamav_defs_finding medium "ClamAV has no virus definitions" \
-"ClamAV is installed, but ${db} does not hold a complete set of virus
-definitions (main and daily), so it cannot scan$([[ $clamui -eq 1 ]] && echo " - in ClamUI either"). The malware scan was
-left out." "$db" "no virus definitions"
-            mark_skip "ClamAV has no virus definitions in ${db}"
+            _clamav_defs_finding medium "$([[ $age == partial ]] && echo "ClamAV's virus definitions are incomplete" || echo "ClamAV has no virus definitions")" \
+"ClamAV is installed, but ${db} holds ${what}, so it cannot
+scan$([[ $clamui -eq 1 ]] && echo " - in ClamUI either"). The malware scan was left out." "$db" "$what"
+            mark_skip "ClamAV has ${what} in ${db}"
             return 0
         fi
         check_note "Virus definitions: updated ${age} day(s) ago (clamav-freshclam.service: ${svc})$([[ $clamui -eq 1 ]] && echo "; ClamUI uses this ClamAV")"
         if (( age > _CLAMAV_DEFS_OLD )) && _have freshclam; then
             _clamav_defs_finding low "ClamAV's virus definitions are ${age} days old" \
 "New malware is added to the definitions every day; with definitions ${age} days old
-the scan misses what came since. They are not being updated$([[ $svc == enabled ]] && echo " although clamav-freshclam.service is on (see: journalctl -u clamav-freshclam.service)" || echo " automatically (clamav-freshclam.service is ${svc})")." \
+the scan misses what came since. They are not being updated$([[ $(_freshclam_plan "$svc") == on ]] && echo " although clamav-freshclam.service is on (see: journalctl -u clamav-freshclam.service)" || echo " automatically (clamav-freshclam.service is ${svc})")." \
                 "$db" "last updated ${age} days ago"
         fi
     fi
@@ -588,7 +631,7 @@ alarm), then change passwords used on this PC if one of them was run."
 (${first:-exit ${rc}}). They may be damaged or half written; a fresh download
 replaces them." "$db" "definitions that do not load"
         fi
-        mark_skip "ClamAV could not load its virus definitions (${first:-exit ${rc}})"
+        mark_skip "ClamAV could not load its virus definitions (${first:-exit ${rc}})$([[ $host -eq 0 ]] && echo "; open ClamTk once to download them")"
     elif [[ $rc -ne 0 && $rc -ne 1 && $rc -ne 2 ]]; then
         mark_skip "the scan did not finish (exit ${rc}${first:+: ${first}})"
     else
