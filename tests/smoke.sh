@@ -2035,7 +2035,7 @@ for line in open(sys.argv[1]):
         rc=0; _run_change "t6 half" "echo half > $W/t6-half; exit 1" "rm -f $W/t6-half" > /dev/null 2>&1 || rc=$?
         [[ $rc -eq 3 && -e "$W/t6-half" && -f "$STATE_DIR/undo/t6left/01-undo.sh" ]] \
             && grep -qx '# TITLE: t6 half (did not complete)' "$STATE_DIR/undo/t6left/01-undo.sh" && echo "failed-fix-left-keeps-undo"
-        # ... one that is rolled back keeps no step to undo (it is marked done) ...
+        # ... one that is rolled back keeps no step to undo (it is marked rolled back) ...
         RUN_ID="t6back"; ui_yesno() { return 0; }
         _run_change "t6 back" "echo half > $W/t6-back; exit 1" "rm -f $W/t6-back" > /dev/null 2>&1
         [[ ! -e "$W/t6-back" && -z "$(compgen -G "$STATE_DIR/undo/t6back/*-undo.sh")" && -f "$STATE_DIR/undo/t6back/01-undo.rolledback" ]] && echo "failed-fix-rolled-back-keeps-nothing"
@@ -2046,6 +2046,12 @@ for line in open(sys.argv[1]):
         _sync_undone > /dev/null 2>&1
         [[ "${F_STATE[7]}" == fixed && "${F_VERIFY[7]}" != undone ]] && echo "rolled-back-attempt-not-an-undo" || echo "sync after rollback: ${F_STATE[7]} ${F_VERIFY[7]}"
         CURRENT_FINDING=""
+        # A signal while the rollback runs waits until it is marked rolled back.
+        RUN_ID="t6rbsig"
+        ( trap _on_signal INT TERM HUP; pid=$BASHPID
+          _run_change "t6 rbsig" "exit 1" "kill -HUP $pid; sleep 1" ) > /dev/null 2>&1; rc=$?
+        [[ $rc -eq 130 && -f "$STATE_DIR/undo/t6rbsig/01-undo.rolledback" ]] && echo "rollback-interrupted-is-marked" \
+            || echo "rbsig rc=$rc $(ls "$STATE_DIR/undo/t6rbsig" | tr '\n' ' ')"
         # ... one whose rollback fails keeps its step, once ...
         RUN_ID="t6bad"
         _run_change "t6 bad" "echo half > $W/t6-bad; exit 1" "exit 4" > /dev/null 2>&1
@@ -2056,6 +2062,11 @@ for line in open(sys.argv[1]):
         _run_change "t6 leave" "echo half > $W/t6-leave; exit 1" "rm -f $W/t6-leave" > /dev/null 2>&1
         UI_MODE=none
         [[ -f "$STATE_DIR/undo/t6leave/01-undo.sh" ]] && grep -q '"t6 leave" was left as it is. Its undo step was kept' "$W/t6-leave-msg" && echo "failed-fix-left-says-so"
+        # ... but on the terminal only the printed line says it (no second copy in a window).
+        RUN_ID="t6leavetty"; : > "$W/t6-leave-msg"; UI_MODE="tty"
+        _run_change "t6 leave tty" "echo half > $W/t6-leavetty; exit 1" "rm -f $W/t6-leavetty" > /dev/null 2>&1
+        UI_MODE=none
+        [[ -f "$STATE_DIR/undo/t6leavetty/01-undo.sh" && ! -s "$W/t6-leave-msg" ]] && echo "failed-fix-left-not-twice-on-terminal"
         # ... and one interrupted at the rollback question keeps it too.
         RUN_ID="t6hup"; ui_yesno() { kill -HUP "$BASHPID"; sleep 1; return 1; }; : > "$W/t6-hup-msg"
         ( UI_MODE=kde; ui_msg() { echo left >> "$W/t6-hup-msg"; }; trap _on_signal INT TERM HUP
@@ -2135,7 +2146,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          kdialog-enter-is-not-yes kdialog-failure-asks-on kdialog-wrapper-failure-is-not-yes kdialog-own-exit-1-is-yes \
          kdialog-own-exits-mapped failed-fix-left-keeps-undo failed-fix-rolled-back-keeps-nothing tty-enter-is-no-for-a-change \
          failed-rollback-keeps-undo-once failed-fix-interrupted-at-question-keeps-undo action-end-after-lost-window \
-         failed-fix-left-says-so rolled-back-attempt-not-an-undo; do
+         failed-fix-left-says-so rolled-back-attempt-not-an-undo rollback-interrupted-is-marked failed-fix-left-not-twice-on-terminal; do
     expect "$W/t6.out" "$m" "$m"
 done
 # --install and the other actions that change the PC only after a "yes"

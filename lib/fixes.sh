@@ -308,7 +308,7 @@ _run_change() {
     elif [[ -n "$undo" ]]; then
         # Failed: the undo step is kept for --undo before anything else
         # happens (an interruption, or the rollback question below), and
-        # marked done only if the rollback works.
+        # marked rolled back only if the rollback works.
         _undo_record "${title} (did not complete)" "$undo"
         kept="$_UNDO_LAST"
         log "failed fix: its undo step was kept"
@@ -671,7 +671,8 @@ _undo_record() {
     local dir n f
     dir=$(_undo_dir)
     mkdir -p "$dir" && chmod 700 "$dir"
-    # Steps already undone (.done) keep their number.
+    # Steps already undone (.done) or rolled back (.rolledback) keep their
+    # number.
     n=$(find "$dir" -maxdepth 1 -name '[0-9][0-9]-undo.*' 2>/dev/null | wc -l)
     f=$(printf '%s/%02d-undo.sh' "$dir" $((n + 1)))
     {
