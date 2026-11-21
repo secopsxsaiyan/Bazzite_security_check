@@ -48,7 +48,7 @@ Kirigami.ApplicationWindow {
     readonly property bool settling: settle.running
     // Alt is held down, as far as the key events of this window tell (a
     // release that never came here leaves it true until the next key
-    // event). It shows an underline and answers nothing: for the main
+    // event, or until the window is no longer active). It shows an underline and answers nothing: for the main
     // button of a page that appears while Alt is held, see
     // PrimaryButton.qml.
     property bool altDown: false

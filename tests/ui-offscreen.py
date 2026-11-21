@@ -731,11 +731,14 @@ def sc_shell():
     small = (shell.width(), shell.height())
     # Every size the window takes from here on (a Wayland compositor ends a
     # program whose window asks for a width or height of 0).
-    # Off-screen the size itself is not seen to change, but the limits the
-    # window is given are, and they come from the same values.
+    # Off-screen the size itself is seen to change only once, to the final
+    # one; the limits the window is given show every step on the way, and
+    # they come from the same values.
     sizes = [small]
     shell.minimumWidthChanged.connect(lambda *a: sizes.append((shell.minimumWidth(), shell.minimumHeight())))
     shell.minimumHeightChanged.connect(lambda *a: sizes.append((shell.minimumWidth(), shell.minimumHeight())))
+    shell.widthChanged.connect(lambda *a: sizes.append((shell.width(), shell.height())))
+    shell.heightChanged.connect(lambda *a: sizes.append((shell.width(), shell.height())))
     check(prop("compact") is True and prop("dialogItem") is None, "dialog first: a small window of its own (%dx%d)" % small)
     check(shell.title() == S["dialog"]["title"], "dialog first: window title %r" % shell.title())
     shot("shell-dialog-first")
@@ -764,6 +767,10 @@ def sc_shell():
         check(prop("busyShown") is False, "first page: no longer busy")
         empty = [x for x in sizes if x[0] <= 0 or x[1] <= 0]
         check(not empty, "from the small window to the first page: the window was never told to have no width or height: %s" % empty[:3])
+        # Nor to be smaller than the small window first (a default size of
+        # its own on the way would show as a flash).
+        smaller = [x for x in sizes if x[0] < small[0] or x[1] < small[1]]
+        check(not smaller, "from the small window to the first page: it only grows, never smaller than %dx%d on the way: %s" % (small + (smaller[:3],)))
         # A label while a page waits for its answer is dropped.
         send({"busy": "Later"})
         yield P(0.3)
@@ -1750,14 +1757,15 @@ def sc_guard():
             check(alt_keys() == first, "a page that follows one with the same buttons has the same Alt keys, from the moment it appears: %r, before %r" % (alt_keys(), first))
             typed(k, alt, c.lower(), press=False)
             typed(K().Key_Alt, press=False)
-            check(apply_ is not None and apply_.property("showsKey") is False, "and no longer when Alt is let go")
+            check(apply_ is not None and apply_.property("showsKey") is False and drawn is not None and "<u>" not in (drawn.property("text") or ""),
+                  "and no longer when Alt is let go")
             yield from settled("Alt keys, the page after")
             check(alt_keys() == first, "a page that follows one with the same buttons has the same Alt keys: %r, before %r" % (alt_keys(), first))
             no_answer("g10", "the key held since the page before did not answer it")
             # Alt held when another window takes over (Alt+Tab): its release
             # goes there, so the window forgets Alt when it is no longer active.
+            from PySide6.QtGui import QGuiApplication, QWindow
             if shell.isActive():
-                from PySide6.QtGui import QWindow
                 other = QWindow()
                 other.resize(50, 50)
                 typed(K().Key_Alt, alt, release=False)
@@ -1774,6 +1782,10 @@ def sc_guard():
                 shell.requestActivate()
                 yield W(lambda: shell.isActive(), "Alt keys: the window is active again")
                 typed(K().Key_Alt, press=False)     # leave nothing held for the steps after
+            elif QGuiApplication.platformName() == "offscreen":
+                check(False, "Alt keys: the window is active, so another window can take over")
+            else:
+                say("     skipped: the window is not active, so \"another window takes over\" was not checked")
             key(Escape)
             yield from answered("g10", "Alt keys, the page after: Esc")
         # A text too long for its lines brings a "Show all details" button:
