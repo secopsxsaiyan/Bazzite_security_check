@@ -267,8 +267,11 @@ _pkg_run() {
     shift 2
     local -a cmd
     case "$tool:$verb" in
-        rpm-ostree:install)   cmd=(rpm-ostree install --idempotent -- "$@") ;;
-        rpm-ostree:uninstall) cmd=(rpm-ostree uninstall --idempotent -- "$@") ;;
+        # (No "--" for rpm-ostree: its option parser then finds no package
+        # at all. The names come only from _FRONT_PKGS_KNOWN, none starts
+        # with "-".)
+        rpm-ostree:install)   cmd=(rpm-ostree install --idempotent "$@") ;;
+        rpm-ostree:uninstall) cmd=(rpm-ostree uninstall --idempotent "$@") ;;
         dnf:install)          cmd=(dnf install -y -- "$@") ;;
         dnf:uninstall)        cmd=(dnf remove -y -- "$@") ;;
         *) return 2 ;;
@@ -343,6 +346,7 @@ install_front_end() {
     if ! ui_yesno "Security Check's window (one window for the setup, the results and the fixes) needs ${miss// /, }, which ${is} not installed. Without ${it}, the tool uses plain KDE dialogs.
 
 $([[ $tool == rpm-ostree ]] && echo "Install ${it} now? ${they} and the Qt libraries ${they,,} ${need} (about 20 packages) are added to the system image with rpm-ostree as layered packages, updated with the system, and used after the next restart. If a system update ever fails because of them, remove the app or run: rpm-ostree uninstall ${miss}" || echo "Install ${it} now with dnf, with the Qt libraries ${they,,} ${need}?")
+
 Removing the app later offers to remove ${it} again." "Install" "Not now" "n" careful; then
         _FRONT_RESULT=declined
         # Remembered only when someone could still answer (the dialog did

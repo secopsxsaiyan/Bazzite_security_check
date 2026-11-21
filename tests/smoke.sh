@@ -1965,7 +1965,10 @@ for line in open(sys.argv[1]):
         PYSIDE=no; HAVE="rpm-ostree"; ANSWER=0; PKG_RC=0; RPM_E=0; RPM_HAVE=""; INTER=yes
         _have() { [[ " $HAVE " == *" $1 "* ]]; }
         _as_desktop_user() { [[ "$1" == python3 ]] || return 0; case $PYSIDE in yes) return 0 ;; crash) return 1 ;; *) return 3 ;; esac; }
-        rpm-ostree() { echo "rpm-ostree $*" >> "$W/fe-pkg"; return "$PKG_RC"; }
+        # Like the real rpm-ostree, whose option parser finds no package after "--".
+        rpm-ostree() { echo "rpm-ostree $*" >> "$W/fe-pkg"
+                       [[ " $* " == *" -- "* ]] && { echo "error: usage error: At least one PACKAGE must be specified" >&2; return 1; }
+                       return "$PKG_RC"; }
         dnf() { echo "dnf $*" >> "$W/fe-pkg"; return "$PKG_RC"; }
         rpm() {
             if [[ "$1" == -q ]]; then
@@ -1990,12 +1993,12 @@ for line in open(sys.argv[1]):
         fe_case() { fe_clear; install_front_end; }
         # PySide6 missing on Bazzite: asked (a change: no default, "Not now" when nobody answers), layered, recorded.
         fe_case
-        [[ "$_FRONT_RESULT" == restart && "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent -- python3-pyside6" \
+        [[ "$_FRONT_RESULT" == restart && "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent python3-pyside6" \
            && "$(cat "$W/fe-asked")" == "Install|Not now|n|careful" && "$(_front_pkgs_recorded)" == python3-pyside6 \
            && -e "$STATE_DIR/front-end-offered" ]] && echo "front-end-layered-on-install"
         # Kirigami missing too: both, in one transaction.
         rm -rf "$W/fe-qml/kirigami"; fe_case
-        [[ "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent -- python3-pyside6 kf6-kirigami" ]] \
+        [[ "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent python3-pyside6 kf6-kirigami" ]] \
             && grep -q "Install them now? They and the Qt libraries they need" "$W/fe-text" && [[ "$(_front_result_text)" == *"python3-pyside6, kf6-kirigami are added"* ]] && echo "front-end-kirigami-too"
         mkdir -p "$W/fe-qml/kirigami"; rm -f "$STATE_DIR/front-end-packages" "$STATE_DIR/front-end-offered"
         # Declined: nothing installed, nothing recorded, remembered as answered.
@@ -2043,7 +2046,7 @@ for line in open(sys.argv[1]):
         [[ "$_FRONT_RESULT" == broken && ! -s "$W/fe-pkg" && -z "$(_front_pkgs_recorded)" && "$(_front_result_text)" == "python3-pyside6 is installed, yet"* ]] && echo "front-end-installed-but-broken"
         # PySide6 installed yet broken, Kirigami missing: Kirigami is offered, and the closing line still names PySide6.
         IS_OSTREE=1; HAVE="rpm-ostree"; RPM_HAVE="python3-pyside6"; rm -rf "$W/fe-qml/kirigami"; fe_case
-        [[ "$_FRONT_RESULT" == restart && "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent -- kf6-kirigami" \
+        [[ "$_FRONT_RESULT" == restart && "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent kf6-kirigami" \
            && "$(_front_result_text)" == "kf6-kirigami is added to the system image (used after the next restart). The window still needs more: python3-pyside6 is installed, yet"* ]] && echo "front-end-mixed-names-broken"
         # PySide6 waiting for the restart, Kirigami installed yet missing: the restart line names PySide6 only, and Kirigami as broken.
         RPMOSTREE_JSON='{"deployments":[{"staged":true,"requested-packages":["python3-pyside6"]},{"booted":true,"requested-packages":[]}]}'
@@ -2071,7 +2074,7 @@ for line in open(sys.argv[1]):
         fe_clear; ANSWER=1; remove_front_end
         kept=$([[ ! -s "$W/fe-pkg" && -s "$STATE_DIR/front-end-packages" ]] && echo yes)
         ANSWER=0; _app_installed() { return 0; }; _timer_installed() { return 0; }; _refresh_menu() { :; }; uninstall_app
-        [[ "$kept" == yes && "$(grep -v '^$' "$W/fe-pkg")" == "rpm-ostree uninstall --idempotent -- python3-pyside6" && ! -e "$STATE_DIR/front-end-packages" \
+        [[ "$kept" == yes && "$(grep -v '^$' "$W/fe-pkg")" == "rpm-ostree uninstall --idempotent python3-pyside6" && ! -e "$STATE_DIR/front-end-packages" \
            && "$(grep -cFx 'Remove|Keep|n|careful' "$W/fe-asked")" -eq 2 ]] && echo "front-end-removed-with-the-app"
         RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
         # Removed by hand since: nothing asked, and the list goes.
