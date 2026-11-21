@@ -287,19 +287,29 @@ done
 
 # A kdialog that answers like a person would: Yes/OK everywhere, the default
 # ticks in lists, Yes/No/Cancel answers taken from a queue file, and the
-# dashboard entries to open taken from another (none left: Finish).
+# dashboard entries to open taken from another (none left: Finish). The
+# tool puts the "no" answer in kdialog's Yes place when Enter must not say
+# yes; the person still presses the button with the "yes" answer on it.
 stub kdialog << EOF
 #!/bin/bash
 printf '%s\0' "\$@" >> "$W/kdialog.log"; printf '\n' >> "$W/kdialog.log"
 args=("\$@")
+swapped=0
+for ((i = 0; i < \${#args[@]}; i++)); do
+  [[ "\${args[\$i]}" == --yes-label ]] || continue
+  case "\${args[\$((i + 1))]}" in No|Back|Skip|Keep|"Keep it"|"Keep the app"|"Leave it"|Cancel|"Not now"|Quit) swapped=1 ;; esac
+done
 for ((i = 0; i < \${#args[@]}; i++)); do
   case "\${args[\$i]}" in
-    --yesno|--warningyesno|--msgbox|--error|--detailederror|--sorry|--passivepopup|--textbox) exit 0 ;;
+    --yesno|--warningyesno) exit "\$swapped" ;;
+    --msgbox|--error|--detailederror|--sorry|--passivepopup|--textbox) exit 0 ;;
     --progressbar) echo "org.kde.kdialog-4242 /ProgressDialog"; exit 0 ;;
     --getexistingdirectory) echo "\${args[\$((i + 1))]}"; exit 0 ;;
     --newpassword) echo "secret"; exit 0 ;;
     --yesnocancel|--warningyesnocancel)
-      a=\$(head -n1 "$W/q/answers"); sed -i 1d "$W/q/answers"; exit "\${a:-1}" ;;
+      a=\$(head -n1 "$W/q/answers"); sed -i 1d "$W/q/answers"; a="\${a:-1}"
+      if [[ \$swapped -eq 1 && \$a != 2 ]]; then a=\$(( 1 - a )); fi
+      exit "\$a" ;;
     --menu)
       a=\$(head -n1 "$W/q/menu" 2>/dev/null); sed -i 1d "$W/q/menu" 2>/dev/null
       [[ -n "\$a" ]] || exit 1
@@ -588,7 +598,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     RUN_LOG="$W/clam.log"; UI_MODE="none"; CURRENT_CHECK=check_deep_malware
     CR="$W/clam-root"; mkdir -p "$CR/var/lib/clamav" "$CR/etc"; AUDIT_ROOT="$CR"
     REGULAR_USERS=("$U"); DESKTOP_USER="$U"; IS_OSTREE=1; RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
-    HAVE=""; FLATPAKS=""; SVC=enabled; SCAN_OUT=""; SCAN_RC=0
+    HAVE=""; FLATPAKS=""; SVC=enabled; SCAN_OUT=$'\n----------- SCAN SUMMARY -----------\nScanned files: 10\nInfected files: 0\n'; SCAN_RC=0
     _have() { [[ " $HAVE " == *" $1 "* ]]; }
     _flatpak_installed() { [[ " $FLATPAKS " == *" $1 "* ]]; }
     _unit_state() { printf '%s' "$SVC"; }
@@ -597,7 +607,9 @@ echo "== 5b. the malware scan and ClamAV's setup"
         local who="$1"; shift
         case "$1" in
             xdg-user-dir) printf '%s' "$UH" ;;
-            timeout) printf '%s %s\n' "$who" "$*" >> "$W/clam-scans"; printf '%s' "$SCAN_OUT"; return "$SCAN_RC" ;;
+            timeout) printf '%s %s\n' "$who" "$*" >> "$W/clam-scans"
+                     if [[ "$who" == "${U}2" && -n "${SCAN_OUT2:-}" ]]; then printf '%s' "$SCAN_OUT2"; return "$SCAN_RC2"; fi
+                     printf '%s' "$SCAN_OUT"; return "$SCAN_RC" ;;
         esac
     }
     _as_desktop_user() { _as_user "$DESKTOP_USER" "$@"; }
@@ -608,6 +620,8 @@ echo "== 5b. the malware scan and ClamAV's setup"
         check_deep_malware > /dev/null 2>&1
     }
     scans() { grep -c . "$W/clam-scans" || true; }
+    # clam_sum FILES [ERRORS] [INFECTED] — clamscan's summary as clamscan 1.4.6 prints it.
+    clam_sum() { printf '\n----------- SCAN SUMMARY -----------\nKnown viruses: 8708930\nEngine version: 1.4.6\nScanned directories: 9\nScanned files: %s\nInfected files: %s\n%bData scanned: 1.00 MB\nData read: 1.00 MB (ratio 1.00:1)\nTime: 2.000 sec (0 m 2 s)\n' "$1" "${3:-0}" "${2:+Total errors: $2\n}"; }
 
     # ClamUI without the system's ClamAV: ClamUI cannot scan; the fix layers both packages.
     HAVE=""; FLATPAKS="io.github.linx_systems.ClamUI"; defs; case_
@@ -630,7 +644,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     # Nothing at all, no ClamUI: an optional note with the same fix; ClamTk alone needs nothing.
     FLATPAKS=""; case_
     [[ "${F_SEV[0]:-}" == info && "${F_FIX[0]}" == "fix_clamav_install clamav clamav-freshclam" ]] && echo "no-clamav-is-an-optional-fix"
-    FLATPAKS="com.gitlab.davem.ClamTk"; SCAN_OUT=""; SCAN_RC=0; case_
+    FLATPAKS="com.gitlab.davem.ClamTk"; SCAN_OUT="$(clam_sum 10)"; SCAN_RC=0; case_
     [[ ${#F_SEV[@]} -eq 0 && "$(scans)" -eq 1 ]] && grep -q "flatpak run --command=clamscan com.gitlab.davem.ClamTk" "$W/clam-scans" && echo "clamtk-alone-scans-without-setup"
     # ClamTk and ClamUI: ClamTk still scans, and ClamUI's missing ClamAV is still a finding.
     FLATPAKS="com.gitlab.davem.ClamTk io.github.linx_systems.ClamUI"; case_
@@ -678,7 +692,9 @@ echo "== 5b. the malware scan and ClamAV's setup"
     SVC=enabled; defs 0; case_
     [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"updated today (clamav-freshclam.service: enabled)"*"nothing found"* ]] && echo "fresh-definitions-no-finding"
     # The scan runs as the account, stays on each folder's file system, and never as root.
-    grep -q "^${U} timeout 1800 clamscan -r -i --no-summary --cross-fs=no .* --database=/var/lib/clamav " "$W/clam-scans" && ! grep -q "^root " "$W/clam-scans" && echo "scan-as-account-on-one-file-system"
+    # It keeps clamscan's summary, which counts the files it could not read.
+    grep -q "^${U} timeout 1800 clamscan -r -i --cross-fs=no .* --database=/var/lib/clamav " "$W/clam-scans" && ! grep -q "^root " "$W/clam-scans" \
+       && ! grep -q -- "--no-summary" "$W/clam-scans" && echo "scan-as-account-on-one-file-system"
     # A scan stopped by the time limit says so - not that the database is missing.
     SCAN_OUT=""; SCAN_RC=124; case_
     [[ "${CHECK_SKIPPED[check_deep_malware]:-}" == "the scan was stopped after 30 minutes, before it finished"* && "${CHECK_SKIPPED[check_deep_malware]:-}" != *database* && ${#F_SEV[@]} -eq 0 ]] && echo "timeout-is-not-blamed-on-the-database"
@@ -692,7 +708,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     # Without freshclam, nothing offers to download them: the skip says why.
     HAVE="clamscan"; SCAN_OUT=$'LibClamAV Error: cli_cvdload(): Corrupted CVD header\n'; case_
     [[ "${F_TITLE[0]:-}" == *"freshclam is not installed" && ${#F_SEV[@]} -eq 1 && "${CHECK_SKIPPED[check_deep_malware]:-}" == *"freshclam, which downloads them, is not installed"* ]] && echo "broken-definitions-without-freshclam"
-    SCAN_OUT=""; SCAN_RC=0; defs 12; case_
+    SCAN_OUT="$(clam_sum 10)"; SCAN_RC=0; defs 12; case_
     [[ "${F_TITLE[0]:-}" == *"freshclam is not installed" && ${#F_SEV[@]} -eq 1 && "$(scans)" -eq 1 ]] && echo "old-definitions-without-freshclam"
     defs; case_
     [[ "${F_TITLE[0]:-}" == *"freshclam is not installed" && ${#F_SEV[@]} -eq 1 && "$(scans)" -eq 0 \
@@ -702,8 +718,94 @@ echo "== 5b. the malware scan and ClamAV's setup"
     ! grep -q "^ERR at" "$W/clam-err" && echo "no-error-trap" || head -3 "$W/clam-err"
     HAVE="clamscan freshclam"; defs 0
     # A file it could not read, even one named "database", is not a database error.
-    SCAN_OUT="$UH/Downloads/database.sqlite: Can't open file or directory ERROR"$'\n'; SCAN_RC=2; case_
-    [[ ${#F_SEV[@]} -eq 0 && -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"may not read were left out"* ]] && echo "unreadable-file-is-not-a-database-error"
+    SCAN_OUT="$UH/Downloads/database.sqlite: Can't open file or directory ERROR"$'\n'"$(clam_sum 10)"; SCAN_RC=2; case_
+    [[ ${#F_SEV[@]} -eq 0 && -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"could not be read were left out"* ]] && echo "unreadable-file-is-not-a-database-error"
+    # Files the account may not read (with -i clamscan lists none of them, exit 2): nothing found, and how many were left out.
+    SCAN_OUT="$(clam_sum 120 3)"; SCAN_RC=2; case_
+    [[ ${#F_SEV[@]} -eq 0 && -z "${CHECK_SKIPPED[check_deep_malware]:-}" \
+       && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 120 file(s) in: $UH, "*" - nothing found (3 file(s) could not be read or scanned and were left out)" ]] && echo "unreadable-files-are-counted"
+    # A clean scan says how many files it scanned and nothing about files left out.
+    SCAN_OUT="$(clam_sum 120)"; SCAN_RC=0; case_
+    [[ "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 120 file(s) in: "*" - nothing found" ]] && echo "clean-scan-counts-files"
+    # Each account's scan adds up.
+    REGULAR_USERS=("$U" "${U}2"); SCAN_OUT="$(clam_sum 120 3)"; SCAN_RC=2; case_
+    [[ "$(scans)" -eq 2 && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 240 file(s) in: "*"(6 file(s) could not be read"* ]] && echo "counts-of-every-account-add-up"
+    # Only the second account's scan stops: the message names that account; a hit's file name is never a stop.
+    SCAN_OUT="$(clam_sum 9)"; SCAN_RC=0; SCAN_OUT2=$'ERROR: scandirs: Memory allocation failed for fname\n'"$(clam_sum 1)"; SCAN_RC2=0; case_
+    s1=${CHECK_SKIPPED[check_deep_malware]:-}
+    SCAN_OUT=$'/tmp/a\nERROR: fake: Win.Test.EICAR_HDB-1 FOUND\n'"$(clam_sum 9 0 1)"; SCAN_RC=1; SCAN_OUT2=""; case_
+    [[ "$s1" == "ClamAV stopped with an error before it scanned the folders of ${U}2 (ERROR: scandirs:"* \
+       && "${F_TITLE[0]:-}" == "ClamAV found 2 infected file(s)" && "${CHECK_NOTE[check_deep_malware]:-}" != *"stopped with an error"* ]] && echo "stop-of-one-account-named"
+    # An engine error about one file at exit 2 is not definitions that do not load.
+    SCAN_OUT=$'LibClamAV Error: cli_scanpe: malformed PE header\n'"$(clam_sum 40 2)"; SCAN_RC=2; case_
+    [[ ${#F_SEV[@]} -eq 0 && -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 80 file(s)"* ]] && echo "file-engine-error-is-not-broken-definitions"
+    # ClamAV's message is quoted from whichever account's scan printed it, first or later
+    # (the accounts are scanned in no fixed order, so both arrangements are checked).
+    quoted=0
+    for e in 1 2; do
+        if [[ $e -eq 1 ]]; then SCAN_OUT=$'LibClamAV Error: cli_html_normalise: odd\n'"$(clam_sum 3)"; SCAN_OUT2="$(clam_sum 9)"
+        else SCAN_OUT="$(clam_sum 9)"; SCAN_OUT2=$'LibClamAV Error: cli_html_normalise: odd\n'"$(clam_sum 3)"; fi
+        SCAN_RC=0; SCAN_RC2=0; case_
+        [[ "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 12 file(s) in: "*"(ClamAV said: LibClamAV Error: cli_html_normalise: odd)" ]] && quoted=$((quoted + 1))
+    done
+    SCAN_OUT2=""
+    [[ $quoted -eq 2 ]] && echo "message-of-second-account-quoted"
+    REGULAR_USERS=("$U")
+    # clamscan that gives up is not "nothing found": a bad option, memory, a temporary folder it cannot write to.
+    giveup=1
+    # (A bad option ends clamscan before its summary; without a temporary folder libclamav fails every file, exit 0.)
+    for SCAN_OUT in $'clamscan: unrecognized option `--bogus\'\nERROR: Unknown option passed\nERROR: Can\'t parse command line options\n'"|2" \
+                    $'LibClamAV Error: cli_malloc(): Can\'t allocate memory (65536 bytes).\nERROR: Can\'t allocate memory\n'"$(clam_sum 0)|2" \
+                    $'LibClamAV Error: Can\'t create temporary directory for scan: /tmp/20261121_172102-scantemp.d486705759.\n'"$(clam_sum 4)|0"; do
+        SCAN_RC=${SCAN_OUT##*|}; SCAN_OUT=${SCAN_OUT%|*}; case_
+        [[ ${#F_SEV[@]} -eq 0 && "${CHECK_SKIPPED[check_deep_malware]:-}" == "ClamAV stopped with an error before it scanned the folders of $U ("*")" \
+           && "${CHECK_SKIPPED[check_deep_malware]}" == *"$(grep -m 1 -E "^ERROR:|^LibClamAV Error: Can't create" <<< "$SCAN_OUT")"* && "${CHECK_NOTE[check_deep_malware]:-}" != *"nothing found"* ]] \
+           || { giveup=0; echo "not reported as stopped: ${SCAN_OUT%%$'\n'*} -> ${CHECK_SKIPPED[check_deep_malware]:-} / ${CHECK_NOTE[check_deep_malware]:-}"; }
+    done
+    [[ $giveup -eq 1 ]] && echo "clamscan-error-is-not-nothing-found"
+    # An engine error on one file, without "ERROR:": the scan went on; nothing found, and ClamAV's words.
+    SCAN_OUT=$'LibClamAV Error: cli_scanxz: decompress error: 2\n'"$(clam_sum 50 1)"; SCAN_RC=2; case_
+    [[ -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 50 file(s) in: "*"(1 file(s) could not be read or scanned and were left out; ClamAV said: LibClamAV Error: cli_scanxz: decompress error: 2)" ]] && echo "one-file-error-is-counted-not-a-stop"
+    # No summary: the scanner did not start (ClamTk's "flatpak run" failing, exit 1) or did not finish - never "nothing found", never a hit.
+    FLATPAKS="com.gitlab.davem.ClamTk"; HAVE=""; SCAN_OUT=$'bwrap: execvp clamscan: No such file or directory\n'; SCAN_RC=1; case_
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_SKIPPED[check_deep_malware]:-}" == "the scan did not finish: ClamAV gave no summary (exit 1: bwrap: execvp clamscan: No such file or directory)" \
+       && "${CHECK_NOTE[check_deep_malware]:-}" != *"nothing found"* ]] && echo "no-summary-is-not-nothing-found"
+    FLATPAKS=""; HAVE="clamscan freshclam"; SCAN_OUT=""; SCAN_RC=0; case_
+    [[ "${CHECK_SKIPPED[check_deep_malware]:-}" == "the scan did not finish: ClamAV gave no summary (exit 0)" ]] && echo "empty-output-is-not-nothing-found"
+    # Exit 2 and not one file scanned: nothing could be read.
+    SCAN_OUT="$(clam_sum 0)"; SCAN_RC=2; case_
+    [[ "${CHECK_SKIPPED[check_deep_malware]:-}" == "ClamAV could not read any file in $UH, "* ]] && echo "no-file-scanned-is-a-skip"
+    # A hit in the summary (or exit 1 from a finished scan) without a line that names it: a finding, never "nothing found".
+    SCAN_OUT="$(clam_sum 9 0 2)"; SCAN_RC=1; case_
+    [[ "${F_SEV[0]:-}" == high && "${F_TITLE[0]}" == "ClamAV found 2 infected file(s)" && "${F_MANUAL[0]}" == "Run the check again, or scan these folders with ClamUI or ClamTk"*"$UH, "* ]] && echo "unlisted-hit-is-a-finding"
+    # An engine error at exit 0 is shown with the note.
+    SCAN_OUT=$'LibClamAV Error: cli_html_normalise: odd\n'"$(clam_sum 3)"; SCAN_RC=0; case_
+    [[ "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 3 file(s) in: "*" - nothing found (ClamAV said: LibClamAV Error: cli_html_normalise: odd)" ]] && echo "engine-error-shown-at-exit-0"
+    # A hit from one account's scan while another's gave no summary: the hit, and a note.
+    REGULAR_USERS=("$U" "${U}2"); SCAN_OUT="$UH/Downloads/x.exe: Win.Test.EICAR_HDB-1 FOUND"$'\n'"$(clam_sum 5 0 1)"; SCAN_RC=1
+    SCAN_OUT2=$'bwrap: execvp clamscan: No such file or directory\n'; SCAN_RC2=1; case_; SCAN_OUT2=""
+    [[ "${F_TITLE[0]:-}" == "ClamAV found 1 infected file(s)" && "${CHECK_NOTE[check_deep_malware]:-}" == *"did not finish (no summary from ClamAV)"* ]] && echo "hit-without-summary-noted"
+    REGULAR_USERS=("$U")
+    # A hit and a scan that gave up: the hit is reported, with a note that other files may not have been scanned.
+    # (One clamscan exits 1 when it found something, also after an error.)
+    SCAN_OUT="$UH/Downloads/x.exe: Win.Test.EICAR_HDB-1 FOUND"$'\nERROR: scandirs: Memory allocation failed for fname\n'"$(clam_sum 5 0 1)"; SCAN_RC=1; case_
+    [[ "${F_TITLE[0]:-}" == "ClamAV found 1 infected file(s)" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV stopped with an error before it scanned every folder of $U (ERROR: scandirs: Memory allocation failed for fname)"* ]] && echo "hit-and-a-stop"
+    # A folder walk that stopped early exits 0 with a summary: not "nothing found".
+    SCAN_OUT=$'ERROR: scandirs: Memory allocation failed for fname\n'"$(clam_sum 5)"; SCAN_RC=0; case_
+    [[ "${CHECK_SKIPPED[check_deep_malware]:-}" == *"(ERROR: scandirs: Memory allocation failed for fname)" && "${CHECK_NOTE[check_deep_malware]:-}" != *"nothing found"* ]] && echo "stop-at-exit-0-is-not-nothing-found"
+    # An error clamscan logs after its summary (the date) stops nothing.
+    SCAN_OUT="$(clam_sum 5)"$'\nERROR: Failed to get local time for Start Date.\n'; SCAN_RC=0; case_
+    [[ -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 5 file(s) in: "*" - nothing found" ]] && echo "error-after-summary-is-not-a-stop"
+    # The counts come from the real summary, which comes last: a file name with a line break cannot fake it.
+    [[ "$(_clamav_scan_counts "/tmp/a"$'\n----------- SCAN SUMMARY -----------\nScanned files: 999\nTotal errors: 0: Eicar FOUND'"$(clam_sum 7 2)")" == "7 2 0" \
+       && "$(_clamav_scan_counts "$(clam_sum 7)")" == "7 0 0" && "$(_clamav_scan_counts "$(clam_sum 7 0 3)")" == "7 0 3" && -z "$(_clamav_scan_counts "no summary here")" \
+       && -z "$(_clamav_scan_counts $'\n----------- SCAN SUMMARY -----------\nScanned files: lots\n')" ]] && echo "scan-counts-from-the-real-summary"
+    # ... and the error trap stays quiet on the new paths (counted, stopped, two accounts).
+    : > "$W/clam-err2"
+    for SCAN_OUT in "$(clam_sum 120 3)" $'ERROR: Can\'t allocate memory\n'"$(clam_sum 0)" "no summary"; do
+        SCAN_RC=2; ( REGULAR_USERS=("$U" "${U}2"); set -E; trap 'echo "ERR at $LINENO: $BASH_COMMAND"' ERR; check_deep_malware ) >> "$W/clam-err2" 2>/dev/null
+    done
+    ! grep -q "^ERR at" "$W/clam-err2" && echo "no-error-trap-on-scan-results" || head -3 "$W/clam-err2"
     # A hit is reported.
     SCAN_OUT="$UH/Downloads/x.exe: Win.Test.EICAR_HDB-1 FOUND"$'\n'; SCAN_RC=1; case_
     [[ "${F_SEV[0]:-}" == high && "${F_TITLE[0]}" == "ClamAV found 1 infected file(s)" ]] && echo "infected-file-found"
@@ -740,7 +842,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     # DatabaseDirectory from freshclam.conf is where the definitions are looked for.
     printf 'DatabaseDirectory "/srv/quoted"\n' > "$CR/etc/freshclam.conf"
     [[ "$(_clamav_db_dir)" == /srv/quoted ]] && echo "quoted-database-directory"
-    mkdir -p "$CR/srv/defs"; printf 'DatabaseDirectory /srv/defs\n' > "$CR/etc/freshclam.conf"; SCAN_OUT=""; SCAN_RC=0; defs 0; case_
+    mkdir -p "$CR/srv/defs"; printf 'DatabaseDirectory /srv/defs\n' > "$CR/etc/freshclam.conf"; SCAN_OUT="$(clam_sum 10)"; SCAN_RC=0; defs 0; case_
     [[ "$(_clamav_db_dir)" == /srv/defs && "${F_TITLE[0]:-}" == "ClamAV has no virus definitions" && "${F_DETAIL[0]}" == *"/srv/defs"* ]] && echo "database-directory-from-freshclam-conf"
     # ... and clamscan, which does not read freshclam.conf, is told to use them.
     echo x > "$CR/srv/defs/main.cvd"; echo x > "$CR/srv/defs/daily.cvd"; case_
@@ -754,7 +856,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     DEAD="https://urlhaus.example/downloads/urlhaus.ndb"; OK2="http://sigs.example/shell.ldb"
     KEYED="https://api.example/v2/files/exports/SECRETKEY123/urlhaus_clamav.ndb"
     printf 'DatabaseMirror database.clamav.net\nDatabaseCustomURL %s\n  DatabaseCustomURL %s\nDatabaseCustomURL %s\nExtraDatabase foo\nExtraDatabase a;b\nExtraDatabase SafeBrowsing\n' "$DEAD" "$OK2" "$KEYED" > "$CR/etc/freshclam.conf"
-    defs 0; HAVE="clamscan freshclam"; SVC=enabled; SCAN_OUT=""; SCAN_RC=0
+    defs 0; HAVE="clamscan freshclam"; SVC=enabled; SCAN_OUT="$(clam_sum 10)"; SCAN_RC=0
     FCLOG="WARNING: downloadFile: Unexpected response (410) from ${DEAD}
 ERROR: Can't download urlhaus.ndb from ${DEAD}
 Update failed for custom database URL: ${DEAD}
@@ -892,7 +994,12 @@ for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-no
          extra-source-fix-fails-when-nothing-matches refusal-once-is-a-note refusal-in-two-updates-is-a-finding file-there-means-it-worked \
          logtime-failure-counts logtime-success-clears official-line-clears-no-source no-promise-while-an-earlier-source-fails \
          definitions-fix-follows-exclusions restart-failure-keeps-the-change rate-limit-is-a-note not-a-database-in-two-updates \
-         undo-restart-failure-keeps-the-restore rate-limit-stops-nothing; do
+         undo-restart-failure-keeps-the-restore rate-limit-stops-nothing unreadable-files-are-counted clean-scan-counts-files \
+         counts-of-every-account-add-up clamscan-error-is-not-nothing-found one-file-error-is-counted-not-a-stop hit-and-a-stop \
+         scan-counts-from-the-real-summary no-error-trap-on-scan-results no-summary-is-not-nothing-found empty-output-is-not-nothing-found \
+         no-file-scanned-is-a-skip unlisted-hit-is-a-finding engine-error-shown-at-exit-0 hit-without-summary-noted \
+         stop-at-exit-0-is-not-nothing-found error-after-summary-is-not-a-stop stop-of-one-account-named \
+         file-engine-error-is-not-broken-definitions message-of-second-account-quoted; do
     expect "$W/clam.out" "$t" "$t"
 done
 
@@ -1570,14 +1677,76 @@ for line in open(sys.argv[1]):
                && -e "$STATE_DIR/undo/20250101-000000/01-undo.sh" ]] && echo "undo-enter-is-cancel-then-keep-it"
         )
         # kdialog cannot be told its default button: a marked question
-        # uses its warning dialog, whose default is No (or Cancel).
+        # uses its warning dialog.
         (
             _ui_dialog() { return 4; }; _kd() { printf '%s ' "$@" >> "$W/kd-kinds"; echo >> "$W/kd-kinds"; return 1; }
+            _kd_answer() { _kd "$@"; }
             UI_MODE=kde; : > "$W/kd-kinds"
             ui_yesno "q" Y N y; ui_yesno "q" Y N y careful; ui_yesno "q" Y N n warn
             ui_choice3 "q" "" Y N C; ui_choice3 "q" "" Y N C careful; ui_choice3 "q" "" Y N C warn
             [[ "$(grep -oE -- '--(warning)?yesno(cancel)? ' "$W/kd-kinds" | tr -d '\n')" == "--yesno --warningyesno --warningyesno --yesnocancel --warningyesnocancel --warningyesnocancel " ]] \
                 && echo "careful-questions-use-the-kdialog-warning"
+        )
+        # Enter presses kdialog's Yes place in every question (since 19.12):
+        # unless Yes is the default, No is put there, and the answer is read
+        # back the other way round; Esc or closing (exit 2) is never Yes.
+        (
+            _ui_dialog() { return 4; }
+            _kd() { printf '%s|' "$2" "$4" >> "$W/kd-swap"; echo >> "$W/kd-swap"; return "$KD_RC"; }
+            _kd_answer() { _kd "$@"; }
+            UI_MODE=kde; : > "$W/kd-swap"; out=""
+            for q in "y" "y careful" "n" "n warn"; do
+                for KD_RC in 0 1 2; do
+                    # shellcheck disable=SC2086 # $q is two words on purpose
+                    ui_yesno "q" Y N $q; out+="$?"
+                done
+                out+=" "
+            done
+            for q in ":n" "careful:n" "warn:y" ":y"; do
+                for KD_RC in 0 1 2; do
+                    ui_choice3 "q" "" Y N C "${q%%:*}" "${q#*:}"; out+="$?"
+                done
+                out+=" "
+            done
+            want=""; for p in "Y|N|" "N|Y|" "N|Y|" "N|Y|" "N|Y|" "N|Y|" "N|Y|" "Y|N|"; do want+="$p $p $p "; done
+            [[ "$out" == "012 101 101 101 102 102 102 012 " && "$(tr '\n' ' ' < "$W/kd-swap")" == "$want" ]] && echo "kdialog-enter-is-not-yes" \
+               || echo "kdialog answers: $out / $(tr '\n' ' ' < "$W/kd-swap")"
+            # kdialog failing (255) is no answer: the question goes on to the
+            # next way of asking. Here nobody is left to ask, and a marked
+            # question is then "no" even when its default is "yes".
+            _kd_answer() { UI_MODE=none; return 255; }
+            UI_MODE=kde; ui_choice3 "q" "" Apply Skip Stop careful; r1=$?
+            UI_MODE=kde; ui_yesno "q" "Undo anyway" Cancel n warn; r2=$?
+            UI_MODE=kde; ui_yesno "q" Remove Cancel y careful; r3=$?
+            UI_MODE=kde; ui_yesno "q" "Roll back" "Leave it" y warn; r4=$?
+            [[ "$r1$r2$r3$r4" == 1111 ]] && echo "kdialog-failure-asks-on" || echo "kdialog failure gave $r1$r2$r3$r4"
+        )
+        # Exit 1 means "yes" in a swapped question: only when kdialog itself
+        # said so. A wrapper that fails (here: no desktop user) is kdialog
+        # failing, never an answer.
+        (
+            _ui_dialog() { return 4; }; _ui_fallback() { UI_MODE=none; }
+            _as_desktop_user() { return 1; }
+            UI_MODE=kde; RUN_TMP="$W/kd-wrap-rt"; mkdir -p "$RUN_TMP"
+            ui_choice3 "q" "" Apply Skip Stop careful; r1=$?
+            UI_MODE=kde; ui_yesno "q" "Undo anyway" Cancel n warn; r2=$?
+            UI_MODE=kde; ui_yesno "Remove the app?" Remove Cancel y careful < /dev/null; r4=$?
+            [[ "$r1" == 1 && "$r2" == 1 && "$r4" == 1 && -e "$RUN_TMP/kdialog-failed" ]] && echo "kdialog-wrapper-failure-is-not-yes"
+            # ... while kdialog's own exit 1 (the button with the yes answer) is yes.
+            rm -f "$RUN_TMP/kdialog-failed"; UI_MODE=kde
+            _as_desktop_user() { shift 1; [[ "$1" == XDG_CONFIG_HOME=* ]] && shift; "$@"; }
+            mkdir -p "$W/kd-own-bin"; printf '#!/bin/sh\nexit 1\n' > "$W/kd-own-bin/kdialog"; chmod 755 "$W/kd-own-bin/kdialog"
+            PATH="$W/kd-own-bin:$PATH"
+            ui_choice3 "q" "" Apply Skip Stop careful; r3=$?
+            [[ "$r3" == 0 ]] && echo "kdialog-own-exit-1-is-yes" || echo "own exit 1 gave $r3"
+            # ... and its 0 and 2 are Skip and Stop; 3 is kdialog failing.
+            got=""
+            for k in 0 2 3; do
+                rm -f "$RUN_TMP/kdialog-failed"; UI_MODE=kde
+                printf '#!/bin/sh\nexit %s\n' "$k" > "$W/kd-own-bin/kdialog"
+                ui_choice3 "q" "" Apply Skip Stop careful; got+="$?$([[ -e "$RUN_TMP/kdialog-failed" ]] && echo f || true) "
+            done
+            [[ "$got" == "1 2 1f " ]] && echo "kdialog-own-exits-mapped" || echo "own exits gave: $got"
         )
         # Every question whose Yes changes the PC there and then is marked.
         marked=1
@@ -1931,7 +2100,7 @@ for line in open(sys.argv[1]):
         RPM_E=2; fe_clear; echo kf6-kirigami > "$STATE_DIR/front-end-packages"
         _app_installed() { return 0; }; _timer_installed() { return 0; }; _refresh_menu() { :; }; rc=0; uninstall_app || rc=$?
         [[ $rc -eq 1 && -s "$STATE_DIR/front-end-packages" ]] && grep -qFx 'Remove|Keep|n|careful' "$W/fe-asked" && grep -q "^ERR Could not check whether other programs need kf6-kirigami" "$W/fe-msg" \
-            && grep -qFx 'Remove anyway|Keep the app|n|careful' "$W/fe-asked" && grep -q "removing it again (--uninstall) can try again" "$W/fe-text" && echo "front-end-busy-rpm-keeps-list-and-app"
+            && grep -qFx 'Remove anyway|Keep the app|n|careful' "$W/fe-asked" && grep -q "If you keep the app, --uninstall can try again later." "$W/fe-text" && echo "front-end-busy-rpm-keeps-list-and-app"
         # ... or the app goes anyway when the person says so, and the list with it.
         ANSWER_ANYWAY=0; fe_clear; rc=0; uninstall_app || rc=$?; ANSWER_ANYWAY=1
         [[ $rc -eq 0 && ! -e "$STATE_DIR/front-end-packages" ]] && grep -q "kf6-kirigami could not be removed. Remove the Security Check app anyway? It stays installed; remove it later with: dnf remove kf6-kirigami" "$W/fe-text" \
@@ -1939,6 +2108,9 @@ for line in open(sys.argv[1]):
         # The dependency check reads rpm in English whatever the language (LC_ALL=C).
         RPM_E=1; echo kf6-kirigami > "$STATE_DIR/front-end-packages"; fe_clear; remove_front_end
         grep -q "^MSG Other installed programs need kf6-kirigami now, so it stays.*is needed by" "$W/fe-msg" && echo "front-end-rpm-read-in-english"
+        # dnf and "Keep": nothing is checked or removed, the list stays.
+        RPM_E=0; RPM_HAVE="kf6-kirigami"; echo kf6-kirigami > "$STATE_DIR/front-end-packages"; fe_clear; ANSWER=1; remove_front_end; ANSWER=0
+        [[ ! -s "$W/fe-pkg" && -s "$STATE_DIR/front-end-packages" ]] && grep -qFx 'Remove|Keep|n|careful' "$W/fe-asked" && echo "front-end-dnf-keep-checks-nothing"
         # dnf: removed by hand since, the list goes quietly.
         RPM_E=0; RPM_HAVE=""; echo kf6-kirigami > "$STATE_DIR/front-end-packages"; fe_clear; remove_front_end
         [[ ! -s "$W/fe-asked" && ! -s "$W/fe-pkg" && ! -e "$STATE_DIR/front-end-packages" ]] && echo "front-end-dnf-gone-already"
@@ -1955,7 +2127,7 @@ for line in open(sys.argv[1]):
         # ... called once the run knows it may change things (after the wizard and the report-only decision).
         sed -n '/^main() {/,/^}/p' "$TOOL" | grep -A1 -F 'ui_interactive || FIX_MODE="report"' | grep -qx '    offer_front_end_once' && echo "front-end-offer-wired"
         # ... and --uninstall ends with what removing the app returned.
-        sed -n '/^main() {/,/^}/p' "$TOOL" | grep -qE '^ +uninstall\) +uninstall_app; exit \$\? ;;$' && echo "front-end-uninstall-status-wired"
+        sed -n '/^main() {/,/^}/p' "$TOOL" | grep -qE '^ +uninstall\) +uninstall_app \|\| exit 1; _action_end ;;$' && echo "front-end-uninstall-status-wired"
         # Installing the app says to restart for the window.
         rm -f "$STATE_DIR/front-end-packages"; fe_clear
         _install_app_files() { return 0; }; _timer_installed() { return 1; }; install_app
@@ -2133,6 +2305,73 @@ for line in open(sys.argv[1]):
     RUN_TMP=""
     rc=0; _run_change "t6 no tmp" "touch $W/no-private-tmp" "" > /dev/null 2>&1 || rc=$?
     [[ $rc -eq 3 && ! -e "$W/no-private-tmp" ]] && echo "fix-needs-private-tmp"
+    # A fix that fails while nobody can answer the rollback question is
+    # not rolled back, and its undo step is kept for --undo.
+    (
+        UI_MODE=none; RUN_ID="t6left"; RUN_TMP=$(mktemp -d "$W/runtmp.XXXXXX"); ui_error() { :; }
+        rc=0; _run_change "t6 half" "echo half > $W/t6-half; exit 1" "rm -f $W/t6-half" > /dev/null 2>&1 || rc=$?
+        [[ $rc -eq 3 && -e "$W/t6-half" && -f "$STATE_DIR/undo/t6left/01-undo.sh" ]] \
+            && grep -qx '# TITLE: t6 half (did not complete)' "$STATE_DIR/undo/t6left/01-undo.sh" && echo "failed-fix-left-keeps-undo"
+        # ... one that is rolled back keeps no step to undo (it is marked rolled back) ...
+        RUN_ID="t6back"; ui_yesno() { return 0; }
+        _run_change "t6 back" "echo half > $W/t6-back; exit 1" "rm -f $W/t6-back" > /dev/null 2>&1
+        [[ ! -e "$W/t6-back" && -z "$(compgen -G "$STATE_DIR/undo/t6back/*-undo.sh")" && -f "$STATE_DIR/undo/t6back/01-undo.rolledback" ]] && echo "failed-fix-rolled-back-keeps-nothing"
+        # ... and a rolled-back attempt does not later mark the same fix, retried and working, as undone.
+        RUN_ID="t6sync"; F_STATE[7]="open"; F_CHECK[7]="c"; F_VERIFY[7]=""; CURRENT_FINDING=7
+        _run_change "s" "exit 1" "true" > /dev/null 2>&1; F_STATE[7]=failed
+        rrc=0; _run_change "s" "true" "true" > /dev/null 2>&1 || rrc=$?; F_STATE[7]=fixed
+        [[ $rrc -eq 0 && -f "$STATE_DIR/undo/t6sync/02-undo.sh" ]] || echo "retry did not apply: $rrc"
+        _sync_undone > /dev/null 2>&1
+        [[ $rrc -eq 0 && -f "$STATE_DIR/undo/t6sync/02-undo.sh" && "${F_STATE[7]}" == fixed && "${F_VERIFY[7]}" != undone ]] && echo "rolled-back-attempt-not-an-undo" || echo "sync after rollback: ${F_STATE[7]} ${F_VERIFY[7]}"
+        CURRENT_FINDING=""
+        # A signal while the rollback runs waits until it is marked rolled back.
+        RUN_ID="t6rbsig"
+        ( trap _on_signal INT TERM HUP; pid=$BASHPID
+          _run_change "t6 rbsig" "exit 1" "kill -HUP $pid; sleep 1" ) > "$W/t6-rbsig.out" 2>&1; rc=$?
+        # (130 is the tool's own stop; a shell killed by HUP would end with 129.)
+        [[ $rc -eq 130 && -f "$STATE_DIR/undo/t6rbsig/01-undo.rolledback" ]] && echo "rollback-interrupted-is-marked" \
+            || echo "rbsig rc=$rc $(ls "$STATE_DIR/undo/t6rbsig" | tr '\n' ' ')"
+        # ... one whose rollback fails keeps its step, once ...
+        RUN_ID="t6bad"
+        _run_change "t6 bad" "echo half > $W/t6-bad; exit 1" "exit 4" > /dev/null 2>&1
+        [[ -e "$W/t6-bad" && "$(compgen -G "$STATE_DIR/undo/t6bad/*-undo.sh" | wc -l)" -eq 1 ]] && echo "failed-rollback-keeps-undo-once"
+        # ... one left as it is by the person says so in a window too ...
+        RUN_ID="t6leave"; ui_yesno() { return 1; }; ui_interactive() { return 0; }; ui_msg() { printf '%s\n' "$1" > "$W/t6-leave-msg"; }
+        UI_MODE=kde; _ui_dialog() { return 4; }; ui_busy_start() { :; }; ui_busy_stop() { :; }; ui_error() { :; }
+        _run_change "t6 leave" "echo half > $W/t6-leave; exit 1" "rm -f $W/t6-leave" > /dev/null 2>&1
+        UI_MODE=none
+        [[ -f "$STATE_DIR/undo/t6leave/01-undo.sh" ]] && grep -q '"t6 leave" was left as it is. Its undo step was kept' "$W/t6-leave-msg" && echo "failed-fix-left-says-so"
+        # ... but on the terminal only the printed line says it (no second copy in a window).
+        RUN_ID="t6leavetty"; : > "$W/t6-leave-msg"; UI_MODE="tty"
+        _run_change "t6 leave tty" "echo half > $W/t6-leavetty; exit 1" "rm -f $W/t6-leavetty" > /dev/null 2>&1
+        UI_MODE=none
+        [[ -f "$STATE_DIR/undo/t6leavetty/01-undo.sh" && ! -s "$W/t6-leave-msg" ]] && echo "failed-fix-left-not-twice-on-terminal"
+        # ... and one interrupted at the rollback question keeps it too.
+        RUN_ID="t6hup"; ui_yesno() { kill -HUP "$BASHPID"; sleep 1; return 1; }; : > "$W/t6-hup-msg"
+        ( UI_MODE=kde; ui_msg() { echo left >> "$W/t6-hup-msg"; }; trap _on_signal INT TERM HUP
+          _run_change "t6 hup" "echo half > $W/t6-hup; exit 1" "rm -f $W/t6-hup" ) > /dev/null 2>&1; rc=$?
+        [[ $rc -eq 130 && -e "$W/t6-hup" && -f "$STATE_DIR/undo/t6hup/01-undo.sh" && ! -s "$W/t6-hup-msg" ]] && echo "failed-fix-interrupted-at-question-keeps-undo" \
+            || echo "hup at question: rc=$rc"
+    )
+    # An action whose window stopped working on the way ends with status 1 and says so.
+    (
+        ACTION=install; UI_MODE=none; ui_interactive() { [[ "$UI_MODE" != none ]]; }
+        ( _action_end ) 2> "$W/action-end.err"; r1=$?
+        UI_MODE=kde; ( _action_end ) 2>/dev/null; r2=$?
+        [[ "$r1 $r2" == "1 0" ]] && grep -q -- "--install: the window stopped working, so it may not have finished" "$W/action-end.err" && echo "action-end-after-lost-window"
+    )
+    # On the terminal, Enter is "no" for a question that changes the PC, whatever its default.
+    (
+        # (An earlier test removed ui_choice3 from this shell: take it again.)
+        eval "$(sed -n '/^ui_choice3() {/,/^}/p' "$HERE/../lib/ui.sh")"
+        UI_MODE="tty"; _ui_dialog() { return 4; }; _tty_read() { printf '%s\n' "$1" >> "$W/tty-prompts"; printf ''; }
+        : > "$W/tty-prompts"
+        ui_yesno "q" Remove Cancel y careful 2>/dev/null; r1=$?
+        ui_yesno "q" Open Close y 2>/dev/null; r2=$?
+        ui_choice3 "q" "q" Apply Skip Stop careful y 2>/dev/null; r3=$?
+        [[ "$r1$r2$r3" == 101 ]] && grep -qF 'Remove / Cancel? [y/N]' "$W/tty-prompts" && grep -qF 'Open / Close? [Y/n]' "$W/tty-prompts" \
+            && grep -qF '(default n)' "$W/tty-prompts" && echo "tty-enter-is-no-for-a-change" || echo "tty answers $r1$r2$r3: $(tr '\n' '|' < "$W/tty-prompts")"
+    )
 
     # A line break in a path does not turn it into two paths.
     mkdir -p "$UH/t6nl"$'\n'"/etc"
@@ -2183,15 +2422,29 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked dialog-button-in-range kept-no-date-no-since \
          yesno-enter-follows-the-default-never-a-change choice3-enter-follows-the-default-never-a-change apply-fallback-enter-is-skip \
          undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked \
+         kdialog-enter-is-not-yes kdialog-failure-asks-on kdialog-wrapper-failure-is-not-yes kdialog-own-exit-1-is-yes \
+         kdialog-own-exits-mapped failed-fix-left-keeps-undo failed-fix-rolled-back-keeps-nothing tty-enter-is-no-for-a-change \
+         failed-rollback-keeps-undo-once failed-fix-interrupted-at-question-keeps-undo action-end-after-lost-window \
+         failed-fix-left-says-so rolled-back-attempt-not-an-undo rollback-interrupted-is-marked failed-fix-left-not-twice-on-terminal \
          front-end-layered-on-install front-end-kirigami-too front-end-declined front-end-pending-not-asked front-end-failure-shown \
          front-end-nothing-to-do front-end-dnf front-end-no-tool front-end-removed-with-the-app front-end-offered-once front-end-install-says-restart \
          front-end-layered-but-broken front-end-probe-without-desktop-user front-end-list-link-ignored front-end-dnf-keeps-what-others-need front-end-offer-wired \
          front-end-probe-only-missing-pyside front-end-installed-but-broken front-end-nobody-asked-not-remembered front-end-gone-already \
          front-end-busy-rpm-keeps-list-and-app front-end-probe-unknown-offers-nothing front-end-remove-app-anyway front-end-rpm-read-in-english \
          front-end-dnf-gone-already front-end-booted-layer-offered front-end-unknown-status-keeps-list front-end-uninstall-failure-keeps-app \
-         front-end-mixed-names-broken front-end-waiting-and-broken front-end-waiting-beats-installed front-end-uninstall-status-wired; do
+         front-end-mixed-names-broken front-end-waiting-and-broken front-end-waiting-beats-installed front-end-uninstall-status-wired \
+         front-end-dnf-keep-checks-nothing; do
     expect "$W/t6.out" "$m" "$m"
 done
+# --install and the other actions that change the PC only after a "yes"
+# say so and stop when nobody can answer (no terminal, no desktop).
+mkdir -p "$W/unatt-state"; chmod 700 "$W/unatt-state"
+unatt_ok=1
+for a in --install --install-timer --uninstall --remove-timer --undo --update; do
+    out=$(env -u DISPLAY -u WAYLAND_DISPLAY AUDIT_STATE_DIR="$W/unatt-state" setsid bash "$TOOL" "$a" --no-gui < /dev/null 2>&1); rc=$?
+    [[ $rc -eq 1 && "$out" == *"${a} asks before it changes anything"*"nothing was changed."* ]] || { unatt_ok=0; echo "  $a: rc=$rc ${out: -160}"; }
+done
+[[ $unatt_ok -eq 1 && ! -e "/usr/local/share/applications/bazzite-security-check.desktop" ]] && ok "unattended-changes-refused" || bad "unattended-changes-refused"
 
 # One window for the whole run: ui_app talks to one long-lived front end
 # over two pipes. A stand-in that speaks the same protocol (no Qt here)
@@ -2345,9 +2598,11 @@ PYEOF
     a=$(ui_app wizard '{"die":true}'); rc=$?
     [[ $rc -eq 3 && -z "$a" && "$_QML_OK" == yes ]] && ! _qml_ok && [[ "$_QML_OK" == no && -z "$_UI_FRONT_W" ]] && echo "front-died-falls-back"
     ui_app wizard '{}' > /dev/null; [[ $? -eq 4 ]] && echo "front-not-used-again"
-    # With the front end gone, a question is asked with kdialog.
-    _as_desktop_user() { echo "kdialog" >> "$W/front-kd"; return 0; }
-    ui_yesno "Continue?" && [[ -s "$W/front-kd" ]] && echo "front-gone-kdialog-asks"
+    # With the front end gone, a question is asked with kdialog (whose
+    # Enter, exit 0, is the "No" answer of a question that defaults to No).
+    _as_desktop_user() { printf '%s\n' "$@" >> "$W/front-kd"; echo "bsa-kdialog-exit:0"; return 0; }
+    ! ui_yesno "Continue?" && [[ "$(grep -A1 -x -- --yes-label "$W/front-kd" | tail -n 1)" == No && "$(grep -A1 -x -- --no-label "$W/front-kd" | tail -n 1)" == Yes ]] \
+        && [[ ! -e "$RUN_TMP/kdialog-failed" && "$UI_MODE" == kde ]] && echo "front-gone-kdialog-asks"
 
     new_run; ui_front_start
     a=$(ui_app wizard '{"fail":true}'); rc=$?

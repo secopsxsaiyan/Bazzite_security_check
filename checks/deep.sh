@@ -724,6 +724,35 @@ _clamav_defs_finding() {
     finding_change "${dir}: ${now}" "$after" "$W_DOWNLOAD"
 }
 
+# _clamav_scan_counts OUTPUT — "FILES ERRORS INFECTED" from the summary
+# clamscan prints at the end of OUTPUT (the files it scanned, those it
+# could not read or scan, and those it found infected), or nothing when
+# OUTPUT has no summary. clamscan prints it whenever it gets to the end,
+# also after an error; with no summary it never ran or did not finish.
+# Only the text after the last summary header is read: a file name with a
+# line break in it comes before the real summary and cannot stand in for it.
+_clamav_scan_counts() {
+    local out="$1" sum files errors infected
+    [[ "$out" == *$'\n----------- SCAN SUMMARY -----------\n'* ]] || return 0
+    sum="${out##*$'\n----------- SCAN SUMMARY -----------\n'}"
+    files=$(sed -n 's/^Scanned files: \([0-9]\{1,9\}\)$/\1/p' <<< "$sum" | head -n 1)
+    [[ -n "$files" ]] || return 0
+    errors=$(sed -n 's/^Total errors: \([0-9]\{1,9\}\)$/\1/p' <<< "$sum" | head -n 1)
+    infected=$(sed -n 's/^Infected files: \([0-9]\{1,9\}\)$/\1/p' <<< "$sum" | head -n 1)
+    printf '%s %s %s\n' "$((10#$files))" "$((10#${errors:-0}))" "$((10#${infected:-0}))"
+}
+
+# _clamav_stop_line OUTPUT — the error that made clamscan stop (or scan
+# nothing), from the text before its summary: an "ERROR:" line of clamscan
+# itself, or libclamav without a temporary folder. (clamscan may log an
+# error about the date after the summary; that does not stop anything.)
+_clamav_stop_line() {
+    local out="$1"
+    [[ "$out" == *$'\n----------- SCAN SUMMARY -----------\n'* ]] && out="${out%$'\n----------- SCAN SUMMARY -----------\n'*}"
+    # (A hit's line, which starts with a file name, is never taken.)
+    grep -v ' FOUND$' <<< "$out" | grep -m 1 -E "^ERROR:|^LibClamAV Error: Can't create temporary directory" | cut -c1-200 || true
+}
+
 check_deep_malware() {
     local -a scanner=() targets=() missing=()
     local clamui=0 host=0 db="" age="" svc
@@ -816,13 +845,19 @@ the scan misses what came since. They are not being updated$([[ $(_freshclam_pla
     # the first account). It stays on the file system of each folder:
     # a drive, a network share or an app image mounted below one is left
     # out (an app's own mount in /tmp can be large).
-    local out="" rc=0 part prc owner
-    local -a opts=(-r -i --no-summary --cross-fs=no --max-filesize=200M --max-scansize=400M) dbopt=()
+    # The summary at the end of each scan counts the files scanned and the
+    # files that could not be (with -i those are not listed one by one).
+    local out="" pre="" rc=0 part prc owner counts nfiles=0 nerrors=0 ninfected=0 counted=1 stopped="" stopped_as=""
+    local -a opts=(-r -i --cross-fs=no --max-filesize=200M --max-scansize=400M) dbopt=()
     # clamscan does not read freshclam.conf: it is told where freshclam
     # puts the definitions (the ones checked above).
     [[ "$host" -eq 1 && -n "$db" ]] && dbopt=("--database=${db}")
     if [[ "${scanner[0]}" == "flatpak" ]]; then
         out=$(_as_desktop_user timeout "$_CLAMAV_SCAN_LIMIT" "${scanner[@]}" "${opts[@]}" "${targets[@]}" 2>&1 < /dev/null) || rc=$?
+        counts=$(_clamav_scan_counts "$out")
+        if [[ -n "$counts" ]]; then read -r nfiles nerrors ninfected <<< "$counts"; else counted=0; fi
+        stopped=$(_clamav_stop_line "$out")
+        pre="${out%$'\n----------- SCAN SUMMARY -----------\n'*}"
     else
         for owner in "${!by_user[@]}"; do
             local -a mine=()
@@ -830,24 +865,66 @@ the scan misses what came since. They are not being updated$([[ $(_freshclam_pla
             prc=0
             part=$(_as_user "$owner" timeout "$_CLAMAV_SCAN_LIMIT" "${scanner[@]}" "${opts[@]}" "${dbopt[@]}" "${mine[@]}" 2>&1 < /dev/null) || prc=$?
             out+="${part}"$'\n'
+            # What each scan printed before its summary (clamscan may log a
+            # date error after it).
+            pre+="${part%$'\n----------- SCAN SUMMARY -----------\n'*}"$'\n'
+            if [[ -z "$stopped" ]]; then
+                stopped=$(_clamav_stop_line "$part")
+                [[ -n "$stopped" ]] && stopped_as="$owner"
+            fi
+            counts=$(_clamav_scan_counts "$part")
+            if [[ -n "$counts" ]]; then
+                local f e n
+                read -r f e n <<< "$counts"
+                nfiles=$(( nfiles + f )); nerrors=$(( nerrors + e )); ninfected=$(( ninfected + n ))
+            else
+                counted=0
+            fi
             # A stopped scan (124) is told apart from the rest.
             if (( prc == 124 )) || (( rc != 124 && prc > rc )); then rc=$prc; fi
         done
     fi
-    local found first
+    local found first said
     found=$(grep -E ' FOUND$' <<< "$out" || true)
-    # ClamAV's own error lines start with "LibClamAV Error:" or "ERROR:";
-    # a file it could not read is "PATH: ... ERROR" (exit 2).
-    first=$(grep -m 1 -iE '^(LibClamAV Error|ERROR):' <<< "$out" | cut -c1-200 || true)
+    # ClamAV's own error lines start with "LibClamAV Error:" or "ERROR:".
+    # "ERROR:" comes from clamscan itself when it cannot go on (options,
+    # definitions, engine, memory). Without a temporary folder, libclamav
+    # says so for every file and clamscan goes on, counting each file as
+    # scanned (exit 0): nothing was really scanned either. A file it could
+    # not read or scan only adds to the summary's "Total errors" (exit 2).
+    # (Only from before each summary, as for the stop. The text of a hit's
+    # line is a file name.)
+    first=$(grep -v ' FOUND$' <<< "$pre" | grep -m 1 -iE '^(LibClamAV Error|ERROR):' | cut -c1-200 || true)
+    said=$(grep -m 1 . <<< "$out" | cut -c1-200 || true)
     if [[ -n "$found" ]]; then
         finding high "ClamAV found $(grep -c . <<< "$found") infected file(s)" \
 "${found}" \
 "Delete the files (or check them on virustotal.com if you think it is a false
 alarm), then change passwords used on this PC if one of them was run."
-        (( rc == 124 )) && check_note "The scan was stopped after $(( _CLAMAV_SCAN_LIMIT / 60 )) minutes, before it finished: other files may not have been scanned."
+        if (( rc == 124 )); then
+            check_note "The scan was stopped after $(( _CLAMAV_SCAN_LIMIT / 60 )) minutes, before it finished: other files may not have been scanned."
+        elif [[ -n "$stopped" ]]; then
+            check_note "ClamAV stopped with an error before it scanned every folder${stopped_as:+ of ${stopped_as}} (${stopped}): other files may not have been scanned."
+        elif [[ $counted -eq 0 ]]; then
+            check_note "The scan of some folders did not finish (no summary from ClamAV): other files may not have been scanned."
+        fi
+    elif [[ $ninfected -gt 0 ]] || [[ $rc -eq 1 && $counted -eq 1 ]]; then
+        # clamscan says it found something (its summary, or exit 1 from a
+        # scan that got to its end) but no line says what: never "nothing
+        # found". (Exit 1 without a summary is a scanner that did not start,
+        # such as "flatpak run" failing: see below.)
+        finding high "ClamAV found $([[ $ninfected -gt 0 ]] && echo "${ninfected} " || true)infected file(s)" \
+"clamscan reported infected files (exit ${rc}$([[ $ninfected -gt 0 ]] && echo ", ${ninfected} in its summary" || true)), but its list of them could not be read." \
+"Run the check again, or scan these folders with ClamUI or ClamTk, to see which
+files: $(_join ', ' "${targets[@]}"). Then delete them (or check them on
+virustotal.com if you think it is a false alarm), and change passwords used on
+this PC if one of them was run."
     elif (( rc == 124 )); then
         mark_skip "the scan was stopped after $(( _CLAMAV_SCAN_LIMIT / 60 )) minutes, before it finished (it scans $(_join ', ' "${targets[@]}"); many files there make it slow)"
-    elif [[ $rc -ne 0 && $rc -ne 1 ]] && grep -qiE '^(LibClamAV Error|ERROR):.*(databas|cl_load|cli_load|cvd|cld|malformed|engine)' <<< "$out"; then
+    elif [[ $rc -ne 0 && $rc -ne 1 && $nfiles -eq 0 ]] \
+         && grep -qiE '^(LibClamAV Error|ERROR):.*(databas|cl_load|cli_load|cvd|cld|malformed|engine)' <<< "$out"; then
+        # (Definitions that do not load leave nothing scanned: an engine
+        # error about one file of a scan that went on is not that.)
         if [[ "$host" -eq 1 ]] && _have freshclam; then
             _clamav_defs_finding medium "ClamAV cannot load its virus definitions" \
 "The scan stopped because ClamAV could not load the definitions in ${db}
@@ -855,12 +932,31 @@ alarm), then change passwords used on this PC if one of them was run."
 replaces them." "$db" "definitions that do not load"
         fi
         mark_skip "ClamAV could not load its virus definitions (${first:-exit ${rc}})$([[ $host -eq 0 ]] && echo "; open ClamTk once to download them" || true)$([[ $host -eq 1 ]] && ! _have freshclam && echo "; freshclam, which downloads them, is not installed" || true)"
-    elif [[ $rc -ne 0 && $rc -ne 1 && $rc -ne 2 ]]; then
+    elif [[ -n "$stopped" ]]; then
+        # Not "nothing found": clamscan gave up, so the folders were not
+        # (all) scanned.
+        mark_skip "ClamAV stopped with an error before it scanned the folders${stopped_as:+ of ${stopped_as}} (${stopped})"
+    elif [[ $counted -eq 0 ]]; then
+        # Every scan that gets to its end prints a summary: without one, a
+        # scan did not run (the scanner could not start) or did not finish.
+        mark_skip "the scan did not finish: ClamAV gave no summary (exit ${rc}${said:+: ${said}})"
+    elif [[ $rc -ne 0 && $rc -ne 2 ]]; then
         mark_skip "the scan did not finish (exit ${rc}${first:+: ${first}})"
+    elif [[ $rc -eq 2 && $nfiles -eq 0 ]]; then
+        mark_skip "ClamAV could not read any file in $(_join ', ' "${targets[@]}")${first:+ (${first})}"
     else
-        # Exit 2 without a database error: files the scanning account may
-        # not read (other accounts' private files in /tmp) were left out.
-        check_note "ClamAV scanned: $(_join ', ' "${targets[@]}") - nothing found$([[ $rc -eq 2 ]] && echo " (files the scanning account may not read were left out)" || true)"
+        # Exit 2 without an error that stops clamscan: files the scanning
+        # account may not read (other accounts' private files in /tmp), or
+        # that ClamAV could not open or scan, were left out.
+        local left=""
+        if [[ $rc -eq 2 && $nerrors -gt 0 ]]; then
+            left=" (${nerrors} file(s) could not be read or scanned and were left out${first:+; ClamAV said: ${first}})"
+        elif [[ $rc -eq 2 ]]; then
+            left=" (files or folders that could not be read were left out${first:+; ClamAV said: ${first}})"
+        elif [[ -n "$first" ]]; then
+            left=" (ClamAV said: ${first})"
+        fi
+        check_note "ClamAV scanned ${nfiles} file(s) in: $(_join ', ' "${targets[@]}") - nothing found${left}"
     fi
     return 0
 }

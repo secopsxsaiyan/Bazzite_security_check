@@ -481,7 +481,7 @@ _front_remove_failed() {
     if [[ "$tool" == rpm-ostree ]]; then cmd="rpm-ostree uninstall $*"; else cmd="dnf remove $*"; fi
     if ui_yesno "$* could not be removed. Remove the Security Check app anyway? $([[ $# -gt 1 ]] && echo They stay || echo It stays) installed; remove $([[ $# -gt 1 ]] && echo them || echo it) later with: ${cmd}
 
-Keep the app, and removing it again (--uninstall) can try again." \
+If you keep the app, --uninstall can try again later." \
         "Remove anyway" "Keep the app" "n" careful; then
         rm -f -- "${STATE_DIR:?}/${_FRONT_PKGS_FILE:?}"
         return 0
