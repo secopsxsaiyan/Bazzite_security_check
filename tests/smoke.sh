@@ -775,6 +775,9 @@ ERROR: Update failed."
     [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" != *"Extra signature"* ]] && echo "extra-sources-all-there"
     # The definitions fix updates only the official sets (and ExtraDatabase names that are names).
     [[ "$(_freshclam_cmd)" == "freshclam --update-db=main --update-db=daily --update-db=bytecode --update-db=safebrowsing" ]] && echo "definitions-fix-only-official-sets"
+    cp "$CR/etc/freshclam.conf" "$W/clam-conf.keep"; printf 'Bytecode no\nExcludeDatabase Daily\nExtraDatabase valhalla\n' >> "$CR/etc/freshclam.conf"
+    [[ "$(_freshclam_cmd)" == "freshclam --update-db=main --update-db=safebrowsing --update-db=valhalla" ]] && echo "definitions-fix-follows-exclusions"
+    cp "$W/clam-conf.keep" "$CR/etc/freshclam.conf"
     # A failure that may pass (one busy answer) is a note, with what freshclam did not reach.
     rm -f "$CR/var/lib/clamav/urlhaus.ndb"
     FCLOG="WARNING: downloadFile: Unexpected response (503) from ${DEAD}
@@ -785,17 +788,43 @@ Update failed for custom database URL: ${DEAD}"; case_
     CONN="ERROR: Download failed (7) ERROR:  Message: Could not connect to server
 ERROR: Can't download urlhaus.ndb from ${DEAD}
 Update failed for custom database URL: ${DEAD}"
-    FCLOG="${CONN}"$'\n'"${CONN}"; case_
+    RUN="ClamAV update process started at Sat Nov 21 00:13:55 2026"
+    FCLOG="${RUN}"$'\n'"${CONN}"$'\n'"${RUN}"$'\n'"${CONN}"; case_
     [[ "${F_DETAIL[0]:-}" == *"urlhaus.example/…/urlhaus.ndb (download failed)"* && "${F_FIX[0]}" == fix_clamav_custom_off* ]] && echo "connection-failure-twice-is-a-finding"
-    FCLOG="urlhaus.ndb updated (version: custom database, sigs: 3)"$'\n'"${CONN}"$'\n'"${CONN}"; case_
+    FCLOG="urlhaus.ndb updated (version: custom database, sigs: 3)"$'\n'"${RUN}"$'\n'"${CONN}"$'\n'"${RUN}"$'\n'"${CONN}"; case_
     [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"(download failed); it may work next time"* ]] && echo "worked-before-is-a-note"
     # One address that starts another's is not blamed for the other's failure.
     P1="https://p.example/db/x.ndb"; P2="https://p.example/db/x.ndb.old"
     printf 'DatabaseCustomURL %s\nDatabaseCustomURL %s\n' "$P1" "$P2" > "$CR/etc/freshclam.conf"
-    FCLOG="WARNING: downloadFile: Unexpected response (404) from ${P2}
+    FCLOG="WARNING: downloadFile: file not found: ${P2}
 ERROR: Can't download x.ndb.old from ${P2}
 Update failed for custom database URL: ${P2}"; case_
-    [[ "${F_FIX[0]:-}" == "fix_clamav_custom_off $(printf '%q' "$P2")" ]] && echo "prefix-address-not-blamed"
+    [[ "${F_FIX[0]:-}" == "fix_clamav_custom_off $(printf '%q' "$P2")" && "${F_DETAIL[0]}" == *"x.ndb.old (HTTP 404)"* ]] && echo "prefix-address-not-blamed"
+    # As freshclam words a refusal (403): two updates are needed, one is a note.
+    printf 'DatabaseCustomURL %s\nDatabaseCustomURL %s\n' "$P1" "$P2" > "$CR/etc/freshclam.conf"
+    F403="WARNING: Can't download x.ndb.old from ${P2}
+WARNING: received error code 403 or 429 from the ClamAV Content Delivery Network (CDN)."
+    FCLOG="${RUN}"$'\n'"${F403}"; case_
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"x.ndb.old (download failed); it may work next time"* ]] && echo "refusal-once-is-a-note"
+    FCLOG="${RUN}"$'\n'"${F403}"$'\n'"${RUN}"$'\n'"${F403}"; case_
+    [[ "${F_FIX[0]:-}" == "fix_clamav_custom_off $(printf '%q' "$P2")" ]] && echo "refusal-in-two-updates-is-a-finding"
+    # ... but not when its file is there: it worked before.
+    echo x > "$CR/var/lib/clamav/x.ndb.old"; case_
+    [[ ${#F_SEV[@]} -eq 0 ]] && echo "file-there-means-it-worked"; rm -f "$CR/var/lib/clamav/x.ndb.old"
+    # A time stamp in front of the lines (LogTime yes).
+    FCLOG="Sat Nov 21 00:52:05 2026 -> WARNING: downloadFile: Unexpected response (410) from ${P2}"; case_
+    [[ "${F_FIX[0]:-}" == "fix_clamav_custom_off $(printf '%q' "$P2")" ]] && echo "logtime-failure-counts"
+    FCLOG+=$'\n'"Sat Nov 21 01:52:05 2026 -> x.ndb.old updated (version: custom database, sigs: 4)"; case_
+    [[ ${#F_SEV[@]} -eq 0 ]] && echo "logtime-success-clears"
+    # An official set's line does not clear a source whose file has the same name.
+    printf 'DatabaseCustomURL https://o.example/x/daily.cld\n' > "$CR/etc/freshclam.conf"
+    FCLOG="WARNING: downloadFile: Unexpected response (410) from https://o.example/x/daily.cld"$'\n'"daily.cld database is up-to-date (version: 28189, sigs: 355874, f-level: 90, builder: x)"; case_
+    [[ ${#F_SEV[@]} -eq 1 ]] && echo "official-line-clears-no-source"
+    # "The others are updated again" only when no earlier source still fails.
+    printf 'DatabaseCustomURL https://a.example/a.ndb\nDatabaseCustomURL https://b.example/b.ndb\nDatabaseCustomURL https://c.example/c.ndb\n' > "$CR/etc/freshclam.conf"
+    FCLOG="WARNING: downloadFile: Unexpected response (503) from https://a.example/a.ndb
+WARNING: downloadFile: Unexpected response (410) from https://b.example/b.ndb"; case_
+    [[ "${F_FIX[0]:-}" == "fix_clamav_custom_off https://b.example/b.ndb" && "${F_AFTER[0]}" != *"updated again"* ]] && echo "no-promise-while-an-earlier-source-fails"
     # Only sources listed after the failing one are "no longer updated"; an earlier missing one is a note.
     printf 'DatabaseCustomURL https://n.example/new.ndb\nDatabaseCustomURL https://b.example/bad.ndb\nDatabaseCustomURL https://l.example/later.ndb\nDatabaseCustomURL "https://z.example/z.ndb"\n' > "$CR/etc/freshclam.conf"
     echo x > "$CR/var/lib/clamav/later.ndb"
@@ -807,7 +836,7 @@ Update failed for custom database URL: ${P2}"; case_
        && "$(_clamav_custom_urls | tail -n 1)" == "https://z.example/z.ndb" ]] && echo "labels-without-credentials-and-quotes"
     # The fix, run on a copy of a freshclam.conf: only the failing line gets a #, the rest stays; undo puts it back.
     STATE_DIR="$W/clam-state"; RUN_ID=t5b; CURRENT_FINDING=0
-    CF="$W/clam-fc.conf"; printf '# a comment\nDatabaseCustomURL %s\n  DatabaseCustomURL %s\nDatabaseCustomURL %sX\nDatabaseCustomURL %s\nDatabaseCustomURL "%s"\r\n' "$DEAD" "$DEAD" "$DEAD" "$OK2" "$DEAD" > "$CF"; cp "$CF" "$CF.orig"
+    CF="$W/clam-fc.conf"; printf '# a comment\nDatabaseCustomURL %s\n  DatabaseCustomURL %s\nDatabaseCustomURL %sX\nDatabaseCustomURL %s\nDatabaseCustomURL "%s"\r\n\n\n' "$DEAD" "$DEAD" "$DEAD" "$OK2" "$DEAD" > "$CF"; cp "$CF" "$CF.orig"
     apply_change() { printf '%s\n' "$1" > "$W/clam-fix.sh"; printf '%s\n' "$2" > "$W/clam-fix.undo"; return 0; }
     printf '#!/bin/bash\necho "systemctl $*" >> "%s"\n' "$W/clam-fix.log" > "$W/clam-bin/systemctl"
     fix_clamav_custom_off "$DEAD"; : > "$W/clam-fix.log"
@@ -818,13 +847,19 @@ Update failed for custom database URL: ${P2}"; case_
        && "$(sed -n 3p "$CF")" == "# Turned off by Security Check (it could not be downloaded):   DatabaseCustomURL ${DEAD}" \
        && "$(sed -n 4p "$CF")" == "DatabaseCustomURL ${DEAD}X" && "$(sed -n 5p "$CF")" == "DatabaseCustomURL ${OK2}" && "$(sed -n 1p "$CF")" == "# a comment" \
        && "$(sed -n 6p "$CF")" == "# Turned off by Security Check (it could not be downloaded): DatabaseCustomURL \"${DEAD}\""$'\r' \
+       && "$(wc -l < "$CF")" -eq "$(wc -l < "$CF.orig")" && "$(tail -c 2 "$CF" | od -An -tx1 | tr -d ' ')" == 0a0a \
        && "$(cat "$W/clam-fix.log")" == "systemctl try-restart clamav-freshclam.service" ]] && echo "extra-source-fix-comments-only-that-line"
     PATH="$W/clam-bin:$PATH" bash -c 'set -euo pipefail; source "$1"' _ "$W/clam-fix.undo"
     cmp -s "$CF" "$CF.orig" && echo "extra-source-fix-undo"
     # Nothing left to turn off: the fix fails and the file stays as it was.
     printf 'DatabaseCustomURL %s\n' "$OK2" > "$CF"; cp "$CF" "$CF.orig"
     PATH="$W/clam-bin:$PATH" bash -c 'set -euo pipefail; source "$1"' _ "$W/clam-fix.sh"; rc=$?
-    [[ $rc -ne 0 ]] && cmp -s "$CF" "$CF.orig" && echo "extra-source-fix-fails-when-nothing-matches"
+    [[ $rc -ne 0 ]] && cmp -s "$CF" "$CF.orig" && [[ -z "$(ls "$W"/clam-fc.conf.?????? 2>/dev/null)" ]] && echo "extra-source-fix-fails-when-nothing-matches"
+    # A service that does not restart: the file is changed all the same, and the fix succeeds.
+    printf 'DatabaseCustomURL %s\n' "$DEAD" > "$CF"
+    printf '#!/bin/bash\necho "systemctl $*" >> "%s"; exit 1\n' "$W/clam-fix.log" > "$W/clam-bin/systemctl"
+    PATH="$W/clam-bin:$PATH" bash -c 'set -euo pipefail; source "$1"' _ "$W/clam-fix.sh" > "$W/clam-fix.out" 2>&1; rc=$?
+    [[ $rc -eq 0 && "$(cat "$CF")" == "# Turned off by Security Check"* ]] && grep -q "did not restart" "$W/clam-fix.out" && echo "restart-failure-keeps-the-change"
 ) > "$W/clam.out" 2>&1
 for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-not-offered-again no-clamav-is-an-optional-fix \
          clamtk-alone-scans-without-setup clamtk-scans-while-clamui-is-not-set-up clamscan-without-freshclam no-definitions-offers-download \
@@ -840,7 +875,9 @@ for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-no
          later-success-clears-and-missing-is-a-note extra-sources-all-there definitions-fix-only-official-sets \
          extra-source-fix-comments-only-that-line extra-source-fix-undo passing-failure-is-a-note connection-failure-twice-is-a-finding \
          worked-before-is-a-note prefix-address-not-blamed only-later-sources-are-blocked labels-without-credentials-and-quotes \
-         extra-source-fix-fails-when-nothing-matches; do
+         extra-source-fix-fails-when-nothing-matches refusal-once-is-a-note refusal-in-two-updates-is-a-finding file-there-means-it-worked \
+         logtime-failure-counts logtime-success-clears official-line-clears-no-source no-promise-while-an-earlier-source-fails \
+         definitions-fix-follows-exclusions restart-failure-keeps-the-change; do
     expect "$W/clam.out" "$t" "$t"
 done
 
