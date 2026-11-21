@@ -389,25 +389,6 @@ _clamav_defs_age() {
     printf '%s' "$t"
 }
 
-# _clamav_pending PACKAGE... — those of PACKAGE that a system image ahead
-# of the running one requests: layered, waiting for the restart. The
-# rollback image (behind the running one) does not count.
-_clamav_pending() {
-    [[ -n "${RPMOSTREE_JSON:-}" ]] || return 0
-    python3 -I -c '
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-except ValueError:
-    sys.exit(0)
-deps = [x for x in (d.get("deployments") or []) if isinstance(x, dict)]
-booted = next((i for i, x in enumerate(deps) if x.get("booted")), 0)
-ahead = [x for i, x in enumerate(deps) if x.get("staged") or i < booted]
-req = [x.get("requested-packages") for x in ahead]
-req = [r for r in req if isinstance(r, list)]
-print(" ".join(p for p in sys.argv[1:] if any(p in r for r in req)))' "$@" <<< "$RPMOSTREE_JSON" 2>/dev/null || true
-}
-
 # _clamav_official_dbs — the definitions freshclam takes from ClamAV's own
 # mirrors: main, daily and bytecode, and safebrowsing or valhalla when an
 # ExtraDatabase line asks for them; not those freshclam.conf leaves out
@@ -762,7 +743,7 @@ check_deep_malware() {
     local pending="" p
     local -a still=()
     if [[ ${#missing[@]} -gt 0 ]] && [[ $clamui -eq 1 || $host -eq 1 || ${#scanner[@]} -eq 0 ]]; then
-        pending=$(_clamav_pending "${missing[@]}")
+        pending=$(_layered_pending "${missing[@]}")
         for p in "${missing[@]}"; do
             [[ " ${pending} " == *" ${p} "* ]] || still+=("$p")
         done

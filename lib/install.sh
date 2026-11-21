@@ -174,6 +174,157 @@ _install_app_files() {
     return 0
 }
 
+# ---- what the Plasma window needs ----
+# The one window (ui/app.py) runs on PySide6 and Kirigami. Bazzite's KDE
+# image has Kirigami but not PySide6; without it the tool uses plain
+# kdialog windows. Installing the app offers to add what is missing; the
+# packages it added are listed in STATE_DIR so that removing the app can
+# offer to take them away again.
+readonly _FRONT_PKGS_FILE="front-end-packages"
+# Where Kirigami's QML module is, when it is installed.
+_KIRIGAMI_GLOB="/usr/lib*/qt6/qml/org/kde/kirigami"
+# Set once the question was asked, so that a normal start asks only once.
+readonly _FRONT_OFFERED_FILE="front-end-offered"
+
+# _front_end_missing — the packages the window needs that are not here, on
+# a KDE Plasma desktop (nothing on another desktop: kdialog and the window
+# are KDE's). PySide6 is tried with the desktop user's python3, as the
+# window runs; with no desktop user, with root's.
+_front_end_missing() {
+    [[ "$DESKTOP_ENV" == kde ]] || return 0
+    local -a miss=()
+    local probe='import PySide6.QtQml, PySide6.QtWidgets'
+    if [[ -n "${DESKTOP_USER:-}" ]]; then
+        _as_desktop_user python3 -I -c "$probe" >/dev/null 2>&1 < /dev/null || miss+=(python3-pyside6)
+    else
+        python3 -I -c "$probe" >/dev/null 2>&1 < /dev/null || miss+=(python3-pyside6)
+    fi
+    compgen -G "$_KIRIGAMI_GLOB" >/dev/null || miss+=(kf6-kirigami)
+    printf '%s' "${miss[*]}"
+}
+
+# _front_pkgs_recorded — the packages an earlier install added, one per line.
+_front_pkgs_recorded() {
+    local f="${STATE_DIR}/${_FRONT_PKGS_FILE}" p
+    [[ -f "$f" && ! -L "$f" ]] || return 0
+    while IFS= read -r p; do
+        [[ "$p" =~ ^[a-z0-9][a-z0-9.+_-]*$ ]] && printf '%s\n' "$p"
+    done < "$f"
+}
+
+# _front_pkgs_record PACKAGE... — add PACKAGE to the list (no duplicates).
+_front_pkgs_record() {
+    local f="${STATE_DIR}/${_FRONT_PKGS_FILE}"
+    { _front_pkgs_recorded; printf '%s\n' "$@"; } | sort -u > "${f}.tmp" && mv -f -- "${f}.tmp" "$f"
+}
+
+# _pkg_tool — how packages are added here: "rpm-ostree" (Bazzite and other
+# Fedora Atomic images: layered, active after a restart), "dnf", or nothing.
+_pkg_tool() {
+    if [[ "$IS_OSTREE" -eq 1 ]] && _have rpm-ostree; then echo rpm-ostree
+    elif _have dnf; then echo dnf
+    fi
+}
+
+# _pkg_run TOOL install|uninstall PACKAGE... — add or remove PACKAGE, with a
+# busy indicator; what the package tool prints goes to the run log (its last
+# lines are shown on failure).
+_pkg_run() {
+    local tool="$1" verb="$2" out rc=0
+    shift 2
+    local -a cmd
+    case "$tool:$verb" in
+        rpm-ostree:install)   cmd=(rpm-ostree install --idempotent --allow-inactive -- "$@") ;;
+        rpm-ostree:uninstall) cmd=(rpm-ostree uninstall -- "$@") ;;
+        dnf:install)          cmd=(dnf install -y -- "$@") ;;
+        dnf:uninstall)        cmd=(dnf remove -y -- "$@") ;;
+        *) return 2 ;;
+    esac
+    ui_busy_start "$([[ $verb == install ]] && echo Installing || echo Removing) $*…"
+    out=$("${cmd[@]}" 2>&1 < /dev/null) || rc=$?
+    ui_busy_stop
+    log "${cmd[*]}: exit ${rc}"
+    printf '%s\n' "$out" | tail -n 40 | sed 's/^/  pkg: /' >> "${RUN_LOG:-/dev/null}" 2>/dev/null || true
+    if (( rc != 0 )); then
+        ui_error "$(printf '%s did not finish (exit %s):\n\n%s' "${cmd[*]}" "$rc" "$(printf '%s\n' "$out" | tail -n 8)")"
+        return 1
+    fi
+    return 0
+}
+
+# install_front_end — offer to add what the Plasma window needs (see above).
+# _FRONT_RESULT tells how it went: "none" (nothing missing), "added" (in
+# use from the next start), "restart" (layered, or already waiting: active
+# after the restart), "declined", "failed" or "manual" (no package tool
+# known here). _FRONT_MISSING: the packages that were missing.
+_FRONT_RESULT=""; _FRONT_MISSING=""
+install_front_end() {
+    local miss tool pending="" p left=""
+    miss=$(_front_end_missing)
+    _FRONT_MISSING="$miss"; _FRONT_RESULT=none
+    [[ -n "$miss" ]] || return 0
+    tool=$(_pkg_tool)
+    if [[ -z "$tool" ]]; then
+        _FRONT_RESULT=manual
+        return 1
+    fi
+    if [[ "$tool" == rpm-ostree ]]; then
+        # shellcheck disable=SC2086 # package names, one word each
+        pending=$(_layered_pending $miss)
+        for p in $miss; do [[ " $pending " == *" $p "* ]] || left+="${left:+ }$p"; done
+        if [[ -z "$left" ]]; then
+            _FRONT_RESULT=restart
+            return 0
+        fi
+        miss="$left"
+    fi
+    local it=it is=is
+    [[ "$miss" == *" "* ]] && { it=them; is=are; }
+    : > "${STATE_DIR}/${_FRONT_OFFERED_FILE}" 2>/dev/null || true
+    ui_yesno "Security Check's window (one window for the setup, the results and the fixes) needs ${miss// /, }, which ${is} not installed. Without ${it}, the tool uses plain KDE dialogs.
+
+$([[ $tool == rpm-ostree ]] && echo "Install ${it} now? ${it^} ${is} added to the system image with rpm-ostree (layered packages, updated with the system) and active after the next restart." || echo "Install ${it} now with dnf?")
+Removing the app later offers to remove ${it} again." "Install" "Not now" "y" careful || { _FRONT_RESULT=declined; return 1; }
+    # shellcheck disable=SC2086 # package names, one word each
+    _pkg_run "$tool" install $miss || { _FRONT_RESULT=failed; return 1; }
+    # shellcheck disable=SC2086
+    _front_pkgs_record $miss
+    if [[ "$tool" == rpm-ostree ]]; then _FRONT_RESULT=restart; else _FRONT_RESULT=added; fi
+    return 0
+}
+
+# offer_front_end_once — at the start of a run of the installed app with
+# KDE dialogs: when the window cannot run, offer once what it needs (an
+# app installed or updated by an older version was never asked). Installing
+# the app again asks again.
+offer_front_end_once() {
+    [[ "$UI_MODE" == kde ]] && _app_installed && ui_interactive || return 0
+    [[ -e "${STATE_DIR}/${_FRONT_OFFERED_FILE}" ]] && return 0
+    [[ -n "$(_front_end_missing)" ]] || return 0
+    install_front_end || true
+    case "$_FRONT_RESULT" in
+        restart) ui_msg "Security Check's window is used after the next restart (${_FRONT_MISSING// /, } is added to the system image). This time it uses plain KDE dialogs." ;;
+        added)   ui_msg "Security Check's window is used from the next start." ;;
+    esac
+    return 0
+}
+
+# remove_front_end — offer to remove the packages an install added.
+remove_front_end() {
+    local -a pkgs=()
+    local tool
+    mapfile -t pkgs < <(_front_pkgs_recorded)
+    [[ ${#pkgs[@]} -gt 0 ]] || return 0
+    tool=$(_pkg_tool)
+    [[ -n "$tool" ]] || return 0
+    ui_yesno "Installing the app also installed ${pkgs[*]} for its window. Remove $([[ ${#pkgs[@]} -gt 1 ]] && echo them || echo it) too?
+
+Other programs may use $([[ ${#pkgs[@]} -gt 1 ]] && echo them || echo it) as well.$([[ $tool == rpm-ostree ]] && echo " The change is active after the next restart.")" \
+        "Remove" "Keep" "n" careful || return 0
+    _pkg_run "$tool" uninstall "${pkgs[@]}" || return 1
+    rm -f -- "${STATE_DIR}/${_FRONT_PKGS_FILE}"
+}
+
 # install_app — install the tool as an app: a "Security Check" entry in
 # every user's application menu and the bazzite-sec-audit command, both
 # running the root-owned copy in INSTALL_DIR.
@@ -197,6 +348,12 @@ Remove it any time with --uninstall." "${verb}" "Cancel" "y" careful || return 0
     _timer_installed && extra=$'
 
 The weekly check uses the same copy, so it was updated too.'
+    install_front_end || true
+    case "$_FRONT_RESULT" in
+        restart) extra+=$'\n\n'"Restart the PC to use Security Check's window: ${_FRONT_MISSING// /, } is added to the system image and active after the restart. Until then it uses plain KDE dialogs." ;;
+        declined|failed) extra+=$'\n\n'"Without ${_FRONT_MISSING// /, }, Security Check uses plain KDE dialogs. Install the app again (--install) to add it." ;;
+        manual) extra+=$'\n\n'"Without ${_FRONT_MISSING// /, }, Security Check uses plain KDE dialogs. Install it with your system's package manager." ;;
+    esac
     ui_msg "Security Check is installed. Start it from the application menu (System → Security Check) or with the command bazzite-sec-audit.
 
 Updates: Settings → Updates installs new releases (signature and checksums are verified first).${extra}"
@@ -215,6 +372,7 @@ Reports, history and undo steps are kept.$(_timer_installed && printf '\nThe wee
     [[ -L "$APP_BIN" ]] && rm -f -- "$APP_BIN"
     _remove_copy
     _refresh_menu
+    remove_front_end || true
     ui_msg "The Security Check app was removed. Past reports were kept."
 }
 

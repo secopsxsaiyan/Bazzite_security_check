@@ -1785,6 +1785,74 @@ for line in open(sys.argv[1]):
         [[ ! -e "$INSTALL_DIR" ]] && echo "copy-removed-when-unused"
     )
 
+    # What the Plasma window needs (PySide6, Kirigami): installing the app
+    # offers to add it - layered with rpm-ostree, or with dnf - and
+    # remembers what it added, so removing the app can offer to remove it.
+    (
+        STATE_DIR="$W/fe-state"; mkdir -p "$STATE_DIR"; RUN_LOG="$W/fe.log"; : > "$RUN_LOG"
+        DESKTOP_USER="$U"; DESKTOP_ENV=kde; IS_OSTREE=1; UI_MODE=none
+        mkdir -p "$W/fe-qml/kirigami"; _KIRIGAMI_GLOB="$W/fe-qml/kirigam[i]"
+        RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
+        PYSIDE=no; HAVE="rpm-ostree"; ANSWER=0; PKG_RC=0
+        _have() { [[ " $HAVE " == *" $1 "* ]]; }
+        _as_desktop_user() { [[ "$1" == python3 ]] && { [[ $PYSIDE == yes ]]; return; }; return 0; }
+        rpm-ostree() { echo "rpm-ostree $*" >> "$W/fe-pkg"; return "$PKG_RC"; }
+        dnf() { echo "dnf $*" >> "$W/fe-pkg"; return "$PKG_RC"; }
+        ui_yesno() { printf '%s|%s|%s|%s\n' "$2" "$3" "$4" "$5" >> "$W/fe-asked"; return "$ANSWER"; }
+        ui_msg() { echo "MSG ${1//$'\n'/ }" >> "$W/fe-msg"; }; ui_error() { echo "ERR ${1//$'\n'/ }" >> "$W/fe-msg"; }
+        ui_busy_start() { :; }; ui_busy_stop() { :; }; ui_interactive() { return 0; }
+        fe_case() { : > "$W/fe-pkg"; : > "$W/fe-asked"; : > "$W/fe-msg"; install_front_end; }
+        # PySide6 missing on Bazzite: asked (a change, so not on Enter), layered, recorded.
+        fe_case
+        [[ "$_FRONT_RESULT" == restart && "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent --allow-inactive -- python3-pyside6" \
+           && "$(cat "$W/fe-asked")" == "Install|Not now|y|careful" && "$(_front_pkgs_recorded)" == python3-pyside6 \
+           && -e "$STATE_DIR/front-end-offered" ]] && echo "front-end-layered-on-install"
+        # Kirigami missing too: both, in one transaction.
+        rm -rf "$W/fe-qml/kirigami"; fe_case
+        [[ "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent --allow-inactive -- python3-pyside6 kf6-kirigami" ]] && echo "front-end-kirigami-too"
+        mkdir -p "$W/fe-qml/kirigami"; rm -f "$STATE_DIR/front-end-packages"
+        # Declined: nothing installed, nothing recorded.
+        ANSWER=1; fe_case
+        [[ "$_FRONT_RESULT" == declined && ! -s "$W/fe-pkg" && -z "$(_front_pkgs_recorded)" ]] && echo "front-end-declined"
+        ANSWER=0
+        # Already layered and waiting for the restart: not asked again.
+        RPMOSTREE_JSON='{"deployments":[{"staged":true,"requested-packages":["python3-pyside6"]},{"booted":true,"requested-packages":[]}]}'; fe_case
+        [[ "$_FRONT_RESULT" == restart && ! -s "$W/fe-asked" && ! -s "$W/fe-pkg" ]] && echo "front-end-pending-not-asked"
+        RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
+        # rpm-ostree fails: the error is shown, nothing recorded.
+        PKG_RC=1; fe_case
+        [[ "$_FRONT_RESULT" == failed && -z "$(_front_pkgs_recorded)" ]] && grep -q "^ERR rpm-ostree install .* did not finish (exit 1)" "$W/fe-msg" && echo "front-end-failure-shown"
+        PKG_RC=0
+        # Everything there, or not a Plasma desktop: nothing asked.
+        PYSIDE=yes; fe_case; r1=$_FRONT_RESULT; PYSIDE=no; DESKTOP_ENV=gnome; fe_case
+        [[ "$r1" == none && "$_FRONT_RESULT" == none && ! -s "$W/fe-asked" ]] && echo "front-end-nothing-to-do"
+        DESKTOP_ENV=kde
+        # Fedora without rpm-ostree: dnf, in use from the next start; no tool known: told.
+        IS_OSTREE=0; HAVE="dnf"; fe_case
+        [[ "$_FRONT_RESULT" == added && "$(cat "$W/fe-pkg")" == "dnf install -y -- python3-pyside6" ]] && echo "front-end-dnf"
+        HAVE=""; fe_case
+        [[ "$_FRONT_RESULT" == manual && ! -s "$W/fe-asked" ]] && echo "front-end-no-tool"
+        IS_OSTREE=1; HAVE="rpm-ostree"
+        # Removing the app offers to remove what it added (default: keep); junk in the list is never passed on.
+        printf '%s\n' python3-pyside6 'evil; rm -rf /' '-y' > "$STATE_DIR/front-end-packages"
+        : > "$W/fe-pkg"; : > "$W/fe-asked"; ANSWER=1; remove_front_end
+        kept=$([[ ! -s "$W/fe-pkg" && -s "$STATE_DIR/front-end-packages" ]] && echo yes)
+        ANSWER=0; remove_front_end
+        [[ "$kept" == yes && "$(cat "$W/fe-pkg")" == "rpm-ostree uninstall -- python3-pyside6" && ! -e "$STATE_DIR/front-end-packages" \
+           && "$(cat "$W/fe-asked")" == $'Remove|Keep|n|careful\nRemove|Keep|n|careful' ]] && echo "front-end-removed-with-the-app"
+        # A start of the installed app asks once; not without the app, nor without KDE dialogs.
+        rm -f "$STATE_DIR/front-end-offered"; : > "$W/fe-asked"
+        _app_installed() { return 1; }; UI_MODE=kde; offer_front_end_once
+        _app_installed() { return 0; }; UI_MODE=none; offer_front_end_once
+        n0=$(grep -c . "$W/fe-asked")
+        UI_MODE=kde; offer_front_end_once; offer_front_end_once
+        [[ "$n0" -eq 0 && "$(grep -c . "$W/fe-asked")" -eq 1 ]] && grep -q "^MSG .*after the next restart" "$W/fe-msg" && echo "front-end-offered-once"
+        # Installing the app says to restart for the window.
+        rm -f "$STATE_DIR/front-end-packages"; : > "$W/fe-msg"
+        _install_app_files() { return 0; }; _timer_installed() { return 1; }; install_app
+        grep -q "^MSG Security Check is installed.*Restart the PC to use Security Check's window: python3-pyside6 is added" "$W/fe-msg" && echo "front-end-install-says-restart"
+    )
+
     # A root run started through pkexec that stops with an error says why.
     (
         pkexec() { echo "The state folder /x is not a folder owned by root; refusing to use it." >&2; return 1; }
@@ -2005,7 +2073,9 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
          kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked dialog-button-in-range kept-no-date-no-since \
          yesno-enter-follows-the-default-never-a-change choice3-enter-follows-the-default-never-a-change apply-fallback-enter-is-skip \
-         undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked; do
+         undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked \
+         front-end-layered-on-install front-end-kirigami-too front-end-declined front-end-pending-not-asked front-end-failure-shown \
+         front-end-nothing-to-do front-end-dnf front-end-no-tool front-end-removed-with-the-app front-end-offered-once front-end-install-says-restart; do
     expect "$W/t6.out" "$m" "$m"
 done
 

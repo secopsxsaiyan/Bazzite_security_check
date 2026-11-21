@@ -29,7 +29,7 @@ It is a desktop-friendly counterpart to [ubuntu-sec-audit](https://github.com/se
 
 - **Adapts to the PC.** Gaming, game streaming, development, SSH, file sharing and portable (laptop) use each change what is checked and how strict it is, and the wizard pre-selects what it detects.
 - **Fixes you approve one by one.** Every fix shows the current setting, the result, side effects and the exact commands. Nothing changes without your OK, each fix is verified afterwards, and `--undo` reverts it.
-- **Native Plasma look.** One Kirigami window for the whole run: the wizard, dashboard, fixes and settings are pages of it, questions appear over the current page, and only the scan's progress bar is a small window of its own. It follows the system theme or a forced light/dark theme; plain kdialog or the terminal when Kirigami is not available.
+- **Native Plasma look.** One Kirigami window for the whole run: the wizard, dashboard, fixes and settings are pages of it, questions appear over the current page, and only the scan's progress bar is a small window of its own. It follows the system theme or a forced light/dark theme; plain kdialog or the terminal when PySide6 or Kirigami is not available (installing the app offers to add them).
 - **Knows what a fix touches.** Each fix names the Bazzite features it affects (Steam Remote Play, Sunshine, KDE Connect, SSH, containers, ...) and whether this PC uses them. A fix that would stop a feature you use starts unticked, and you can keep a setting on purpose so later checks stop counting it.
 - **Reports you can keep.** An HTML and Markdown report per run, a score with a grade, and what changed since the last check.
 - **Signed updates.** Settings → Updates installs a new release only after its SSH signature and SHA-256 checksums are verified.
@@ -43,7 +43,7 @@ It is a desktop-friendly counterpart to [ubuntu-sec-audit](https://github.com/se
 
 - Bazzite (KDE or GNOME) or another Fedora Atomic desktop image. On other systems it says so and asks before checking anything.
 - Administrator rights (it asks through pkexec or sudo).
-- Optional: PySide6 and Kirigami for the Plasma windows (present on Bazzite KDE), ClamAV for the `--deep` malware scan: the system's `clamav` and `clamav-freshclam` (which ClamUI also needs), or ClamTk from Flathub. When the system's ClamAV or its virus definitions are missing, the deep check offers to set them up.
+- Optional: PySide6 (`python3-pyside6`) and Kirigami for the Plasma window. Bazzite's KDE images have Kirigami but not PySide6; `--install` offers to add it (on Bazzite it is layered with rpm-ostree and used after the next restart). ClamAV for the `--deep` malware scan: the system's `clamav` and `clamav-freshclam` (which ClamUI also needs), or ClamTk from Flathub. When the system's ClamAV or its virus definitions are missing, the deep check offers to set them up.
 
 ## Quick start
 
@@ -72,9 +72,15 @@ install updates from Settings → Updates (or `--update`): a new release is
 installed only after its signature and checksums are verified. `--uninstall`
 removes the app; reports, history and undo steps are kept.
 
+When the Plasma window cannot run because `python3-pyside6` (or Kirigami) is
+missing, `--install` offers to add it: with rpm-ostree on Bazzite and other
+Fedora Atomic images (a layered package, active after the next restart), with
+dnf on Fedora. An app installed or updated by an older version asks once when
+it starts. `--uninstall` offers to remove what was added (default: keep).
+
 The setup wizard, the dashboard, the fixes and Settings are pages of one
-Kirigami (Plasma) window when PySide6 and Kirigami are installed, as on
-Bazzite's KDE images; without them, or if that window fails, the same
+Kirigami (Plasma) window when PySide6 and Kirigami are installed (see
+above); without them, or if that window fails, the same
 questions come as kdialog windows or on the terminal. Settings chooses the
 theme of Security Check's window (follow the system, light or dark).
 

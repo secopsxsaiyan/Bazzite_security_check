@@ -408,6 +408,7 @@ Many checks will not apply. Continue anyway?" "Continue" "Quit" "n"; then
         update_run quiet
         [[ $? -eq 10 ]] && { print_status "INFO" "Start Security Check again to use the new version."; exit 0; }
     fi
+    offer_front_end_once
     detect_usecases
     load_profile
     load_last_run
