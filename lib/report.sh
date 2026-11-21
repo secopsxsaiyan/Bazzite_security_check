@@ -207,7 +207,9 @@ _write_markdown() {
     printf '## All checks\n\n| Check | Result | Notes |\n|---|---|---|\n'
     local id note
     for id in "${CHECK_ORDER[@]}"; do
-        note="${CHECK_NOTE[$id]:-}${CHECK_NA[$id]:-}${CHECK_SKIPPED[$id]:-}"
+        note="${CHECK_NOTE[$id]:-}"
+        [[ -n "${CHECK_NA[$id]:-}" ]] && note+="${note:+; }${CHECK_NA[$id]}"
+        [[ -n "${CHECK_SKIPPED[$id]:-}" ]] && note+="${note:+; }${CHECK_SKIPPED[$id]}"
         note="${note//$'\n'/; }"
         note=$(_md "$note")
         note="${note//|/\\|}"
@@ -431,7 +433,9 @@ EOF
 
     printf '<h2 id="checks">All checks</h2><table><tr><th>Check</th><th>Result</th><th>Notes</th></tr>\n'
     for id in "${CHECK_ORDER[@]}"; do
-        note="${CHECK_NOTE[$id]:-}${CHECK_NA[$id]:-}${CHECK_SKIPPED[$id]:-}"
+        note="${CHECK_NOTE[$id]:-}"
+        [[ -n "${CHECK_NA[$id]:-}" ]] && note+="${note:+; }${CHECK_NA[$id]}"
+        [[ -n "${CHECK_SKIPPED[$id]:-}" ]] && note+="${note:+; }${CHECK_SKIPPED[$id]}"
         printf '<tr><td>%s</td><td class="s-%s">%s</td><td>%s</td></tr>\n' \
             "$(_html "${CHECK_TITLE[$id]}")" "${CHECK_STATUS[$id]:-na}" \
             "$(_status_label "${CHECK_STATUS[$id]:-}")" "$(_rich "$note")"

@@ -438,7 +438,7 @@ Flathub brings its own ClamAV; ClamUI uses the system's (this fix)."
     if [[ "$IS_OSTREE" -eq 1 ]]; then
         finding "$sev" "$title" "$detail" "sudo rpm-ostree install ${missing[*]}
 systemctl reboot
-Then run the check again: it offers to download the virus definitions." \
+# Then run the check again: it offers to download the virus definitions." \
             fix_clamav_install "${missing[@]}"
         finding_change "not installed: ${missing[*]}" "layered on the system image: ${missing[*]} (after a restart)" "$W_DOWNLOAD" "$W_REBOOT"
     else
@@ -507,7 +507,11 @@ fix_clamav_defs() {
     [[ -n "$after" ]] && script+=$'\n'"{ ${after}; } || { s=\$?; [ \"\$rc\" -ne 0 ] || rc=\$s; }"
     script+=$'\n'"exit \"\$rc\""
     apply_change "$script" "$undo" \
-        "$([[ $(_freshclam_plan "$1") != on && -n $undo ]] && echo "Undo puts the automatic updates back as they were; the downloaded definitions stay." || true)"
+        "$(case "$(_freshclam_plan "$1")" in
+               on)   echo "Undo only starts the service again; the downloaded definitions stay." ;;
+               none) ;;
+               *)    echo "Undo puts the automatic updates back as they were; the downloaded definitions stay." ;;
+           esac)"
 }
 
 # _clamav_defs_finding SEV TITLE DETAIL DIR NOW — a finding whose fix

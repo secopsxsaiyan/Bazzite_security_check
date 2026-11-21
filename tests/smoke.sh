@@ -611,7 +611,8 @@ echo "== 5b. the malware scan and ClamAV's setup"
     # ClamUI without the system's ClamAV: ClamUI cannot scan; the fix layers both packages.
     HAVE=""; FLATPAKS="io.github.linx_systems.ClamUI"; defs; case_
     [[ "${F_SEV[0]:-}" == medium && "${F_TITLE[0]}" == "ClamUI is installed, but ClamAV is not set up on the system" \
-       && "${F_FIX[0]}" == "fix_clamav_install clamav clamav-freshclam" && "${F_WARN[0]}" == "downloads|"*$'\n'"needs a reboot|"* ]] \
+       && "${F_FIX[0]}" == "fix_clamav_install clamav clamav-freshclam" && "${F_WARN[0]}" == "downloads|"*$'\n'"needs a reboot|"* \
+       && "${F_MANUAL[0]##*$'\n'}" == "# "* && -z "$(bash -n <<< "${F_MANUAL[0]}" 2>&1)" ]] \
        && [[ ${#F_SEV[@]} -eq 1 && "${CHECK_SKIPPED[check_deep_malware]:-}" == "ClamAV is not installed" && "$(scans)" -eq 0 ]] && echo "clamui-without-clamav-offers-the-setup"
     # ... and not again while the layered packages wait for the restart (the image is staged) ...
     RPMOSTREE_JSON='{"deployments":[{"staged":true,"booted":false,"requested-packages":["clamav","clamav-freshclam"]},{"booted":true}]}'; case_
