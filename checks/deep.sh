@@ -408,6 +408,215 @@ req = [r for r in req if isinstance(r, list)]
 print(" ".join(p for p in sys.argv[1:] if any(p in r for r in req)))' "$@" <<< "$RPMOSTREE_JSON" 2>/dev/null || true
 }
 
+# _clamav_official_dbs — the definitions freshclam takes from ClamAV's own
+# mirrors: main, daily and bytecode, and safebrowsing or valhalla when an
+# ExtraDatabase line asks for them; not those freshclam.conf leaves out
+# (ExcludeDatabase, "Bytecode no"). The definitions fix updates only these
+# (--update-db): freshclam refuses the whole update for a name it does not
+# know there, and "custom" would fetch the extra sources again.
+_clamav_official_dbs() {
+    local x conf
+    local -A out=()
+    conf=$(_r /etc/freshclam.conf)
+    for x in main daily bytecode; do out["$x"]=1; done
+    while IFS= read -r x; do
+        x="${x,,}"
+        [[ "$x" == safebrowsing || "$x" == valhalla ]] && out["$x"]=1
+    done < <(sed -n 's/^[[:space:]]*ExtraDatabase[[:space:]]\{1,\}\([^[:space:]]\{1,\}\)[[:space:]]*$/\1/p' "$conf" 2>/dev/null)
+    while IFS= read -r x; do
+        unset 'out[${x,,}]'
+    done < <(sed -n 's/^[[:space:]]*ExcludeDatabase[[:space:]]\{1,\}\([A-Za-z0-9._-]\{1,\}\)[[:space:]]*$/\1/p' "$conf" 2>/dev/null)
+    grep -qiE '^[[:space:]]*Bytecode[[:space:]]+(no|false|off)[[:space:]]*$' "$conf" 2>/dev/null && unset 'out[bytecode]'
+    for x in main daily bytecode safebrowsing valhalla; do
+        [[ -n "${out[$x]:-}" ]] && printf '%s\n' "$x"
+    done
+    return 0
+}
+
+# _freshclam_cmd — the freshclam command of the definitions fix.
+_freshclam_cmd() {
+    local d c="freshclam"
+    while IFS= read -r d; do c+=" --update-db=${d}"; done < <(_clamav_official_dbs)
+    printf '%s' "$c"
+}
+
+# _clamav_custom_urls — the extra signature sources freshclam.conf lists
+# (DatabaseCustomURL), one per line, in the file's order (one pair of
+# surrounding quotes removed, as freshclam does).
+_clamav_custom_urls() {
+    local u
+    while IFS= read -r u; do
+        [[ "$u" == \"*\" && ${#u} -gt 2 ]] && u="${u:1:${#u}-2}"
+        printf '%s\n' "$u"
+    done < <(sed -n 's/^[[:space:]]*DatabaseCustomURL[[:space:]]\{1,\}\([^[:space:]]\{1,\}\)[[:space:]]*$/\1/p' "$(_r /etc/freshclam.conf)" 2>/dev/null)
+    return 0
+}
+
+# _clamav_custom_file URL — the name freshclam saves URL's database under:
+# all after the last "/", a query or fragment included.
+_clamav_custom_file() {
+    printf '%s' "${1##*/}"
+}
+
+# _clamav_url_label URL — URL as the report shows it: the host and the
+# file name only. A user name and password before the host, and the path
+# between host and file (which can hold an access key), are left out.
+_clamav_url_label() {
+    local u="${1%%[?#]*}" rest host
+    rest="${u#*://}"
+    host="${rest%%/*}"
+    host="${host##*@}"
+    if [[ "$rest" == */*/* ]]; then
+        printf '%s/…/%s' "$host" "${u##*/}"
+    elif [[ "$rest" == */* ]]; then
+        printf '%s/%s' "$host" "${u##*/}"
+    else
+        printf '%s' "$host"
+    fi
+}
+
+# _clamav_fc_log — the recent messages of clamav-freshclam.service.
+_clamav_fc_log() {
+    journalctl -u clamav-freshclam.service --since "-3 days" -n 3000 --no-pager -q -o cat 2>/dev/null || true
+}
+
+# _clamav_custom_failed URL... — "URL<TAB>reason<TAB>gone" for each URL
+# whose last download in freshclam's log failed (a later success clears
+# it). gone is 1 when the source is not coming back: the server says the
+# file is gone (404, 410), or it failed in two updates or more and never
+# worked in the log (a refusal, 403, or something that is not a database);
+# else a failure may be passing (a busy server). A rate limit (429) is
+# always passing. A log line is about URL only when it ends with it,
+# since one source's address can be the start of another's; a time stamp
+# at the start of a line (LogTime: "Sat Nov 21 00:52:05 2026 -> x.ndb
+# updated"; after the level in "WARNING: <time> -> ...") is skipped. The updates are told apart by
+# freshclam's "update process started" line.
+_clamav_custom_failed() {
+    _clamav_fc_log | python3 -I -c '
+import re, sys
+urls = sys.argv[1:]
+files = {u: u.rsplit("/", 1)[-1] for u in urls}
+state, runs, worked, run, last = {}, {}, set(), 0, None
+stamp = re.compile(r"^[A-Z][a-z]{2} [A-Z][a-z]{2} +\d+ \d\d:\d\d:\d\d \d{4} -> ")
+for line in sys.stdin:
+    line = stamp.sub("", line.strip(), count=1)
+    if "update process started" in line:
+        run += 1
+        continue
+    # A refusal or a rate limit is told on the line after the failed download.
+    m = re.search(r"received error code (\d+)", line)
+    if m and last:
+        state[last] = "HTTP " + m.group(1)
+        last = None
+        continue
+    last = None
+    for u in urls:
+        if line.endswith(" " + u):
+            m = re.search(r"Unexpected response \((\d+)\)", line)
+            if m:
+                state[u] = "HTTP " + m.group(1)
+            elif "file not found: " in line:
+                state[u] = "HTTP 404"
+            elif "Update failed for custom database URL" in line or "Can\x27t download" in line:
+                if not state.get(u, "ok").startswith("HTTP"):
+                    state[u] = "download failed"
+                if "Can\x27t download" in line:
+                    last = u
+            elif "Unexpected error when attempting to update from custom database URL" in line:
+                state[u] = "not a database"
+            else:
+                continue
+            runs.setdefault(u, set()).add(run)
+        elif files[u] and "custom database" in line and re.match(re.escape(files[u]) + r" (database )?(is up-to-date|updated)", line):
+            state[u] = "ok"
+            runs[u] = set()
+            worked.add(u)
+for u in urls:
+    r = state.get(u, "ok")
+    if r != "ok":
+        gone = r in ("HTTP 404", "HTTP 410") or (r != "HTTP 429" and u not in worked and len(runs.get(u, ())) >= 2)
+        print(u + "\t" + r + "\t" + ("1" if gone else "0"))' "$@" 2>/dev/null || true
+}
+
+# _clamav_custom_check DIR URL... — the extra sources. One that is not
+# coming back is a finding whose fix turns it off; one that failed only
+# lately is a note. Either way freshclam stopped there (unless it was only
+# rate-limited, 429, after which it goes on), so the sources listed after
+# the first such failure are no longer updated: both name them. A source
+# that is only missing is a note too.
+_clamav_custom_check() {
+    local dir="$1" u r g n=0 labels="" after="" manual="" missing="" passing="" first="" firstgone=""
+    shift
+    local -a urls=("$@") gone=()
+    local -A why=()
+    while IFS=$'\t' read -r u r g; do
+        [[ -n "$u" ]] || continue
+        why["$u"]="$r"
+        # Its file is there: it worked before, unless the server said it is gone.
+        [[ "$g" == 1 && "$r" != "HTTP 404" && "$r" != "HTTP 410" && -f "$(_r "$dir")/$(_clamav_custom_file "$u")" ]] && g=0
+        if [[ "$g" == 1 ]]; then gone+=("$u"); else passing+="${passing:+, }$(_clamav_url_label "$u") (${r})"; fi
+        why["$u:g"]="$g"
+    done < <(_clamav_custom_failed "${urls[@]}")
+    for u in "${urls[@]}"; do
+        # freshclam goes on after a rate limit (429), and stops at any other failure.
+        if [[ -n "${why[$u]:-}" && "${why[$u]}" != "HTTP 429" ]]; then
+            [[ -z "$first" ]] && firstgone="${why[$u:g]}"
+            first=1
+        elif [[ -n "${why[$u]:-}" ]]; then
+            :
+        elif [[ -n "$first" ]]; then
+            after+="${after:+, }$(_clamav_url_label "$u")"
+        elif [[ ! -f "$(_r "$dir")/$(_clamav_custom_file "$u")" ]]; then
+            missing+="${missing:+, }$(_clamav_url_label "$u")"
+        fi
+    done
+    [[ -n "$missing" ]] && check_note "Extra signature sources in freshclam.conf not in ${dir} yet: ${missing} (see: journalctl -u clamav-freshclam.service)"
+    if [[ -n "$passing" ]]; then
+        check_note "The last update could not download ${passing}; it may work next time.$([[ ${#gone[@]} -eq 0 && -n $after ]] && echo " freshclam stopped there, so these were not updated: ${after}." || true)"
+    fi
+    (( ${#gone[@]} > 0 )) || return 0
+    manual="sudoedit /etc/freshclam.conf"$'\n'"# In it, put a # in front of:"
+    for u in "${gone[@]}"; do
+        n=$(( n + 1 ))
+        labels+="${labels:+$'\n'}$(_clamav_url_label "$u") (${why[$u]})"
+        manual+=$'\n'"#   DatabaseCustomURL $(_clamav_url_label "$u")"
+    done
+    manual+=$'\n'"sudo systemctl try-restart clamav-freshclam.service"
+    finding low "freshclam cannot download ${n} extra signature source(s)" \
+"freshclam.conf lists extra virus signature sources (DatabaseCustomURL). These
+can no longer be downloaded:
+${labels}$([[ -n $after ]] && printf '\nfreshclam stops at a source that fails, so these, listed after it, are no longer updated:\n%s' "$after" || true)
+Each update of the definitions ends in an error while they stay listed." \
+        "$manual" fix_clamav_custom_off "${gone[@]}"
+    finding_change "${n} extra source(s) fail to download" "turned off in /etc/freshclam.conf$([[ -n $after && $firstgone == 1 && -z $passing ]] && echo "; the others are updated again" || true)"
+    return 0
+}
+
+# fix_clamav_custom_off URL... — put a # in front of these extra sources
+# in /etc/freshclam.conf (the file keeps its owner, mode and label), then
+# let the running update service read it again. It fails, changing
+# nothing, when none of the lines is there any more.
+fix_clamav_custom_off() {
+    local f=/etc/freshclam.conf u qurls="" script
+    for u in "$@"; do qurls+=" $(_q "$u")"; done
+    script="$(_backup_cmd "$f")
+urls=\$(printf '%s\n'${qurls})
+tmp=\$(mktemp $f.XXXXXX)
+URLS=\"\$urls\" awk 'BEGIN { n = split(ENVIRON[\"URLS\"], u, \"\\n\"); for (i = 1; i <= n; i++) off[u[i]] = 1; done = 0 }
+{ s = \$0; sub(/^[ \\t]+/, \"\", s)
+  if (s ~ /^DatabaseCustomURL[ \\t]/) { v = s; sub(/^DatabaseCustomURL[ \\t]+/, \"\", v); sub(/[ \\t\\r]+\$/, \"\", v)
+    if (v ~ /^\".*\"\$/ && length(v) > 2) v = substr(v, 2, length(v) - 2)
+    if (v in off) { print \"# Turned off by Security Check (it could not be downloaded): \" \$0; done++; next } }
+  print }
+END { if (!done) exit 3 }' $f > \"\$tmp\" || { rc=\$?; rm -f -- \"\$tmp\"; exit \"\$rc\"; }
+cat -- \"\$tmp\" > $f
+rm -f -- \"\$tmp\"
+systemctl try-restart clamav-freshclam.service || echo \"clamav-freshclam.service did not restart; it reads the file when it next starts.\""
+    apply_change "$script" "$(_restore_cmd "$f")
+systemctl try-restart clamav-freshclam.service || echo \"clamav-freshclam.service did not restart; it reads the file when it next starts.\"" \
+        "Only these lines change; the other extra sources stay as they are. The commands show the full addresses, as they are in the file."
+}
+
 # _clamav_not_set_up CLAMUI HOST MISSING... — part of ClamAV is not
 # installed: the scanner (clamscan, package clamav) or freshclam, which
 # keeps its virus definitions up to date. With ClamUI that matters most:
@@ -503,7 +712,7 @@ fix_clamav_defs() {
         off)            undo="systemctl disable --now ${unit}" ;;
     esac
     [[ -n "$after" ]] && script+="systemctl stop ${unit} 2>/dev/null || true"$'\n'
-    script+="freshclam || rc=\$?"
+    script+="$(_freshclam_cmd) || rc=\$?"
     [[ -n "$after" ]] && script+=$'\n'"{ ${after}; } || { s=\$?; [ \"\$rc\" -ne 0 ] || rc=\$s; }"
     script+=$'\n'"exit \"\$rc\""
     apply_change "$script" "$undo" \
@@ -528,7 +737,7 @@ _clamav_defs_finding() {
         *) after+=", then updated automatically (clamav-freshclam.service)" ;;
     esac
     [[ -n "$a" ]] && manual+="# The service holds the lock freshclam needs: stop it first."$'\n'"sudo systemctl stop clamav-freshclam.service"$'\n'
-    manual+="sudo freshclam"
+    manual+="sudo $(_freshclam_cmd)"
     [[ -n "$a" ]] && manual+=$'\n'"sudo ${a//&& /&& sudo }"
     finding "$sev" "$title" "$detail" "$manual" fix_clamav_defs "$svc"
     finding_change "${dir}: ${now}" "$after" "$W_DOWNLOAD"
@@ -585,6 +794,11 @@ scan$([[ $clamui -eq 1 ]] && echo " - in ClamUI either" || true). The malware sc
             return 0
         fi
         check_note "Virus definitions: updated $([[ $age -eq 0 ]] && echo "today" || echo "${age} day(s) ago") (clamav-freshclam.service: ${svc})$([[ $clamui -eq 1 ]] && echo "; ClamUI uses this ClamAV" || true)"
+        if _have freshclam; then
+            local -a curls=()
+            mapfile -t curls < <(_clamav_custom_urls)
+            [[ ${#curls[@]} -gt 0 ]] && _clamav_custom_check "$db" "${curls[@]}"
+        fi
         if (( age > _CLAMAV_DEFS_OLD )) && _have freshclam; then
             _clamav_defs_finding low "ClamAV's virus definitions are ${age} days old" \
 "New malware is added to the definitions every day; with definitions ${age} days old
