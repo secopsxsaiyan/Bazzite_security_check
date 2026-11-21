@@ -129,7 +129,9 @@ All notable changes to this project are listed here. The format follows
   question, warnings included, and cannot be told otherwise, so there the
   "No" answer (Skip, Keep it, Leave it, Cancel) is put in that place and
   the answer is read back the other way round; Esc or closing it is never
-  "Yes". The plain questions whose default is "No" get the same.
+  "Yes". The plain questions whose default is "No" get the same. On the
+  terminal Enter is "No" for these questions too, and when nobody can be
+  asked (no terminal, or a dialog that failed) their answer is "No".
 - What a fix prints is copied into the run log like an undo step's output:
   only the end of it, cut to size and marked `fix:`. What kdialog or a
   one-page window prints is read only up to the size of an answer.

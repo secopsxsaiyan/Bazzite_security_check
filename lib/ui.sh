@@ -1019,7 +1019,8 @@ ui_error() {
 
 # ui_yesno TEXT [YES_LABEL] [NO_LABEL] [DEFAULT y|n] [warn|careful] — 0
 # for yes. DEFAULT is the answer of Enter on the terminal and the answer
-# when there is no one to ask.
+# when there is no one to ask, except for a marked question (careful or
+# warn): there both are "no".
 #
 # Which button a stray Enter or Space presses in a window (the same rule
 # in ui_choice3):
@@ -1067,6 +1068,10 @@ ui_yesno() {
             esac
         fi
     fi
+    # A marked question changes the PC as administrator there and then: on
+    # the terminal Enter is "no" too, and with nobody to ask (no terminal,
+    # or a dialog that failed) the answer is "no", whatever DEFAULT is.
+    [[ -n "$how" ]] && def=n
     if [[ "$UI_MODE" == "tty" ]]; then
         printf '\n%s\n' "$(_ui_plain "$text")" > /dev/tty
         a=$(_tty_read "  ${yes} / ${no}? [$([[ $def == y ]] && echo Y/n || echo y/N)] ")
@@ -1111,6 +1116,8 @@ ui_choice3() {
             esac
         fi
     fi
+    # A marked question: Enter on the terminal is "no" too (see ui_yesno).
+    [[ -n "$how" ]] && def=n
     if [[ "$UI_MODE" == "tty" ]]; then
         [[ -n "$text" ]] || text=$(_html2text "<html>${html#<html>}")
         printf '\n%s\n' "$text" > /dev/tty

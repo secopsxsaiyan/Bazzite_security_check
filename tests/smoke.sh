@@ -1615,12 +1615,14 @@ for line in open(sys.argv[1]):
             [[ "$out" == "012 101 101 101 102 102 102 012 " && "$(tr '\n' ' ' < "$W/kd-swap")" == "$want" ]] && echo "kdialog-enter-is-not-yes" \
                || echo "kdialog answers: $out / $(tr '\n' ' ' < "$W/kd-swap")"
             # kdialog failing (255) is no answer: the question goes on to the
-            # next way of asking (here nobody: the default, Skip for a fix).
-            KD_RC=255; UI_MODE=none
+            # next way of asking. Here nobody is left to ask, and a marked
+            # question is then "no" even when its default is "yes".
             _kd_answer() { UI_MODE=none; return 255; }
-            ui_choice3 "q" "" Apply Skip Stop careful; r1=$?
-            ui_yesno "q" "Undo anyway" Cancel n warn; r2=$?
-            [[ "$r1" == 1 && "$r2" == 1 ]] && echo "kdialog-failure-asks-on"
+            UI_MODE=kde; ui_choice3 "q" "" Apply Skip Stop careful; r1=$?
+            UI_MODE=kde; ui_yesno "q" "Undo anyway" Cancel n warn; r2=$?
+            UI_MODE=kde; ui_yesno "q" Remove Cancel y careful; r3=$?
+            UI_MODE=kde; ui_yesno "q" "Roll back" "Leave it" y warn; r4=$?
+            [[ "$r1$r2$r3$r4" == 1111 ]] && echo "kdialog-failure-asks-on" || echo "kdialog failure gave $r1$r2$r3$r4"
         )
         # Exit 1 means "yes" in a swapped question: only when kdialog itself
         # said so. A wrapper that fails (here: no desktop user) is kdialog
@@ -1631,7 +1633,8 @@ for line in open(sys.argv[1]):
             UI_MODE=kde; RUN_TMP="$W/kd-wrap-rt"; mkdir -p "$RUN_TMP"
             ui_choice3 "q" "" Apply Skip Stop careful; r1=$?
             UI_MODE=kde; ui_yesno "q" "Undo anyway" Cancel n warn; r2=$?
-            [[ "$r1" == 1 && "$r2" == 1 && -e "$RUN_TMP/kdialog-failed" ]] && echo "kdialog-wrapper-failure-is-not-yes"
+            UI_MODE=kde; ui_yesno "Remove the app?" Remove Cancel y careful < /dev/null; r4=$?
+            [[ "$r1" == 1 && "$r2" == 1 && "$r4" == 1 && -e "$RUN_TMP/kdialog-failed" ]] && echo "kdialog-wrapper-failure-is-not-yes"
             # ... while kdialog's own exit 1 (the button with the yes answer) is yes.
             rm -f "$RUN_TMP/kdialog-failed"; UI_MODE=kde
             _as_desktop_user() { shift 1; [[ "$1" == XDG_CONFIG_HOME=* ]] && shift; "$@"; }
