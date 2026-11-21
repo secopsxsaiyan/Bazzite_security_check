@@ -907,7 +907,10 @@ the scan misses what came since. They are not being updated$([[ $(_freshclam_pla
     # says so for every file and clamscan goes on, counting each file as
     # scanned (exit 0): nothing was really scanned either. A file it could
     # not read or scan only adds to the summary's "Total errors" (exit 2).
-    first=$(grep -m 1 -iE '^(LibClamAV Error|ERROR):' <<< "$out" | cut -c1-200 || true)
+    # (Only from before each summary, as for the stop: clamscan may log a
+    # date error after it. The text of a hit's line is a file name.)
+    first=$(printf '%s\n' "$out" | awk '/^----------- SCAN SUMMARY -----------$/ { skip = 1; next } /^$/ { skip = 0 } !skip' \
+            | grep -v ' FOUND$' | grep -m 1 -iE '^(LibClamAV Error|ERROR):' | cut -c1-200 || true)
     said=$(grep -m 1 . <<< "$out" | cut -c1-200 || true)
     if [[ -n "$found" ]]; then
         finding high "ClamAV found $(grep -c . <<< "$found") infected file(s)" \

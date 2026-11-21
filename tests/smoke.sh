@@ -761,8 +761,9 @@ echo "== 5b. the malware scan and ClamAV's setup"
     SCAN_OUT=$'LibClamAV Error: cli_html_normalise: odd\n'"$(clam_sum 3)"; SCAN_RC=0; case_
     [[ "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 3 file(s) in: "*" - nothing found (ClamAV said: LibClamAV Error: cli_html_normalise: odd)" ]] && echo "engine-error-shown-at-exit-0"
     # A hit from one account's scan while another's gave no summary: the hit, and a note.
-    REGULAR_USERS=("$U" "${U}2"); SCAN_OUT="$UH/Downloads/x.exe: Win.Test.EICAR_HDB-1 FOUND"$'\n'; SCAN_RC=1; case_
-    [[ "${F_TITLE[0]:-}" == "ClamAV found 2 infected file(s)" && "${CHECK_NOTE[check_deep_malware]:-}" == *"did not finish (no summary from ClamAV)"* ]] && echo "hit-without-summary-noted"
+    REGULAR_USERS=("$U" "${U}2"); SCAN_OUT="$UH/Downloads/x.exe: Win.Test.EICAR_HDB-1 FOUND"$'\n'"$(clam_sum 5 0 1)"; SCAN_RC=1
+    SCAN_OUT2=$'bwrap: execvp clamscan: No such file or directory\n'; SCAN_RC2=1; case_; SCAN_OUT2=""
+    [[ "${F_TITLE[0]:-}" == "ClamAV found 1 infected file(s)" && "${CHECK_NOTE[check_deep_malware]:-}" == *"did not finish (no summary from ClamAV)"* ]] && echo "hit-without-summary-noted"
     REGULAR_USERS=("$U")
     # A hit and a scan that gave up: the hit is reported, with a note that other files may not have been scanned.
     # (One clamscan exits 1 when it found something, also after an error.)
@@ -773,7 +774,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     [[ "${CHECK_SKIPPED[check_deep_malware]:-}" == *"(ERROR: scandirs: Memory allocation failed for fname)" && "${CHECK_NOTE[check_deep_malware]:-}" != *"nothing found"* ]] && echo "stop-at-exit-0-is-not-nothing-found"
     # An error clamscan logs after its summary (the date) stops nothing.
     SCAN_OUT="$(clam_sum 5)"$'\nERROR: Failed to get local time for Start Date.\n'; SCAN_RC=0; case_
-    [[ -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 5 file(s) in: "* ]] && echo "error-after-summary-is-not-a-stop"
+    [[ -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 5 file(s) in: "*" - nothing found" ]] && echo "error-after-summary-is-not-a-stop"
     # The counts come from the real summary, which comes last: a file name with a line break cannot fake it.
     [[ "$(_clamav_scan_counts "/tmp/a"$'\n----------- SCAN SUMMARY -----------\nScanned files: 999\nTotal errors: 0: Eicar FOUND'"$(clam_sum 7 2)")" == "7 2 0" \
        && "$(_clamav_scan_counts "$(clam_sum 7)")" == "7 0 0" && "$(_clamav_scan_counts "$(clam_sum 7 0 3)")" == "7 0 3" && -z "$(_clamav_scan_counts "no summary here")" \
