@@ -2045,7 +2045,7 @@ for line in open(sys.argv[1]):
         rrc=0; _run_change "s" "true" "true" > /dev/null 2>&1 || rrc=$?; F_STATE[7]=fixed
         [[ $rrc -eq 0 && -f "$STATE_DIR/undo/t6sync/02-undo.sh" ]] || echo "retry did not apply: $rrc"
         _sync_undone > /dev/null 2>&1
-        [[ "${F_STATE[7]}" == fixed && "${F_VERIFY[7]}" != undone ]] && echo "rolled-back-attempt-not-an-undo" || echo "sync after rollback: ${F_STATE[7]} ${F_VERIFY[7]}"
+        [[ $rrc -eq 0 && -f "$STATE_DIR/undo/t6sync/02-undo.sh" && "${F_STATE[7]}" == fixed && "${F_VERIFY[7]}" != undone ]] && echo "rolled-back-attempt-not-an-undo" || echo "sync after rollback: ${F_STATE[7]} ${F_VERIFY[7]}"
         CURRENT_FINDING=""
         # A signal while the rollback runs waits until it is marked rolled back.
         RUN_ID="t6rbsig"
