@@ -784,6 +784,32 @@ _kd() {
     return "$rc"
 }
 
+# _kd_answer ARGS... — _kd for a question whose labels ui_yesno or
+# ui_choice3 swapped (see there): there exit 1 means "yes", so it may only
+# come from kdialog itself. kdialog runs under "sh -c", which prints its
+# exit status after it; without that line (no desktop user, runuser or env
+# failing) or above 2, kdialog counts as failed: 255, as in _kd.
+_kd_answer() {
+    local out rc flag="${RUN_TMP:+${RUN_TMP}/kdialog-failed}"
+    if [[ -n "$flag" && -e "$flag" ]]; then
+        _ui_fallback
+        return 255
+    fi
+    local theme
+    theme=$(_ui_theme_env)
+    # shellcheck disable=SC2016 # $@ and $? are for the inner shell
+    out=$(_as_desktop_user env ${theme:+"$theme"} sh -c 'kdialog "$@"; echo "bsa-kdialog-exit:$?"' sh \
+              --title "$UI_TITLE" --icon "$(_ui_icon)" "$@" 2>/dev/null < /dev/null | head -c 256)
+    rc=$(sed -n 's/^bsa-kdialog-exit:\([0-9]\{1,3\}\)$/\1/p' <<< "$out" | tail -n 1)
+    if [[ -z "$rc" ]] || (( rc > 2 )); then
+        log "kdialog failed (exit ${rc:-unknown}); falling back"
+        if [[ -n "$flag" ]]; then : > "$flag"; fi
+        _ui_fallback
+        return 255
+    fi
+    return "$rc"
+}
+
 # _rich TEXT — plain text as KDE rich text (escaped, line breaks kept).
 _rich() { _reflow_html "$1"; }
 
@@ -1010,7 +1036,11 @@ ui_error() {
 # marked), the NO answer is put in kdialog's YES place and YES in its NO
 # place, and the answer is read back the other way round. Esc or closing
 # the window is neither (exit 2): always NO. "careful" and "warn" use the
-# warning dialog.
+# warning dialog. The cost: such a question reads NO before YES, and the
+# icons kdialog gives its places (a tick for YES, a stop sign for NO) sit
+# on the other answers; the labels say what each button does. (kdialog
+# before 19.12 made the warning's default NO; Bazzite has never shipped
+# one that old.)
 ui_yesno() {
     local text="$1" yes="${2:-Yes}" no="${3:-No}" def="${4:-n}" how="${5:-}" kind="--yesno" primary=1 a rc
     [[ -z "$how" ]] || { kind="--warningyesno"; primary=-1; }
@@ -1026,7 +1056,7 @@ ui_yesno() {
             rc=$?
             [[ $rc -ne 255 ]] && return "$rc"
         else
-            _kd --yes-label "$no" --no-label "$yes" "$kind" "$(_ui_html "$text")"
+            _kd_answer --yes-label "$no" --no-label "$yes" "$kind" "$(_ui_html "$text")"
             rc=$?
             case $rc in
                 1) return 0 ;;
@@ -1068,7 +1098,7 @@ ui_choice3() {
             rc=$?
             [[ $rc -ne 255 ]] && return "$rc"
         else
-            _kd --yes-label "$no" --no-label "$yes" --cancel-label "$cancel" \
+            _kd_answer --yes-label "$no" --no-label "$yes" --cancel-label "$cancel" \
                 "$kind" "<html>${html#<html>}"
             rc=$?
             case $rc in

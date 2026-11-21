@@ -297,7 +297,7 @@ args=("\$@")
 swapped=0
 for ((i = 0; i < \${#args[@]}; i++)); do
   [[ "\${args[\$i]}" == --yes-label ]] || continue
-  case "\${args[\$((i + 1))]}" in No|Back|Skip|"Keep it"|"Leave it"|Cancel|Close|"Not now"|Quit) swapped=1 ;; esac
+  case "\${args[\$((i + 1))]}" in No|Back|Skip|"Keep it"|"Leave it"|Cancel|"Not now"|Quit) swapped=1 ;; esac
 done
 for ((i = 0; i < \${#args[@]}; i++)); do
   case "\${args[\$i]}" in
@@ -1583,6 +1583,7 @@ for line in open(sys.argv[1]):
         # uses its warning dialog.
         (
             _ui_dialog() { return 4; }; _kd() { printf '%s ' "$@" >> "$W/kd-kinds"; echo >> "$W/kd-kinds"; return 1; }
+            _kd_answer() { _kd "$@"; }
             UI_MODE=kde; : > "$W/kd-kinds"
             ui_yesno "q" Y N y; ui_yesno "q" Y N y careful; ui_yesno "q" Y N n warn
             ui_choice3 "q" "" Y N C; ui_choice3 "q" "" Y N C careful; ui_choice3 "q" "" Y N C warn
@@ -1595,6 +1596,7 @@ for line in open(sys.argv[1]):
         (
             _ui_dialog() { return 4; }
             _kd() { printf '%s|' "$2" "$4" >> "$W/kd-swap"; echo >> "$W/kd-swap"; return "$KD_RC"; }
+            _kd_answer() { _kd "$@"; }
             UI_MODE=kde; : > "$W/kd-swap"; out=""
             for q in "y" "y careful" "n" "n warn"; do
                 for KD_RC in 0 1 2; do
@@ -1612,6 +1614,31 @@ for line in open(sys.argv[1]):
             want=""; for p in "Y|N|" "N|Y|" "N|Y|" "N|Y|" "N|Y|" "N|Y|" "N|Y|" "Y|N|"; do want+="$p $p $p "; done
             [[ "$out" == "012 101 101 101 102 102 102 012 " && "$(tr '\n' ' ' < "$W/kd-swap")" == "$want" ]] && echo "kdialog-enter-is-not-yes" \
                || echo "kdialog answers: $out / $(tr '\n' ' ' < "$W/kd-swap")"
+            # kdialog failing (255) is no answer: the question goes on to the
+            # next way of asking (here nobody: the default, Skip for a fix).
+            KD_RC=255; UI_MODE=none
+            _kd_answer() { UI_MODE=none; return 255; }
+            ui_choice3 "q" "" Apply Skip Stop careful; r1=$?
+            ui_yesno "q" "Undo anyway" Cancel n warn; r2=$?
+            [[ "$r1" == 1 && "$r2" == 1 ]] && echo "kdialog-failure-asks-on"
+        )
+        # Exit 1 means "yes" in a swapped question: only when kdialog itself
+        # said so. A wrapper that fails (here: no desktop user) is kdialog
+        # failing, never an answer.
+        (
+            _ui_dialog() { return 4; }; _ui_fallback() { UI_MODE=none; }
+            _as_desktop_user() { return 1; }
+            UI_MODE=kde; RUN_TMP="$W/kd-wrap-rt"; mkdir -p "$RUN_TMP"
+            ui_choice3 "q" "" Apply Skip Stop careful; r1=$?
+            UI_MODE=kde; ui_yesno "q" "Undo anyway" Cancel n warn; r2=$?
+            [[ "$r1" == 1 && "$r2" == 1 && -e "$RUN_TMP/kdialog-failed" ]] && echo "kdialog-wrapper-failure-is-not-yes"
+            # ... while kdialog's own exit 1 (the button with the yes answer) is yes.
+            rm -f "$RUN_TMP/kdialog-failed"; UI_MODE=kde
+            _as_desktop_user() { shift 1; [[ "$1" == XDG_CONFIG_HOME=* ]] && shift; "$@"; }
+            mkdir -p "$W/kd-own-bin"; printf '#!/bin/sh\nexit 1\n' > "$W/kd-own-bin/kdialog"; chmod 755 "$W/kd-own-bin/kdialog"
+            PATH="$W/kd-own-bin:$PATH"
+            ui_choice3 "q" "" Apply Skip Stop careful; r3=$?
+            [[ "$r3" == 0 ]] && echo "kdialog-own-exit-1-is-yes" || echo "own exit 1 gave $r3"
         )
         # Every question whose Yes changes the PC there and then is marked.
         marked=1
@@ -2040,7 +2067,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked dialog-button-in-range kept-no-date-no-since \
          yesno-enter-follows-the-default-never-a-change choice3-enter-follows-the-default-never-a-change apply-fallback-enter-is-skip \
          undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked \
-         kdialog-enter-is-not-yes; do
+         kdialog-enter-is-not-yes kdialog-failure-asks-on kdialog-wrapper-failure-is-not-yes kdialog-own-exit-1-is-yes; do
     expect "$W/t6.out" "$m" "$m"
 done
 
@@ -2198,8 +2225,9 @@ PYEOF
     ui_app wizard '{}' > /dev/null; [[ $? -eq 4 ]] && echo "front-not-used-again"
     # With the front end gone, a question is asked with kdialog (whose
     # Enter, exit 0, is the "No" answer of a question that defaults to No).
-    _as_desktop_user() { echo "kdialog" >> "$W/front-kd"; return 0; }
-    ! ui_yesno "Continue?" && [[ -s "$W/front-kd" ]] && echo "front-gone-kdialog-asks"
+    _as_desktop_user() { printf '%s\n' "$@" >> "$W/front-kd"; return 0; }
+    ! ui_yesno "Continue?" && [[ "$(grep -A1 -x -- --yes-label "$W/front-kd" | tail -n 1)" == No && "$(grep -A1 -x -- --no-label "$W/front-kd" | tail -n 1)" == Yes ]] \
+        && echo "front-gone-kdialog-asks"
 
     new_run; ui_front_start
     a=$(ui_app wizard '{"fail":true}'); rc=$?
