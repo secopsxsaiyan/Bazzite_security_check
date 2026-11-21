@@ -35,6 +35,12 @@ All notable changes to this project are listed here. The format follows
   of a source, as its address can hold an access key. Downloading the
   definitions as a fix updates only ClamAV's own sets, so a broken extra
   source does not make it fail.
+- The malware scan no longer says "nothing found" when ClamAV gave up. When
+  clamscan stops with an error of its own (an option it does not take, no
+  memory, no temporary folder), the scan is reported as skipped, with
+  ClamAV's message. After a scan that did finish, the report says how many
+  files were scanned and how many could not be read or scanned, from
+  clamscan's summary, instead of a general "files were left out".
 - Security Check now has one window for the whole run. The setup wizard, the
   dashboard, a check's page, the lists of fixes, the "Apply this fix?" page
   and Settings are pages of that window, and questions, messages and errors
