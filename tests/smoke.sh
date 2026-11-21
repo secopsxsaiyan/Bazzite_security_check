@@ -2042,14 +2042,16 @@ for line in open(sys.argv[1]):
         # ... and a rolled-back attempt does not later mark the same fix, retried and working, as undone.
         RUN_ID="t6sync"; F_STATE[7]="open"; F_CHECK[7]="c"; F_VERIFY[7]=""; CURRENT_FINDING=7
         _run_change "s" "exit 1" "true" > /dev/null 2>&1; F_STATE[7]=failed
-        _run_change "s" "true" "true" > /dev/null 2>&1; F_STATE[7]=fixed
+        rrc=0; _run_change "s" "true" "true" > /dev/null 2>&1 || rrc=$?; F_STATE[7]=fixed
+        [[ $rrc -eq 0 && -f "$STATE_DIR/undo/t6sync/02-undo.sh" ]] || echo "retry did not apply: $rrc"
         _sync_undone > /dev/null 2>&1
         [[ "${F_STATE[7]}" == fixed && "${F_VERIFY[7]}" != undone ]] && echo "rolled-back-attempt-not-an-undo" || echo "sync after rollback: ${F_STATE[7]} ${F_VERIFY[7]}"
         CURRENT_FINDING=""
         # A signal while the rollback runs waits until it is marked rolled back.
         RUN_ID="t6rbsig"
         ( trap _on_signal INT TERM HUP; pid=$BASHPID
-          _run_change "t6 rbsig" "exit 1" "kill -HUP $pid; sleep 1" ) > /dev/null 2>&1; rc=$?
+          _run_change "t6 rbsig" "exit 1" "kill -HUP $pid; sleep 1" ) > "$W/t6-rbsig.out" 2>&1; rc=$?
+        # (130 is the tool's own stop; a shell killed by HUP would end with 129.)
         [[ $rc -eq 130 && -f "$STATE_DIR/undo/t6rbsig/01-undo.rolledback" ]] && echo "rollback-interrupted-is-marked" \
             || echo "rbsig rc=$rc $(ls "$STATE_DIR/undo/t6rbsig" | tr '\n' ' ')"
         # ... one whose rollback fails keeps its step, once ...
@@ -2079,7 +2081,7 @@ for line in open(sys.argv[1]):
         ACTION=install; UI_MODE=none; ui_interactive() { [[ "$UI_MODE" != none ]]; }
         ( _action_end ) 2> "$W/action-end.err"; r1=$?
         UI_MODE=kde; ( _action_end ) 2>/dev/null; r2=$?
-        [[ "$r1 $r2" == "1 0" ]] && grep -q -- "--install: the window stopped working" "$W/action-end.err" && echo "action-end-after-lost-window"
+        [[ "$r1 $r2" == "1 0" ]] && grep -q -- "--install: the window stopped working, so it may not have finished" "$W/action-end.err" && echo "action-end-after-lost-window"
     )
     # On the terminal, Enter is "no" for a question that changes the PC, whatever its default.
     (

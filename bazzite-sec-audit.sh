@@ -344,7 +344,7 @@ _prune_history() {
 
 # _action_end — the end of an action that changes the PC after a "yes":
 # when its window failed on the way and nobody was left to answer, it may
-# have done nothing; say so and end with status 1.
+# not have finished; say so and end with status 1.
 _action_end() {
     if ! ui_interactive; then
         echo "--${ACTION}: the window stopped working, so it may not have finished; anything not confirmed was not changed." >&2
