@@ -347,7 +347,7 @@ _prune_history() {
 # have done nothing; say so and end with status 1.
 _action_end() {
     if ! ui_interactive; then
-        echo "--${ACTION}: the window stopped working and nobody could answer; anything not confirmed was not changed." >&2
+        echo "--${ACTION}: the window stopped working, so it may not have finished; anything not confirmed was not changed." >&2
         exit 1
     fi
     exit 0

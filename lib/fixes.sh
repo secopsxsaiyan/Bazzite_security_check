@@ -335,9 +335,14 @@ $(tail -n 15 <<< "$out")"
     [[ -n "$undo" ]] || return 3
     if ui_yesno "Put back what this fix may already have changed?" "Roll back" "Leave it" "y" careful; then
         local undo_rc=0
+        # As in run_undo: the rollback and the mark that it ran go together.
+        # The mark is ".rolledback", not ".done": a "done" step tells
+        # _sync_undone that a working fix was undone.
+        _signals_hold
         _undo_run bash -c "$undo" || undo_rc=$?
+        [[ $undo_rc -eq 0 && -n "$kept" && -f "$kept" ]] && mv -f -- "$kept" "${kept%.sh}.rolledback"
+        _signals_release
         if [[ $undo_rc -eq 0 ]]; then
-            [[ -n "$kept" && -f "$kept" ]] && mv -f -- "$kept" "${kept%.sh}.done"
             print_status "OK" "Rolled back: ${title}"
             return 3
         fi
@@ -348,7 +353,7 @@ Its undo step was kept: Undo on the dashboard, or --undo, can try again."
     # Left as it is (also when nobody could answer): the undo step stays
     # on record, so --undo can put it back later.
     print_status "INFO" "The undo step of \"${title}\" was kept: Undo on the dashboard, or --undo, can put it back later."
-    ui_interactive && ui_msg "\"${title}\" was left as it is. Its undo step was kept: Undo on the dashboard, or --undo, can put it back later."
+    [[ "$UI_MODE" == kde ]] && ui_msg "\"${title}\" was left as it is. Its undo step was kept: Undo on the dashboard, or --undo, can put it back later."
     return 3
 }
 

@@ -2038,14 +2038,23 @@ for line in open(sys.argv[1]):
         # ... one that is rolled back keeps no step to undo (it is marked done) ...
         RUN_ID="t6back"; ui_yesno() { return 0; }
         _run_change "t6 back" "echo half > $W/t6-back; exit 1" "rm -f $W/t6-back" > /dev/null 2>&1
-        [[ ! -e "$W/t6-back" && -z "$(compgen -G "$STATE_DIR/undo/t6back/*-undo.sh")" && -f "$STATE_DIR/undo/t6back/01-undo.done" ]] && echo "failed-fix-rolled-back-keeps-nothing"
+        [[ ! -e "$W/t6-back" && -z "$(compgen -G "$STATE_DIR/undo/t6back/*-undo.sh")" && -f "$STATE_DIR/undo/t6back/01-undo.rolledback" ]] && echo "failed-fix-rolled-back-keeps-nothing"
+        # ... and a rolled-back attempt does not later mark the same fix, retried and working, as undone.
+        RUN_ID="t6sync"; F_STATE[7]="open"; F_CHECK[7]="c"; F_VERIFY[7]=""; CURRENT_FINDING=7
+        _run_change "s" "exit 1" "true" > /dev/null 2>&1; F_STATE[7]=failed
+        _run_change "s" "true" "true" > /dev/null 2>&1; F_STATE[7]=fixed
+        _sync_undone > /dev/null 2>&1
+        [[ "${F_STATE[7]}" == fixed && "${F_VERIFY[7]}" != undone ]] && echo "rolled-back-attempt-not-an-undo" || echo "sync after rollback: ${F_STATE[7]} ${F_VERIFY[7]}"
+        CURRENT_FINDING=""
         # ... one whose rollback fails keeps its step, once ...
         RUN_ID="t6bad"
         _run_change "t6 bad" "echo half > $W/t6-bad; exit 1" "exit 4" > /dev/null 2>&1
         [[ -e "$W/t6-bad" && "$(compgen -G "$STATE_DIR/undo/t6bad/*-undo.sh" | wc -l)" -eq 1 ]] && echo "failed-rollback-keeps-undo-once"
         # ... one left as it is by the person says so in a window too ...
         RUN_ID="t6leave"; ui_yesno() { return 1; }; ui_interactive() { return 0; }; ui_msg() { printf '%s\n' "$1" > "$W/t6-leave-msg"; }
+        UI_MODE=kde; _ui_dialog() { return 4; }; ui_busy_start() { :; }; ui_busy_stop() { :; }; ui_error() { :; }
         _run_change "t6 leave" "echo half > $W/t6-leave; exit 1" "rm -f $W/t6-leave" > /dev/null 2>&1
+        UI_MODE=none
         [[ -f "$STATE_DIR/undo/t6leave/01-undo.sh" ]] && grep -q '"t6 leave" was left as it is. Its undo step was kept' "$W/t6-leave-msg" && echo "failed-fix-left-says-so"
         # ... and one interrupted at the rollback question keeps it too.
         RUN_ID="t6hup"; ui_yesno() { kill -HUP "$BASHPID"; sleep 1; return 1; }
@@ -2124,7 +2133,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          kdialog-enter-is-not-yes kdialog-failure-asks-on kdialog-wrapper-failure-is-not-yes kdialog-own-exit-1-is-yes \
          kdialog-own-exits-mapped failed-fix-left-keeps-undo failed-fix-rolled-back-keeps-nothing tty-enter-is-no-for-a-change \
          failed-rollback-keeps-undo-once failed-fix-interrupted-at-question-keeps-undo action-end-after-lost-window \
-         failed-fix-left-says-so; do
+         failed-fix-left-says-so rolled-back-attempt-not-an-undo; do
     expect "$W/t6.out" "$m" "$m"
 done
 # --install and the other actions that change the PC only after a "yes"

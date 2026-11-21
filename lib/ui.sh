@@ -1088,8 +1088,8 @@ ui_yesno() {
 # argument's answer (No unless "y" is given; always No for a marked
 # question); with no one to ask, the answer is always No. "warn",
 # "careful" and the button that Enter presses in a window: as in ui_yesno
-# (in kdialog, NO is put in the YES place, and
-# Esc or closing the window is CANCEL).
+# (in kdialog, NO is put in the YES place, and Esc or closing the window
+# is CANCEL).
 ui_choice3() {
     local html="$1" text="$2" yes="$3" no="$4" cancel="$5" how="${6:-}" kind="--yesnocancel" def="${7:-n}" primary=2 a rc
     [[ -z "$how" ]] || { kind="--warningyesnocancel"; primary=-1; }
