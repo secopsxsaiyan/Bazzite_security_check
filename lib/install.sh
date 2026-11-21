@@ -209,7 +209,11 @@ _front_end_missing() {
     else
         python3 -I -c "$_PYSIDE_MISSING_PROBE" >/dev/null 2>&1 < /dev/null || rc=$?
     fi
-    (( rc == 3 )) && miss+=(python3-pyside6)
+    case $rc in
+        0) ;;
+        3) miss+=(python3-pyside6) ;;
+        *) return 0 ;;   # unknown: offer nothing at all
+    esac
     _kirigami_here || miss+=(kf6-kirigami)
     printf '%s' "${miss[*]}"
 }
@@ -274,7 +278,7 @@ _pkg_run() {
     shift 2
     local -a cmd
     case "$tool:$verb" in
-        rpm-ostree:install)   cmd=(rpm-ostree install --idempotent --allow-inactive -- "$@") ;;
+        rpm-ostree:install)   cmd=(rpm-ostree install --idempotent -- "$@") ;;
         rpm-ostree:uninstall) cmd=(rpm-ostree uninstall --idempotent -- "$@") ;;
         dnf:install)          cmd=(dnf install -y -- "$@") ;;
         dnf:uninstall)        cmd=(dnf remove -y -- "$@") ;;
@@ -430,11 +434,19 @@ remove_front_end() {
         return 0
     fi
     if [[ "$tool" == dnf ]] && ! need=$(rpm -e --test -- "${pkgs[@]}" 2>&1); then
-        ui_msg "Installing the app also installed ${pkgs[*]} for its window. Other installed programs need $([[ ${#pkgs[@]} -gt 1 ]] && echo them || echo it) now, so $([[ ${#pkgs[@]} -gt 1 ]] && echo they stay || echo it stays):
+        if grep -q 'is needed by' <<< "$need"; then
+            ui_msg "Installing the app also installed ${pkgs[*]} for its window. Other installed programs need $([[ ${#pkgs[@]} -gt 1 ]] && echo them || echo it) now, so $([[ ${#pkgs[@]} -gt 1 ]] && echo they stay || echo it stays):
+
+$(grep 'is needed by' <<< "$need" | head -n 6)"
+            rm -f -- "${STATE_DIR:?}/${_FRONT_PKGS_FILE:?}"
+            return 0
+        fi
+        # Another error (the package database is busy): kept on the list,
+        # so removing the app again can try again.
+        ui_error "Could not check whether other programs need ${pkgs[*]}:
 
 $(printf '%s\n' "$need" | head -n 6)"
-        rm -f -- "${STATE_DIR:?}/${_FRONT_PKGS_FILE:?}"
-        return 0
+        return 1
     fi
     ui_yesno "Installing the app also installed ${pkgs[*]} for its window. Remove $([[ ${#pkgs[@]} -gt 1 ]] && echo them || echo it) too?
 
@@ -483,9 +495,14 @@ uninstall_app() {
 
 Reports, history and undo steps are kept.$(_timer_installed && printf '\nThe weekly check stays set up (remove it with --remove-timer).')" \
         "Remove" "Cancel" "y" careful || return 0
+    # What the install added for the window goes first: when that fails,
+    # the app stays installed, so removing it again can try again.
+    if ! remove_front_end; then
+        ui_msg "The Security Check app was left installed, so removing it again (--uninstall) can try again."
+        return 1
+    fi
     rm -f -- "$APP_DESKTOP" "$APP_ICON_DIR/${APP_ID}.svg" "$APP_ICON_DIR/${APP_ID}-symbolic.svg" "$APP_ICON_22/${APP_ID}-symbolic.svg"
     [[ -L "$APP_BIN" ]] && rm -f -- "$APP_BIN"
-    remove_front_end || true
     _remove_copy
     _refresh_menu
     ui_msg "The Security Check app was removed. Past reports were kept."
