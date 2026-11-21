@@ -287,19 +287,29 @@ done
 
 # A kdialog that answers like a person would: Yes/OK everywhere, the default
 # ticks in lists, Yes/No/Cancel answers taken from a queue file, and the
-# dashboard entries to open taken from another (none left: Finish).
+# dashboard entries to open taken from another (none left: Finish). The
+# tool puts the "no" answer in kdialog's Yes place when Enter must not say
+# yes; the person still presses the button with the "yes" answer on it.
 stub kdialog << EOF
 #!/bin/bash
 printf '%s\0' "\$@" >> "$W/kdialog.log"; printf '\n' >> "$W/kdialog.log"
 args=("\$@")
+swapped=0
+for ((i = 0; i < \${#args[@]}; i++)); do
+  [[ "\${args[\$i]}" == --yes-label ]] || continue
+  case "\${args[\$((i + 1))]}" in No|Back|Skip|"Keep it"|"Leave it"|Cancel|"Not now"|Quit) swapped=1 ;; esac
+done
 for ((i = 0; i < \${#args[@]}; i++)); do
   case "\${args[\$i]}" in
-    --yesno|--warningyesno|--msgbox|--error|--detailederror|--sorry|--passivepopup|--textbox) exit 0 ;;
+    --yesno|--warningyesno) exit "\$swapped" ;;
+    --msgbox|--error|--detailederror|--sorry|--passivepopup|--textbox) exit 0 ;;
     --progressbar) echo "org.kde.kdialog-4242 /ProgressDialog"; exit 0 ;;
     --getexistingdirectory) echo "\${args[\$((i + 1))]}"; exit 0 ;;
     --newpassword) echo "secret"; exit 0 ;;
     --yesnocancel|--warningyesnocancel)
-      a=\$(head -n1 "$W/q/answers"); sed -i 1d "$W/q/answers"; exit "\${a:-1}" ;;
+      a=\$(head -n1 "$W/q/answers"); sed -i 1d "$W/q/answers"; a="\${a:-1}"
+      if [[ \$swapped -eq 1 && \$a != 2 ]]; then a=\$(( 1 - a )); fi
+      exit "\$a" ;;
     --menu)
       a=\$(head -n1 "$W/q/menu" 2>/dev/null); sed -i 1d "$W/q/menu" 2>/dev/null
       [[ -n "\$a" ]] || exit 1
@@ -1667,14 +1677,76 @@ for line in open(sys.argv[1]):
                && -e "$STATE_DIR/undo/20250101-000000/01-undo.sh" ]] && echo "undo-enter-is-cancel-then-keep-it"
         )
         # kdialog cannot be told its default button: a marked question
-        # uses its warning dialog, whose default is No (or Cancel).
+        # uses its warning dialog.
         (
             _ui_dialog() { return 4; }; _kd() { printf '%s ' "$@" >> "$W/kd-kinds"; echo >> "$W/kd-kinds"; return 1; }
+            _kd_answer() { _kd "$@"; }
             UI_MODE=kde; : > "$W/kd-kinds"
             ui_yesno "q" Y N y; ui_yesno "q" Y N y careful; ui_yesno "q" Y N n warn
             ui_choice3 "q" "" Y N C; ui_choice3 "q" "" Y N C careful; ui_choice3 "q" "" Y N C warn
             [[ "$(grep -oE -- '--(warning)?yesno(cancel)? ' "$W/kd-kinds" | tr -d '\n')" == "--yesno --warningyesno --warningyesno --yesnocancel --warningyesnocancel --warningyesnocancel " ]] \
                 && echo "careful-questions-use-the-kdialog-warning"
+        )
+        # Enter presses kdialog's Yes place in every question (since 19.12):
+        # unless Yes is the default, No is put there, and the answer is read
+        # back the other way round; Esc or closing (exit 2) is never Yes.
+        (
+            _ui_dialog() { return 4; }
+            _kd() { printf '%s|' "$2" "$4" >> "$W/kd-swap"; echo >> "$W/kd-swap"; return "$KD_RC"; }
+            _kd_answer() { _kd "$@"; }
+            UI_MODE=kde; : > "$W/kd-swap"; out=""
+            for q in "y" "y careful" "n" "n warn"; do
+                for KD_RC in 0 1 2; do
+                    # shellcheck disable=SC2086 # $q is two words on purpose
+                    ui_yesno "q" Y N $q; out+="$?"
+                done
+                out+=" "
+            done
+            for q in ":n" "careful:n" "warn:y" ":y"; do
+                for KD_RC in 0 1 2; do
+                    ui_choice3 "q" "" Y N C "${q%%:*}" "${q#*:}"; out+="$?"
+                done
+                out+=" "
+            done
+            want=""; for p in "Y|N|" "N|Y|" "N|Y|" "N|Y|" "N|Y|" "N|Y|" "N|Y|" "Y|N|"; do want+="$p $p $p "; done
+            [[ "$out" == "012 101 101 101 102 102 102 012 " && "$(tr '\n' ' ' < "$W/kd-swap")" == "$want" ]] && echo "kdialog-enter-is-not-yes" \
+               || echo "kdialog answers: $out / $(tr '\n' ' ' < "$W/kd-swap")"
+            # kdialog failing (255) is no answer: the question goes on to the
+            # next way of asking. Here nobody is left to ask, and a marked
+            # question is then "no" even when its default is "yes".
+            _kd_answer() { UI_MODE=none; return 255; }
+            UI_MODE=kde; ui_choice3 "q" "" Apply Skip Stop careful; r1=$?
+            UI_MODE=kde; ui_yesno "q" "Undo anyway" Cancel n warn; r2=$?
+            UI_MODE=kde; ui_yesno "q" Remove Cancel y careful; r3=$?
+            UI_MODE=kde; ui_yesno "q" "Roll back" "Leave it" y warn; r4=$?
+            [[ "$r1$r2$r3$r4" == 1111 ]] && echo "kdialog-failure-asks-on" || echo "kdialog failure gave $r1$r2$r3$r4"
+        )
+        # Exit 1 means "yes" in a swapped question: only when kdialog itself
+        # said so. A wrapper that fails (here: no desktop user) is kdialog
+        # failing, never an answer.
+        (
+            _ui_dialog() { return 4; }; _ui_fallback() { UI_MODE=none; }
+            _as_desktop_user() { return 1; }
+            UI_MODE=kde; RUN_TMP="$W/kd-wrap-rt"; mkdir -p "$RUN_TMP"
+            ui_choice3 "q" "" Apply Skip Stop careful; r1=$?
+            UI_MODE=kde; ui_yesno "q" "Undo anyway" Cancel n warn; r2=$?
+            UI_MODE=kde; ui_yesno "Remove the app?" Remove Cancel y careful < /dev/null; r4=$?
+            [[ "$r1" == 1 && "$r2" == 1 && "$r4" == 1 && -e "$RUN_TMP/kdialog-failed" ]] && echo "kdialog-wrapper-failure-is-not-yes"
+            # ... while kdialog's own exit 1 (the button with the yes answer) is yes.
+            rm -f "$RUN_TMP/kdialog-failed"; UI_MODE=kde
+            _as_desktop_user() { shift 1; [[ "$1" == XDG_CONFIG_HOME=* ]] && shift; "$@"; }
+            mkdir -p "$W/kd-own-bin"; printf '#!/bin/sh\nexit 1\n' > "$W/kd-own-bin/kdialog"; chmod 755 "$W/kd-own-bin/kdialog"
+            PATH="$W/kd-own-bin:$PATH"
+            ui_choice3 "q" "" Apply Skip Stop careful; r3=$?
+            [[ "$r3" == 0 ]] && echo "kdialog-own-exit-1-is-yes" || echo "own exit 1 gave $r3"
+            # ... and its 0 and 2 are Skip and Stop; 3 is kdialog failing.
+            got=""
+            for k in 0 2 3; do
+                rm -f "$RUN_TMP/kdialog-failed"; UI_MODE=kde
+                printf '#!/bin/sh\nexit %s\n' "$k" > "$W/kd-own-bin/kdialog"
+                ui_choice3 "q" "" Apply Skip Stop careful; got+="$?$([[ -e "$RUN_TMP/kdialog-failed" ]] && echo f || true) "
+            done
+            [[ "$got" == "1 2 1f " ]] && echo "kdialog-own-exits-mapped" || echo "own exits gave: $got"
         )
         # Every question whose Yes changes the PC there and then is marked.
         marked=1
@@ -2053,6 +2125,73 @@ for line in open(sys.argv[1]):
     RUN_TMP=""
     rc=0; _run_change "t6 no tmp" "touch $W/no-private-tmp" "" > /dev/null 2>&1 || rc=$?
     [[ $rc -eq 3 && ! -e "$W/no-private-tmp" ]] && echo "fix-needs-private-tmp"
+    # A fix that fails while nobody can answer the rollback question is
+    # not rolled back, and its undo step is kept for --undo.
+    (
+        UI_MODE=none; RUN_ID="t6left"; RUN_TMP=$(mktemp -d "$W/runtmp.XXXXXX"); ui_error() { :; }
+        rc=0; _run_change "t6 half" "echo half > $W/t6-half; exit 1" "rm -f $W/t6-half" > /dev/null 2>&1 || rc=$?
+        [[ $rc -eq 3 && -e "$W/t6-half" && -f "$STATE_DIR/undo/t6left/01-undo.sh" ]] \
+            && grep -qx '# TITLE: t6 half (did not complete)' "$STATE_DIR/undo/t6left/01-undo.sh" && echo "failed-fix-left-keeps-undo"
+        # ... one that is rolled back keeps no step to undo (it is marked rolled back) ...
+        RUN_ID="t6back"; ui_yesno() { return 0; }
+        _run_change "t6 back" "echo half > $W/t6-back; exit 1" "rm -f $W/t6-back" > /dev/null 2>&1
+        [[ ! -e "$W/t6-back" && -z "$(compgen -G "$STATE_DIR/undo/t6back/*-undo.sh")" && -f "$STATE_DIR/undo/t6back/01-undo.rolledback" ]] && echo "failed-fix-rolled-back-keeps-nothing"
+        # ... and a rolled-back attempt does not later mark the same fix, retried and working, as undone.
+        RUN_ID="t6sync"; F_STATE[7]="open"; F_CHECK[7]="c"; F_VERIFY[7]=""; CURRENT_FINDING=7
+        _run_change "s" "exit 1" "true" > /dev/null 2>&1; F_STATE[7]=failed
+        rrc=0; _run_change "s" "true" "true" > /dev/null 2>&1 || rrc=$?; F_STATE[7]=fixed
+        [[ $rrc -eq 0 && -f "$STATE_DIR/undo/t6sync/02-undo.sh" ]] || echo "retry did not apply: $rrc"
+        _sync_undone > /dev/null 2>&1
+        [[ $rrc -eq 0 && -f "$STATE_DIR/undo/t6sync/02-undo.sh" && "${F_STATE[7]}" == fixed && "${F_VERIFY[7]}" != undone ]] && echo "rolled-back-attempt-not-an-undo" || echo "sync after rollback: ${F_STATE[7]} ${F_VERIFY[7]}"
+        CURRENT_FINDING=""
+        # A signal while the rollback runs waits until it is marked rolled back.
+        RUN_ID="t6rbsig"
+        ( trap _on_signal INT TERM HUP; pid=$BASHPID
+          _run_change "t6 rbsig" "exit 1" "kill -HUP $pid; sleep 1" ) > "$W/t6-rbsig.out" 2>&1; rc=$?
+        # (130 is the tool's own stop; a shell killed by HUP would end with 129.)
+        [[ $rc -eq 130 && -f "$STATE_DIR/undo/t6rbsig/01-undo.rolledback" ]] && echo "rollback-interrupted-is-marked" \
+            || echo "rbsig rc=$rc $(ls "$STATE_DIR/undo/t6rbsig" | tr '\n' ' ')"
+        # ... one whose rollback fails keeps its step, once ...
+        RUN_ID="t6bad"
+        _run_change "t6 bad" "echo half > $W/t6-bad; exit 1" "exit 4" > /dev/null 2>&1
+        [[ -e "$W/t6-bad" && "$(compgen -G "$STATE_DIR/undo/t6bad/*-undo.sh" | wc -l)" -eq 1 ]] && echo "failed-rollback-keeps-undo-once"
+        # ... one left as it is by the person says so in a window too ...
+        RUN_ID="t6leave"; ui_yesno() { return 1; }; ui_interactive() { return 0; }; ui_msg() { printf '%s\n' "$1" > "$W/t6-leave-msg"; }
+        UI_MODE=kde; _ui_dialog() { return 4; }; ui_busy_start() { :; }; ui_busy_stop() { :; }; ui_error() { :; }
+        _run_change "t6 leave" "echo half > $W/t6-leave; exit 1" "rm -f $W/t6-leave" > /dev/null 2>&1
+        UI_MODE=none
+        [[ -f "$STATE_DIR/undo/t6leave/01-undo.sh" ]] && grep -q '"t6 leave" was left as it is. Its undo step was kept' "$W/t6-leave-msg" && echo "failed-fix-left-says-so"
+        # ... but on the terminal only the printed line says it (no second copy in a window).
+        RUN_ID="t6leavetty"; : > "$W/t6-leave-msg"; UI_MODE="tty"
+        _run_change "t6 leave tty" "echo half > $W/t6-leavetty; exit 1" "rm -f $W/t6-leavetty" > /dev/null 2>&1
+        UI_MODE=none
+        [[ -f "$STATE_DIR/undo/t6leavetty/01-undo.sh" && ! -s "$W/t6-leave-msg" ]] && echo "failed-fix-left-not-twice-on-terminal"
+        # ... and one interrupted at the rollback question keeps it too.
+        RUN_ID="t6hup"; ui_yesno() { kill -HUP "$BASHPID"; sleep 1; return 1; }; : > "$W/t6-hup-msg"
+        ( UI_MODE=kde; ui_msg() { echo left >> "$W/t6-hup-msg"; }; trap _on_signal INT TERM HUP
+          _run_change "t6 hup" "echo half > $W/t6-hup; exit 1" "rm -f $W/t6-hup" ) > /dev/null 2>&1; rc=$?
+        [[ $rc -eq 130 && -e "$W/t6-hup" && -f "$STATE_DIR/undo/t6hup/01-undo.sh" && ! -s "$W/t6-hup-msg" ]] && echo "failed-fix-interrupted-at-question-keeps-undo" \
+            || echo "hup at question: rc=$rc"
+    )
+    # An action whose window stopped working on the way ends with status 1 and says so.
+    (
+        ACTION=install; UI_MODE=none; ui_interactive() { [[ "$UI_MODE" != none ]]; }
+        ( _action_end ) 2> "$W/action-end.err"; r1=$?
+        UI_MODE=kde; ( _action_end ) 2>/dev/null; r2=$?
+        [[ "$r1 $r2" == "1 0" ]] && grep -q -- "--install: the window stopped working, so it may not have finished" "$W/action-end.err" && echo "action-end-after-lost-window"
+    )
+    # On the terminal, Enter is "no" for a question that changes the PC, whatever its default.
+    (
+        # (An earlier test removed ui_choice3 from this shell: take it again.)
+        eval "$(sed -n '/^ui_choice3() {/,/^}/p' "$HERE/../lib/ui.sh")"
+        UI_MODE="tty"; _ui_dialog() { return 4; }; _tty_read() { printf '%s\n' "$1" >> "$W/tty-prompts"; printf ''; }
+        : > "$W/tty-prompts"
+        ui_yesno "q" Remove Cancel y careful 2>/dev/null; r1=$?
+        ui_yesno "q" Open Close y 2>/dev/null; r2=$?
+        ui_choice3 "q" "q" Apply Skip Stop careful y 2>/dev/null; r3=$?
+        [[ "$r1$r2$r3" == 101 ]] && grep -qF 'Remove / Cancel? [y/N]' "$W/tty-prompts" && grep -qF 'Open / Close? [Y/n]' "$W/tty-prompts" \
+            && grep -qF '(default n)' "$W/tty-prompts" && echo "tty-enter-is-no-for-a-change" || echo "tty answers $r1$r2$r3: $(tr '\n' '|' < "$W/tty-prompts")"
+    )
 
     # A line break in a path does not turn it into two paths.
     mkdir -p "$UH/t6nl"$'\n'"/etc"
@@ -2102,9 +2241,22 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          affects-in-use-first affects-html-escaped affects-tags affects-none-not-in-use fix-in-use-unticked ports-to-features \
          kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked dialog-button-in-range kept-no-date-no-since \
          yesno-enter-follows-the-default-never-a-change choice3-enter-follows-the-default-never-a-change apply-fallback-enter-is-skip \
-         undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked; do
+         undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked \
+         kdialog-enter-is-not-yes kdialog-failure-asks-on kdialog-wrapper-failure-is-not-yes kdialog-own-exit-1-is-yes \
+         kdialog-own-exits-mapped failed-fix-left-keeps-undo failed-fix-rolled-back-keeps-nothing tty-enter-is-no-for-a-change \
+         failed-rollback-keeps-undo-once failed-fix-interrupted-at-question-keeps-undo action-end-after-lost-window \
+         failed-fix-left-says-so rolled-back-attempt-not-an-undo rollback-interrupted-is-marked failed-fix-left-not-twice-on-terminal; do
     expect "$W/t6.out" "$m" "$m"
 done
+# --install and the other actions that change the PC only after a "yes"
+# say so and stop when nobody can answer (no terminal, no desktop).
+mkdir -p "$W/unatt-state"; chmod 700 "$W/unatt-state"
+unatt_ok=1
+for a in --install --install-timer --uninstall --remove-timer --undo --update; do
+    out=$(env -u DISPLAY -u WAYLAND_DISPLAY AUDIT_STATE_DIR="$W/unatt-state" setsid bash "$TOOL" "$a" --no-gui < /dev/null 2>&1); rc=$?
+    [[ $rc -eq 1 && "$out" == *"${a} asks before it changes anything"*"nothing was changed."* ]] || { unatt_ok=0; echo "  $a: rc=$rc ${out: -160}"; }
+done
+[[ $unatt_ok -eq 1 && ! -e "/usr/local/share/applications/bazzite-security-check.desktop" ]] && ok "unattended-changes-refused" || bad "unattended-changes-refused"
 
 # One window for the whole run: ui_app talks to one long-lived front end
 # over two pipes. A stand-in that speaks the same protocol (no Qt here)
@@ -2258,9 +2410,11 @@ PYEOF
     a=$(ui_app wizard '{"die":true}'); rc=$?
     [[ $rc -eq 3 && -z "$a" && "$_QML_OK" == yes ]] && ! _qml_ok && [[ "$_QML_OK" == no && -z "$_UI_FRONT_W" ]] && echo "front-died-falls-back"
     ui_app wizard '{}' > /dev/null; [[ $? -eq 4 ]] && echo "front-not-used-again"
-    # With the front end gone, a question is asked with kdialog.
-    _as_desktop_user() { echo "kdialog" >> "$W/front-kd"; return 0; }
-    ui_yesno "Continue?" && [[ -s "$W/front-kd" ]] && echo "front-gone-kdialog-asks"
+    # With the front end gone, a question is asked with kdialog (whose
+    # Enter, exit 0, is the "No" answer of a question that defaults to No).
+    _as_desktop_user() { printf '%s\n' "$@" >> "$W/front-kd"; echo "bsa-kdialog-exit:0"; return 0; }
+    ! ui_yesno "Continue?" && [[ "$(grep -A1 -x -- --yes-label "$W/front-kd" | tail -n 1)" == No && "$(grep -A1 -x -- --no-label "$W/front-kd" | tail -n 1)" == Yes ]] \
+        && [[ ! -e "$RUN_TMP/kdialog-failed" && "$UI_MODE" == kde ]] && echo "front-gone-kdialog-asks"
 
     new_run; ui_front_start
     a=$(ui_app wizard '{"fail":true}'); rc=$?

@@ -302,13 +302,16 @@ _run_change() {
     out=$_RUN_OUT
     rm -f -- "$tmpfile"
     log "--- end of the output (exit ${rc}) ---"
+    local kept=""
     if [[ $rc -eq 0 ]]; then
         [[ -n "$undo" ]] && _undo_record "$title" "$undo"
-    elif [[ $_SIGNAL_PENDING -eq 1 && -n "$undo" ]]; then
-        # Failed, and the tool is about to stop: nobody is asked about a
-        # rollback now, so keep the undo step for --undo.
+    elif [[ -n "$undo" ]]; then
+        # Failed: the undo step is kept for --undo before anything else
+        # happens (an interruption, or the rollback question below), and
+        # marked rolled back only if the rollback works.
         _undo_record "${title} (did not complete)" "$undo"
-        log "interrupted after a failed fix: its undo step was kept"
+        kept="$_UNDO_LAST"
+        log "failed fix: its undo step was kept"
     fi
     ui_busy_stop
     _signals_release
@@ -329,15 +332,28 @@ _run_change() {
 
 Output:
 $(tail -n 15 <<< "$out")"
-    if [[ -n "$undo" ]] && ui_yesno "Put back what this fix may already have changed?" "Roll back" "Leave it" "y" careful; then
+    [[ -n "$undo" ]] || return 3
+    if ui_yesno "Put back what this fix may already have changed?" "Roll back" "Leave it" "y" careful; then
         local undo_rc=0
+        # As in run_undo: the rollback and the mark that it ran go together.
+        # The mark is ".rolledback", not ".done": a "done" step tells
+        # _sync_undone that a working fix was undone.
+        _signals_hold
         _undo_run bash -c "$undo" || undo_rc=$?
+        [[ $undo_rc -eq 0 && -n "$kept" && -f "$kept" ]] && mv -f -- "$kept" "${kept%.sh}.rolledback"
+        _signals_release
         if [[ $undo_rc -eq 0 ]]; then
             print_status "OK" "Rolled back: ${title}"
-        else
-            ui_error "Rolling back \"${title}\" failed too - see the run log: ${RUN_LOG}"
+            return 3
         fi
+        ui_error "Rolling back \"${title}\" failed too - see the run log: ${RUN_LOG}
+Its undo step was kept: Undo on the dashboard, or --undo, can try again."
+        return 3
     fi
+    # Left as it is (also when nobody could answer): the undo step stays
+    # on record, so --undo can put it back later.
+    print_status "INFO" "The undo step of \"${title}\" was kept: Undo on the dashboard, or --undo, can put it back later."
+    [[ "$UI_MODE" == kde ]] && ui_msg "\"${title}\" was left as it is. Its undo step was kept: Undo on the dashboard, or --undo, can put it back later."
     return 3
 }
 
@@ -655,7 +671,8 @@ _undo_record() {
     local dir n f
     dir=$(_undo_dir)
     mkdir -p "$dir" && chmod 700 "$dir"
-    # Steps already undone (.done) keep their number.
+    # Steps already undone (.done) or rolled back (.rolledback) keep their
+    # number.
     n=$(find "$dir" -maxdepth 1 -name '[0-9][0-9]-undo.*' 2>/dev/null | wc -l)
     f=$(printf '%s/%02d-undo.sh' "$dir" $((n + 1)))
     {
@@ -664,6 +681,7 @@ _undo_record() {
         printf '%s\n' "$2"
     } > "$f"
     chmod 700 "$f"
+    _UNDO_LAST="$f"
     _write_undo_all "$dir"
 }
 

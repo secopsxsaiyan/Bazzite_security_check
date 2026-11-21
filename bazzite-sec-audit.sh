@@ -342,6 +342,17 @@ _prune_history() {
     return 0
 }
 
+# _action_end — the end of an action that changes the PC after a "yes":
+# when its window failed on the way and nobody was left to answer, it may
+# not have finished; say so and end with status 1.
+_action_end() {
+    if ! ui_interactive; then
+        echo "--${ACTION}: the window stopped working, so it may not have finished; anything not confirmed was not changed." >&2
+        exit 1
+    fi
+    exit 0
+}
+
 main() {
     set -uo pipefail
     umask 077
@@ -393,14 +404,24 @@ Many checks will not apply. Continue anyway?" "Continue" "Quit" "n"; then
         fi
     fi
 
+    # These change the PC, and only after a "yes": without a terminal or the
+    # desktop nobody can give it, so say so instead of doing nothing.
     case "$ACTION" in
-        undo)          run_undo; exit 0 ;;
-        install)       install_app; exit 0 ;;
+        undo|install|uninstall|install-timer|remove-timer|update)
+            if ! ui_interactive; then
+                echo "--${ACTION} asks before it changes anything, and there is no terminal or desktop to answer; nothing was changed." >&2
+                exit 1
+            fi ;;
+    esac
+
+    case "$ACTION" in
+        undo)          run_undo; _action_end ;;
+        install)       install_app; _action_end ;;
         settings)      run_settings; exit 0 ;;
-        update)        update_run; exit 0 ;;
-        uninstall)     uninstall_app; exit 0 ;;
-        install-timer) install_timer; exit 0 ;;
-        remove-timer)  remove_timer; exit 0 ;;
+        update)        update_run; _action_end ;;
+        uninstall)     uninstall_app; _action_end ;;
+        install-timer) install_timer; _action_end ;;
+        remove-timer)  remove_timer; _action_end ;;
     esac
 
     # A newer release, when the person asked to be told (Settings).
