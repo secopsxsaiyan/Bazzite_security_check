@@ -17,8 +17,11 @@ QQC2.Button {
     // "destructive: true" fills it with the negative colour instead.
     property bool destructive: false
     readonly property color fill: Util.deep(Kirigami.Theme, destructive ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.highlightColor)
-    // Alt is held down: the letter that presses this button is shown.
-    readonly property bool showsKey: Kirigami.MnemonicData.active && Kirigami.MnemonicData.sequence.toString() !== ""
+    // Alt is held down: the letter that presses this button is shown. A
+    // button made while Alt is held is not told so by Kirigami (it hears
+    // of the next press only): there the window knows (Shell.qml).
+    readonly property bool showsKey: (Kirigami.MnemonicData.active || (Window.window !== null && Window.window.altDown === true))
+                                     && Kirigami.MnemonicData.sequence.toString() !== ""
 
     font.bold: true
     leftPadding: Kirigami.Units.largeSpacing * 2

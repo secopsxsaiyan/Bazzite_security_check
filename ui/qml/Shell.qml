@@ -46,14 +46,23 @@ Kirigami.ApplicationWindow {
     readonly property int settleTime: 350
     // True until the page shown can be operated (tests wait for false).
     readonly property bool settling: settle.running
+    // Alt is held down, as far as the key events of this window tell (a
+    // release that never came here leaves it true until the next key
+    // event, or until the window is no longer active). It shows an
+    // underline and answers nothing: for the main button of a page that
+    // appears while Alt is held, see PrimaryButton.qml.
+    property bool altDown: false
+    onActiveChanged: if (!active) altDown = false
     // The window was hidden and has not drawn the page since: see below.
     property bool unseen: false
     property Item resume: null          // had the focus when hold() took it
     property bool resumeRing: false     // ... with a focus ring
 
     readonly property Item current: dialogItem || pageItem
-    readonly property real compactWidth: pageItem ? pageItem.implicitWidth : Kirigami.Units.gridUnit * 22
-    readonly property real compactHeight: pageItem ? pageItem.implicitHeight : Kirigami.Units.gridUnit * 8
+    // Only a dialog has a size of its own. A width or height of 0 must never
+    // reach the window: a Wayland compositor ends a program that asks for it.
+    readonly property real compactWidth: pageItem && pageIsDialog && pageItem.implicitWidth > 0 ? pageItem.implicitWidth : Kirigami.Units.gridUnit * 22
+    readonly property real compactHeight: pageItem && pageIsDialog && pageItem.implicitHeight > 0 ? pageItem.implicitHeight : Kirigami.Units.gridUnit * 8
     // More than any screen: no upper limit.
     readonly property int unlimited: 16777215
 
@@ -148,7 +157,13 @@ Kirigami.ApplicationWindow {
         }
         var isDialog = mode === "dialog"
         var over = isDialog && pageItem !== null && !pageIsDialog
-        var slot = (over ? dialogSlotComponent : pageSlotComponent).createObject(over ? dialogLayer : pageLayer)
+        // The slot is made switched off, and switched on below, when what
+        // it replaces is switched off: a button gets its Alt+letter key
+        // when it is switched on, and the buttons of what is replaced
+        // would still hold their letters. So a page that follows one with
+        // the same buttons gives them the same keys. (A dialog that is
+        // replaced was switched off before: finish().)
+        var slot = (over ? dialogSlotComponent : pageSlotComponent).createObject(over ? dialogLayer : pageLayer, { "enabled": false })
         made.slot = slot
         var item = component.createObject(slot, { "input": input, "iconSource": root.iconSource })
         if (!item || !(item instanceof Item) || !isSignal(item.finished) || !isSignal(item.cancelled)) {
@@ -184,13 +199,16 @@ Kirigami.ApplicationWindow {
             var old = pageSlot
             var resized = compact
             if (dialogSlot) { dialogSlot.destroy(); dialogSlot = null; dialogItem = null }
-            pageSlot = slot
-            pageItem = item
-            pageIsDialog = isDialog
+            // In this order: the size limits are lifted before the window
+            // learns of a page that has no size of its own (and while the
+            // small window still has the size of what it shows).
             if (!isDialog && compact) {
-                compact = false     // lifts the size limits first
+                compact = false
                 fit()
             }
+            pageIsDialog = isDialog
+            pageSlot = slot
+            pageItem = item
             if (old) {
                 // The new page fades in over the old one, which then goes.
                 // No fade when the window changes its size with the page.
@@ -201,6 +219,7 @@ Kirigami.ApplicationWindow {
             }
             if (resized || !old) slot.instant = true
         }
+        slot.enabled = true
         pendingId = id
         busyShown = false
         busyLabel = ""
@@ -357,7 +376,14 @@ Kirigami.ApplicationWindow {
         // of another wizard step) keeps it, but is not there for the user.
         return !!item && item.visible && item.enabled && item.focusPolicy !== Qt.NoFocus
     }
+    function sawKey(event, down) {
+        // A held key that repeats comes as a release and a press: the
+        // release half of a repeating Alt does not mean Alt is up.
+        if (event.key === Qt.Key_Alt && event.isAutoRepeat) return
+        altDown = event.key === Qt.Key_Alt ? down : (event.modifiers & Qt.AltModifier) !== 0
+    }
     function keyPressed(event) {
+        sawKey(event, true)
         // Not even Tab: it would move the focus into the new page. Any key
         // starts the wait again: the page is for a person who has let go.
         if (settling) { settle.restart(); event.accepted = true; return }
@@ -409,6 +435,7 @@ Kirigami.ApplicationWindow {
     }
 
     function keyReleased(event) {
+        sawKey(event, false)
         if (settling) { settle.restart(); event.accepted = true; return }
         // The release half of a repeat that the focused control did not
         // take, because it never saw the press: the key is held. (For key
@@ -426,6 +453,7 @@ Kirigami.ApplicationWindow {
     // keyPressed() as a plain key. (Key events made by a program need not
     // be announced: for those, keyPressed() and keyReleased() do the same.)
     function keyAnnounced(event) {
+        sawKey(event, true)
         if (settling) {
             event.accepted = true
         } else if (pendingId !== "" && event.isAutoRepeat && answers(event)) {

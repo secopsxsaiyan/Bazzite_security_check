@@ -485,6 +485,18 @@ def main_button():
     return control("the main button", is_main)
 
 
+def alt_keys():
+    """The Alt key of every button of the page that has one: label -> letter."""
+    from PySide6.QtQml import QQmlExpression, qmlContext
+    keys = {}
+    for b in controls():
+        got_ = QQmlExpression(qmlContext(b), b, "Kirigami.MnemonicData.sequence.toString()").evaluate()
+        seq = got_[0] if isinstance(got_, tuple) else got_
+        if b.property("text") and seq:
+            keys[b.property("text")] = str(seq).replace("Alt+", "")
+    return keys
+
+
 def row(field, value):
     """The row (card, list entry) that shows the input's item whose FIELD is VALUE."""
     def test(i):
@@ -717,6 +729,16 @@ def sc_shell():
     ok = yield W(lambda: got("d1") or (prop("pendingId") == "d1" and shell.isVisible()), "dialog first: shown")
     yield from settled("dialog first")
     small = (shell.width(), shell.height())
+    # Every size the window takes from here on (a Wayland compositor ends a
+    # program whose window asks for a width or height of 0).
+    # Off-screen the size itself is seen to change only once, to the final
+    # one; the limits the window is given show every step on the way, and
+    # they come from the same values.
+    sizes = [small]
+    shell.minimumWidthChanged.connect(lambda *a: sizes.append((shell.minimumWidth(), shell.minimumHeight())))
+    shell.minimumHeightChanged.connect(lambda *a: sizes.append((shell.minimumWidth(), shell.minimumHeight())))
+    shell.widthChanged.connect(lambda *a: sizes.append((shell.width(), shell.height())))
+    shell.heightChanged.connect(lambda *a: sizes.append((shell.width(), shell.height())))
     check(prop("compact") is True and prop("dialogItem") is None, "dialog first: a small window of its own (%dx%d)" % small)
     check(shell.title() == S["dialog"]["title"], "dialog first: window title %r" % shell.title())
     shot("shell-dialog-first")
@@ -743,6 +765,12 @@ def sc_shell():
         big = (shell.width(), shell.height())
         check(prop("compact") is False and big[0] > small[0] and big[1] > small[1], "first page: the window grew to %dx%d" % big)
         check(prop("busyShown") is False, "first page: no longer busy")
+        empty = [x for x in sizes if x[0] <= 0 or x[1] <= 0]
+        check(not empty, "from the small window to the first page: the window was never told to have no width or height: %s" % empty[:3])
+        # Nor to be smaller than the small window first (a default size of
+        # its own on the way would show as a flash).
+        smaller = [x for x in sizes if x[0] < small[0] or x[1] < small[1]]
+        check(not smaller, "from the small window to the first page: it only grows, never smaller than %dx%d on the way: %s" % (small + (smaller[:3],)))
         # A label while a page waits for its answer is dropped.
         send({"busy": "Later"})
         yield P(0.3)
@@ -1245,7 +1273,7 @@ def said_twice(root=None):
     own, which a screen reader would say after theirs: (the name, the name
     inside it) of each."""
     from PySide6.QtGui import QAccessible
-    whole = ("Button", "CheckBox", "RadioButton", "StaticText")
+    whole = ("Button", "CheckBox", "RadioButton", "StaticText", "ListItem")
     out = []
 
     def walk(obj, depth, above):
@@ -1683,6 +1711,106 @@ def sc_guard():
         no_answer("g8", "Alt and a letter held down (repeating) does not answer a page")
         yield from settled("after the held Alt+letter")
         yield from one_letter("g8", "Alt+letter let go and pressed again")
+    # A button has the same Alt key on every page, also on a page that
+    # follows one with the same buttons (the old page is still there, and
+    # holds its letters, when the new one is made). And the main button,
+    # which draws its own label, shows its key on a page that appears while
+    # Alt is held, as the other buttons do.
+    first = {}      # the Alt keys of a Confirm page; also used for g15 below
+    if (yield from show("g9", "confirm", data, "Alt keys, first page")):
+        first = alt_keys()
+        check(len(first) >= 3 and len(set(first.values())) == len(first) and all(t in first for t in ("Stop reviewing", "Skip", "Apply")),
+              "every button of the page has an Alt key of its own: %r" % first)
+        c = first.get("Skip", "S")
+        k = getattr(K(), "Key_" + c)
+        # The steps before never let go of Alt itself: do it, so that what
+        # follows shows the press, and nothing left over, sets altDown.
+        typed(K().Key_Alt, press=False)
+        check(prop("altDown") is False, "Alt let go: the window knows Alt is up")
+        typed(K().Key_Alt, alt, release=False)
+        check(prop("altDown") is True, "Alt pressed: the window knows Alt is down, from the press alone")
+        typed(k, alt, c.lower(), release=False)
+        yield from answered("g9", "Alt+%s, the Skip button" % c)
+        ask("g10", "confirm", data)
+        shown = yield W(lambda: prop("pendingId") == "g10", "Alt keys, the page after: shown")
+        if not shown:
+            typed(k, alt, c.lower(), press=False)
+            typed(K().Key_Alt, press=False)
+        else:
+            # Before any repeat: Alt is still known to be down from its press.
+            apply_ = main_button()
+            drawn = next((i for i in items_under(apply_) if i.inherits("QQuickText")), None) if apply_ is not None else None
+
+            def underlined():
+                """The main button says it shows its Alt key, and its label draws it."""
+                return (apply_ is not None and apply_.property("showsKey") is True
+                        and drawn is not None and "<u>" in (drawn.property("text") or ""))
+            check(prop("altDown") is True and underlined(),
+                  "the main button of a page that appears while Alt is held shows its Alt key at once (from the press, before a repeat)")
+            # Alt itself held long enough to repeat: the release half of a
+            # repeat is not Alt let go.
+            typed(K().Key_Alt, alt, press=False, repeat=True)
+            check(prop("altDown") is True and underlined(), "the release half of a repeating Alt leaves Alt down and the key shown")
+            typed(K().Key_Alt, alt, release=False, repeat=True)
+            yield from held(k, c.lower(), 0.5, mod=alt)
+            check(underlined(), "the main button of a page that appears while Alt is held shows its Alt key")
+            check(alt_keys() == first, "a page that follows one with the same buttons has the same Alt keys, from the moment it appears: %r, before %r" % (alt_keys(), first))
+            typed(k, alt, c.lower(), press=False)
+            typed(K().Key_Alt, press=False)
+            check(apply_ is not None and apply_.property("showsKey") is False and drawn is not None and "<u>" not in (drawn.property("text") or ""),
+                  "and no longer when Alt is let go")
+            yield from settled("Alt keys, the page after")
+            check(alt_keys() == first, "a page that follows one with the same buttons has the same Alt keys: %r, before %r" % (alt_keys(), first))
+            no_answer("g10", "the key held since the page before did not answer it")
+            # Alt held when another window takes over (Alt+Tab): its release
+            # goes there, so the window forgets Alt when it is no longer active.
+            from PySide6.QtGui import QGuiApplication, QWindow
+            if shell.isActive():
+                other = QWindow()
+                other.resize(50, 50)
+                typed(K().Key_Alt, alt, release=False)
+                down = prop("altDown") is True
+                other.show()
+                other.requestActivate()
+                left = yield W(lambda: not shell.isActive(), "Alt keys: another window takes over")
+                # (Kirigami's own MnemonicData.active is its business: it
+                # too never saw the release.)
+                check(down and left and prop("altDown") is False,
+                      "Alt held when another window takes over: the window forgets it (down before %s, left %s, altDown %s)"
+                      % (down, left, prop("altDown")))
+                other.destroy()
+                shell.requestActivate()
+                yield W(lambda: shell.isActive(), "Alt keys: the window is active again")
+                typed(K().Key_Alt, press=False)     # leave nothing held for the steps after
+            elif QGuiApplication.platformName() == "offscreen":
+                check(False, "Alt keys: the window is active, so another window can take over")
+            else:
+                say("     skipped: the window is not active, so \"another window takes over\" was not checked")
+            key(Escape)
+            yield from answered("g10", "Alt keys, the page after: Esc")
+        # A text too long for its lines brings a "Show all details" button:
+        # it takes no letter from the buttons that are on every page.
+        if (yield from show("g11", "confirm", dict(data, detail="A long line of text about this fix. " * 60), "Alt keys, a long text")):
+            more = button("Show all details")
+            keys = alt_keys()
+            check(more is not None and "Show all details" not in keys and dict(keys) == first,
+                  "a page with a \"Show all details\" button has the same Alt keys: %r, before %r" % (keys, first))
+            key(Escape)
+            yield from answered("g11", "Alt keys, a long text: Esc")
+    # The same for what replaces a dialog: a dialog after a dialog, and a
+    # page after a dialog, with the labels of that page on the dialog's
+    # buttons.
+    same = {"kind": "question", "title": "Go on?", "html": "Skip or apply?", "buttons": [{"label": "Skip"}, {"label": "Apply"}]}
+    if (yield from show("g12", "choose", choose, "Alt keys, a page under a dialog")):
+        if (yield from show("g13", "dialog", same, "Alt keys, a dialog")):
+            one = alt_keys()
+            check(len(one) == 2 and len(set(one.values())) == 2, "both buttons of a dialog have an Alt key of their own: %r" % one)
+            if (yield from show("g14", "dialog", same, "Alt keys, a dialog after a dialog")):
+                check(alt_keys() == one, "a dialog that replaces one with the same buttons has the same Alt keys: %r, before %r" % (alt_keys(), one))
+                if (yield from show("g15", "confirm", data, "Alt keys, a page after a dialog")):
+                    check(alt_keys() == first, "a page that replaces a dialog with its buttons' labels has its usual Alt keys: %r, usually %r" % (alt_keys(), first))
+                    key(Escape)
+                    yield from answered("g15", "Alt keys, a page after a dialog: Esc")
 
     # 3. Auto-repeat alone, handed to the window by a program (the press
     # itself was never seen here).
@@ -3540,7 +3668,9 @@ def main():
         f.write("[Colors:Window]\nBackgroundNormal=abc\n")
     env = dict(os.environ)
     env.update({
-        "QT_QPA_PLATFORM": "offscreen",
+        # BSA_UI_TEST_PLATFORM=wayland (or xcb) runs the same scenarios in
+        # real windows of the session, for a look at them on a real desktop.
+        "QT_QPA_PLATFORM": os.environ.get("BSA_UI_TEST_PLATFORM") or "offscreen",
         "QT_FORCE_STDERR_LOGGING": "1",
         # Qt's messages as they are, whatever the person has set.
         "QT_MESSAGE_PATTERN": "%{if-category}%{category}: %{endif}%{message}",
