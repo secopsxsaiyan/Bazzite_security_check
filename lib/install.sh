@@ -239,7 +239,12 @@ _front_pkgs_record() {
 }
 
 # _front_offered — remember that the question was answered.
-_front_offered() { { : > "${STATE_DIR}/${_FRONT_OFFERED_FILE}"; } 2>/dev/null || true; }
+# (Only when someone was there to see it: an unattended --install or a
+# dialog that failed is no answer.)
+_front_offered() {
+    ui_interactive || return 0
+    { : > "${STATE_DIR}/${_FRONT_OFFERED_FILE}"; } 2>/dev/null || true
+}
 
 # _pkg_tool — how packages are added here: "rpm-ostree" (Bazzite and other
 # Fedora Atomic images: layered, active after a restart), "dnf" (a system
@@ -252,22 +257,6 @@ _pkg_tool() {
         echo dnf
     fi
     return 0
-}
-
-# _layered_booted PACKAGE... — those of PACKAGE the running image already
-# has as layered packages (requested in the booted deployment).
-_layered_booted() {
-    [[ -n "${RPMOSTREE_JSON:-}" ]] || return 0
-    python3 -I -c '
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-except ValueError:
-    sys.exit(0)
-deps = [x for x in (d.get("deployments") or []) if isinstance(x, dict)]
-req = next((x.get("requested-packages") for x in deps if x.get("booted")), None)
-req = req if isinstance(req, list) else []
-print(" ".join(p for p in sys.argv[1:] if p in req))' "$@" <<< "$RPMOSTREE_JSON" 2>/dev/null || true
 }
 
 # _pkg_run TOOL install|uninstall PACKAGE... — add or remove PACKAGE, with a
@@ -300,14 +289,14 @@ _pkg_run() {
 # _FRONT_RESULT tells how it went: "none" (nothing missing), "added" (in
 # use from the next start), "restart" (layered, or already waiting: active
 # after the restart), "declined", "failed", "manual" (no package tool known
-# here) or "broken" (layered in the running image, yet the window still
-# cannot run). _FRONT_MISSING: the packages that were missing. The question
+# here) or "broken" (installed, or layered in the running image, yet the
+# window still cannot run). _FRONT_MISSING: the packages that were missing. The question
 # defaults to "Not now": a lost dialog or nobody to ask adds nothing.
-_FRONT_RESULT=""; _FRONT_MISSING=""
+_FRONT_RESULT=""; _FRONT_MISSING=""; _FRONT_BROKEN=""
 install_front_end() {
-    local miss tool pending p left="" it=it they=It is=is need=needs
+    local miss tool p left="" it=it they=It is=is need=needs
     miss=$(_front_end_missing)
-    _FRONT_MISSING="$miss"; _FRONT_RESULT=none
+    _FRONT_MISSING="$miss"; _FRONT_RESULT=none; _FRONT_BROKEN=""
     [[ -n "$miss" ]] || return 0
     tool=$(_pkg_tool)
     if [[ -z "$tool" ]]; then
@@ -315,35 +304,34 @@ install_front_end() {
         _front_offered
         return 1
     fi
-    # A package that is installed (in the image, layered and running, or
-    # from dnf) and still missing: installing it again does nothing, and a
-    # restart would not help. Those are left out; when nothing else is
-    # missing, the window is said to be broken.
-    local broken=""
+    # Each missing package is one of: layered in the running image yet
+    # missing (broken: a restart would not help), waiting in the next image
+    # (comes with the restart), installed yet missing (broken: installing
+    # it again does nothing), or not there (offered).
+    local broken="" waiting=""
     for p in $miss; do
-        if rpm -q --quiet -- "$p" 2>/dev/null || [[ -n "$(_layered_booted "$p")" ]]; then
+        if [[ -n "$(_layered_booted "$p")" ]]; then
+            broken+="${broken:+ }$p"
+        elif [[ "$tool" == rpm-ostree && -n "$(_layered_pending "$p")" ]]; then
+            waiting+="${waiting:+ }$p"
+        elif LC_ALL=C rpm -q --quiet -- "$p" 2>/dev/null; then
             broken+="${broken:+ }$p"
         else
             left+="${left:+ }$p"
         fi
     done
+    _FRONT_BROKEN="$broken"
     if [[ -z "$left" ]]; then
-        _FRONT_RESULT=broken; _FRONT_MISSING="$broken"
-        _front_offered
-        return 1
-    fi
-    miss="$left"; left=""
-    if [[ "$tool" == rpm-ostree ]]; then
-        # shellcheck disable=SC2086
-        pending=$(_layered_pending $miss)
-        for p in $miss; do [[ " $pending " == *" $p "* ]] || left+="${left:+ }$p"; done
-        if [[ -z "$left" ]]; then
-            _FRONT_RESULT=restart
-            _front_offered
-            return 0
+        if [[ -n "$waiting" ]]; then
+            _FRONT_RESULT=restart; _FRONT_MISSING="$waiting"
+        else
+            _FRONT_RESULT=broken; _FRONT_MISSING="$broken"; _FRONT_BROKEN=""
         fi
-        miss="$left"
+        _front_offered
+        [[ "$_FRONT_RESULT" == restart ]]
+        return
     fi
+    miss="$left"
     [[ "$miss" == *" "* ]] && { it=them; they=They; is=are; need=need; }
     _FRONT_MISSING="$miss"
     # Nobody to ask: nothing is added, and the next start with someone
@@ -371,14 +359,28 @@ Removing the app later offers to remove ${it} again." "Install" "Not now" "n" ca
     fi
     _front_offered
     # shellcheck disable=SC2086
-    _front_pkgs_record $miss
+    _front_pkgs_record $miss \
+        || ui_error "${miss// /, } could not be written to the list of what the install added (${STATE_DIR}/${_FRONT_PKGS_FILE}): removing the app will not offer to remove ${it}."
+    [[ -n "$waiting" ]] && miss+=" $waiting"
+    _FRONT_MISSING="$miss"
     if [[ "$tool" == rpm-ostree ]]; then _FRONT_RESULT=restart; else _FRONT_RESULT=added; fi
     return 0
 }
 
 # _front_result_text — one line for the end of an install or a start, by
-# _FRONT_RESULT (nothing for "none").
+# _FRONT_RESULT (nothing for "none"), and what is installed yet broken.
 _front_result_text() {
+    _front_result_line
+    if [[ -n "$_FRONT_BROKEN" && "$_FRONT_RESULT" != broken ]]; then
+        local r="$_FRONT_RESULT" m="$_FRONT_MISSING"
+        _FRONT_RESULT=broken; _FRONT_MISSING="$_FRONT_BROKEN"
+        printf ' The window still needs more: '
+        _front_result_line
+        _FRONT_RESULT="$r"; _FRONT_MISSING="$m"
+    fi
+    return 0
+}
+_front_result_line() {
     local what="${_FRONT_MISSING// /, }" is=is it=it check
     [[ "$_FRONT_MISSING" == *" "* ]] && { is=are; it=them; }
     if [[ "$_FRONT_MISSING" == *pyside6* ]]; then
@@ -413,47 +415,70 @@ offer_front_end_once() {
 
 # remove_front_end — offer to remove the packages an install added. With
 # dnf, only when nothing else installed needs them (dnf would remove that
-# too); rpm-ostree only drops the layer request.
+# too); rpm-ostree only drops the layer request. Returns 1 when they could
+# not be removed and the person chose to keep the app (to try again).
 remove_front_end() {
     local -a pkgs=()
-    local tool need
-    local p
+    local tool need p q them=it
     tool=$(_pkg_tool)
     [[ -n "$tool" ]] || return 0
     # Only those still there (removed by hand since: nothing to do). With
-    # rpm-ostree, still requested in the running or the waiting image.
+    # rpm-ostree, still requested in the running or the waiting image; when
+    # its status is not known, all of them (removing is idempotent). With
+    # dnf, all but those rpm says are not installed.
     while IFS= read -r p; do
         if [[ "$tool" == rpm-ostree ]]; then
-            [[ -n "$(_layered_booted "$p")$(_layered_pending "$p")" ]] && pkgs+=("$p")
+            if ! _rpmostree_status_known || [[ -n "$(_layered_booted "$p")$(_layered_pending "$p")" ]]; then
+                pkgs+=("$p")
+            fi
         else
-            rpm -q --quiet -- "$p" 2>/dev/null && pkgs+=("$p")
+            q=$(LC_ALL=C rpm -q -- "$p" 2>&1) || true
+            [[ "$q" == *"is not installed"* ]] || pkgs+=("$p")
         fi
     done < <(_front_pkgs_recorded)
     if [[ ${#pkgs[@]} -eq 0 ]]; then
         rm -f -- "${STATE_DIR:?}/${_FRONT_PKGS_FILE:?}"
         return 0
     fi
-    if [[ "$tool" == dnf ]] && ! need=$(rpm -e --test -- "${pkgs[@]}" 2>&1); then
+    [[ ${#pkgs[@]} -gt 1 ]] && them=them
+    if [[ "$tool" == dnf ]] && ! need=$(LC_ALL=C rpm -e --test -- "${pkgs[@]}" 2>&1); then
         if grep -q 'is needed by' <<< "$need"; then
-            ui_msg "Installing the app also installed ${pkgs[*]} for its window. Other installed programs need $([[ ${#pkgs[@]} -gt 1 ]] && echo them || echo it) now, so $([[ ${#pkgs[@]} -gt 1 ]] && echo they stay || echo it stays):
+            ui_msg "Installing the app also installed ${pkgs[*]} for its window. Other installed programs need ${them} now, so $([[ $them == them ]] && echo they stay || echo it stays):
 
 $(grep 'is needed by' <<< "$need" | head -n 6)"
             rm -f -- "${STATE_DIR:?}/${_FRONT_PKGS_FILE:?}"
             return 0
         fi
-        # Another error (the package database is busy): kept on the list,
-        # so removing the app again can try again.
         ui_error "Could not check whether other programs need ${pkgs[*]}:
 
 $(printf '%s\n' "$need" | head -n 6)"
-        return 1
+        _front_remove_failed "$tool" "${pkgs[@]}"
+        return
     fi
-    ui_yesno "Installing the app also installed ${pkgs[*]} for its window. Remove $([[ ${#pkgs[@]} -gt 1 ]] && echo them || echo it) too?
+    ui_yesno "Installing the app also installed ${pkgs[*]} for its window. Remove ${them} too?
 
-Other programs may use $([[ ${#pkgs[@]} -gt 1 ]] && echo them || echo it) as well.$([[ $tool == rpm-ostree ]] && echo " The change is active after the next restart.")" \
+Other programs may use ${them} as well.$([[ $tool == rpm-ostree ]] && echo " The change is active after the next restart.")" \
         "Remove" "Keep" "n" careful || return 0
-    _pkg_run "$tool" uninstall "${pkgs[@]}" || return 1
+    if ! _pkg_run "$tool" uninstall "${pkgs[@]}"; then
+        _front_remove_failed "$tool" "${pkgs[@]}"
+        return
+    fi
     rm -f -- "${STATE_DIR:?}/${_FRONT_PKGS_FILE:?}"
+}
+
+# _front_remove_failed TOOL PACKAGE... — removing them did not work: keep
+# the app (so removing it again can try again; the default), or remove it
+# anyway and leave the packages, saying how to remove them by hand.
+_front_remove_failed() {
+    local tool="$1" cmd
+    shift
+    if [[ "$tool" == rpm-ostree ]]; then cmd="rpm-ostree uninstall $*"; else cmd="dnf remove $*"; fi
+    if ui_yesno "$* could not be removed. Remove the Security Check app anyway? $([[ $# -gt 1 ]] && echo They stay || echo It stays) installed; remove $([[ $# -gt 1 ]] && echo them || echo it) later with: ${cmd}" \
+        "Remove anyway" "Keep the app" "n" careful; then
+        rm -f -- "${STATE_DIR:?}/${_FRONT_PKGS_FILE:?}"
+        return 0
+    fi
+    return 1
 }
 
 # install_app — install the tool as an app: a "Security Check" entry in

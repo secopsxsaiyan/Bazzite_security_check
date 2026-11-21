@@ -1799,15 +1799,22 @@ for line in open(sys.argv[1]):
         rpm-ostree() { echo "rpm-ostree $*" >> "$W/fe-pkg"; return "$PKG_RC"; }
         dnf() { echo "dnf $*" >> "$W/fe-pkg"; return "$PKG_RC"; }
         rpm() {
-            if [[ "$1" == -q ]]; then [[ " $RPM_HAVE " == *" ${*: -1} "* ]]; return; fi
+            if [[ "$1" == -q ]]; then
+                [[ " $RPM_HAVE " == *" ${*: -1} "* ]] && return 0
+                [[ " $* " == *" --quiet "* ]] || echo "package ${*: -1} is not installed"
+                return 1
+            fi
             echo "rpm $*" >> "$W/fe-pkg"
             case $RPM_E in
-                1) printf 'error: Failed dependencies:\n\tkf6-kirigami is needed by (installed) neochat\n' ;;
+                1) if [[ "${LC_ALL:-}" == C ]]; then printf 'error: Failed dependencies:\n\tkf6-kirigami is needed by (installed) neochat\n'
+                   else printf 'Fehler: Fehlgeschlagene Abhängigkeiten:\n\tkf6-kirigami wird benötigt von (installiert) neochat\n'; fi ;;
                 2) echo "error: can't create transaction lock on /var/lib/rpm/.rpm.lock (Resource temporarily unavailable)" ;;
             esac
             [[ $RPM_E -eq 0 ]]
         }
-        ui_yesno() { printf '%s|%s|%s|%s\n' "$2" "$3" "$4" "$5" >> "$W/fe-asked"; printf '%s\n' "$1" > "$W/fe-text"; return "$ANSWER"; }
+        ANSWER_ANYWAY=1
+        ui_yesno() { printf '%s|%s|%s|%s\n' "$2" "$3" "$4" "$5" >> "$W/fe-asked"; printf '%s\n' "$1" > "$W/fe-text"
+                     [[ "$2" == "Remove anyway" ]] && return "$ANSWER_ANYWAY"; return "$ANSWER"; }
         ui_msg() { echo "MSG ${1//$'\n'/ }" >> "$W/fe-msg"; }; ui_error() { echo "ERR ${1//$'\n'/ }" >> "$W/fe-msg"; }
         ui_busy_start() { :; }; ui_busy_stop() { :; }; ui_interactive() { [[ $INTER == yes ]]; }
         fe_clear() { : > "$W/fe-pkg"; : > "$W/fe-asked"; : > "$W/fe-msg"; }
@@ -1865,11 +1872,28 @@ for line in open(sys.argv[1]):
         # Installed already (dnf would say "already installed"), yet missing: broken, not "added", nothing recorded.
         IS_OSTREE=0; HAVE="dnf"; RPM_HAVE="python3-pyside6"; rm -f "$STATE_DIR/front-end-packages"; fe_case
         [[ "$_FRONT_RESULT" == broken && ! -s "$W/fe-pkg" && -z "$(_front_pkgs_recorded)" && "$(_front_result_text)" == "python3-pyside6 is installed, yet"* ]] && echo "front-end-installed-but-broken"
+        # PySide6 installed yet broken, Kirigami missing: Kirigami is offered, and the closing line still names PySide6.
+        IS_OSTREE=1; HAVE="rpm-ostree"; RPM_HAVE="python3-pyside6"; rm -rf "$W/fe-qml/kirigami"; fe_case
+        [[ "$_FRONT_RESULT" == restart && "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent -- kf6-kirigami" \
+           && "$(_front_result_text)" == *"Restart the PC"*"The window still needs more: python3-pyside6 is installed, yet"* ]] && echo "front-end-mixed-names-broken"
+        # PySide6 waiting for the restart, Kirigami installed yet missing: the restart line names PySide6 only, and Kirigami as broken.
+        RPMOSTREE_JSON='{"deployments":[{"staged":true,"requested-packages":["python3-pyside6"]},{"booted":true,"requested-packages":[]}]}'
+        RPM_HAVE="kf6-kirigami"; rm -f "$STATE_DIR/front-end-offered"; fe_case
+        [[ "$_FRONT_RESULT" == restart && "$_FRONT_MISSING" == python3-pyside6 && ! -s "$W/fe-pkg" && ! -s "$W/fe-asked" \
+           && "$(_front_result_text)" == "Restart the PC to use Security Check's window: python3-pyside6 is added"*"still needs more: kf6-kirigami is installed, yet"* ]] && echo "front-end-waiting-and-broken"
+        # Kirigami in the image and also requested in the waiting image: the restart brings it, not "broken".
+        RPMOSTREE_JSON='{"deployments":[{"staged":true,"requested-packages":["kf6-kirigami"]},{"booted":true,"requested-packages":[]}]}'
+        PYSIDE=yes; fe_case; PYSIDE=no
+        [[ "$_FRONT_RESULT" == restart && "$_FRONT_MISSING" == kf6-kirigami && -z "$_FRONT_BROKEN" ]] && echo "front-end-waiting-beats-installed"
+        RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
+        mkdir -p "$W/fe-qml/kirigami"; RPM_HAVE=""; IS_OSTREE=0; HAVE="dnf"; rm -f "$STATE_DIR/front-end-packages" "$STATE_DIR/front-end-offered"
         RPM_HAVE=""
         # Nobody to ask, or a dialog that failed on the way: nothing added, and not remembered as answered.
         rm -f "$STATE_DIR/front-end-offered"; INTER=no; fe_case; r1=$_FRONT_RESULT
         INTER=yes; ui_yesno() { INTER=no; return 1; }; fe_case; r2=$_FRONT_RESULT
-        ui_yesno() { printf '%s|%s|%s|%s\n' "$2" "$3" "$4" "$5" >> "$W/fe-asked"; printf '%s\n' "$1" > "$W/fe-text"; return "$ANSWER"; }; INTER=yes
+        ui_yesno() { printf '%s|%s|%s|%s\n' "$2" "$3" "$4" "$5" >> "$W/fe-asked"; printf '%s\n' "$1" > "$W/fe-text"
+                     [[ "$2" == "Remove anyway" ]] && return "$ANSWER_ANYWAY"; return "$ANSWER"; }; INTER=yes
+        INTER=no; IS_OSTREE=0; HAVE=""; fe_case; INTER=yes; IS_OSTREE=0; HAVE="dnf"
         [[ "$r1 $r2" == "declined declined" && ! -s "$W/fe-pkg" && ! -e "$STATE_DIR/front-end-offered" ]] && echo "front-end-nobody-asked-not-remembered"
         IS_OSTREE=1; HAVE="rpm-ostree"
         # Removing the app offers to remove what it added (default: keep); only known names are ever passed on.
@@ -1884,6 +1908,18 @@ for line in open(sys.argv[1]):
         # Removed by hand since: nothing asked, and the list goes.
         echo python3-pyside6 > "$STATE_DIR/front-end-packages"; fe_clear; remove_front_end
         [[ ! -s "$W/fe-asked" && ! -s "$W/fe-pkg" && ! -e "$STATE_DIR/front-end-packages" ]] && echo "front-end-gone-already"
+        # Layered in the running image (not only a waiting one): offered.
+        RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":["python3-pyside6"]}]}'
+        echo python3-pyside6 > "$STATE_DIR/front-end-packages"; fe_clear; ANSWER=1; remove_front_end
+        grep -qFx 'Remove|Keep|n|careful' "$W/fe-asked" && echo "front-end-booted-layer-offered"
+        # rpm-ostree's status unknown: the list is kept and offered whole, never dropped.
+        for RPMOSTREE_JSON in '' 'garbage'; do fe_clear; remove_front_end; done
+        [[ "$(grep -cFx 'Remove|Keep|n|careful' "$W/fe-asked")" -eq 1 && -s "$STATE_DIR/front-end-packages" ]] && echo "front-end-unknown-status-keeps-list"
+        # rpm-ostree uninstall fails: kept, the app stays (default), status 1.
+        RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":["python3-pyside6"]}]}'
+        ANSWER=0; PKG_RC=1; fe_clear; rc=0; remove_front_end || rc=$?; PKG_RC=0
+        [[ $rc -eq 1 && -s "$STATE_DIR/front-end-packages" ]] && grep -qFx 'Remove anyway|Keep the app|n|careful' "$W/fe-asked" && echo "front-end-uninstall-failure-keeps-app"
+        RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'; rm -f "$STATE_DIR/front-end-packages"
         # A list that is a link is not read.
         echo python3-pyside6 > "$W/fe-elsewhere"; ln -sfn "$W/fe-elsewhere" "$STATE_DIR/front-end-packages"
         [[ -z "$(_front_pkgs_recorded)" ]] && echo "front-end-list-link-ignored"; rm -f "$STATE_DIR/front-end-packages"
@@ -1894,8 +1930,18 @@ for line in open(sys.argv[1]):
         # A busy package database is not "others need it": the list stays, and removing the app stops so it can be run again.
         RPM_E=2; fe_clear; echo kf6-kirigami > "$STATE_DIR/front-end-packages"
         _app_installed() { return 0; }; _timer_installed() { return 0; }; _refresh_menu() { :; }; rc=0; uninstall_app || rc=$?
-        [[ $rc -eq 1 && -s "$STATE_DIR/front-end-packages" ]] && ! grep -q '^Remove|Keep' "$W/fe-asked" && grep -q "^ERR Could not check whether other programs need kf6-kirigami" "$W/fe-msg" \
-            && grep -q "^MSG The Security Check app was left installed" "$W/fe-msg" && echo "front-end-busy-rpm-keeps-list-and-app"
+        [[ $rc -eq 1 && -s "$STATE_DIR/front-end-packages" ]] && ! grep -q '^Remove|Keep|' "$W/fe-asked" && grep -q "^ERR Could not check whether other programs need kf6-kirigami" "$W/fe-msg" \
+            && grep -qFx 'Remove anyway|Keep the app|n|careful' "$W/fe-asked" && grep -q "^MSG The Security Check app was left installed" "$W/fe-msg" && echo "front-end-busy-rpm-keeps-list-and-app"
+        # ... or the app goes anyway when the person says so, and the list with it.
+        ANSWER_ANYWAY=0; fe_clear; rc=0; uninstall_app || rc=$?; ANSWER_ANYWAY=1
+        [[ $rc -eq 0 && ! -e "$STATE_DIR/front-end-packages" ]] && grep -q "kf6-kirigami could not be removed. Remove the Security Check app anyway? It stays installed; remove it later with: dnf remove kf6-kirigami" "$W/fe-text" \
+            && echo "front-end-remove-app-anyway"
+        # The dependency check reads rpm in English whatever the language (LC_ALL=C).
+        RPM_E=1; echo kf6-kirigami > "$STATE_DIR/front-end-packages"; fe_clear; remove_front_end
+        grep -q "^MSG .*need it now, so it stays.*is needed by" "$W/fe-msg" && echo "front-end-rpm-read-in-english"
+        # dnf: removed by hand since, the list goes quietly.
+        RPM_E=0; RPM_HAVE=""; echo kf6-kirigami > "$STATE_DIR/front-end-packages"; fe_clear; remove_front_end
+        [[ ! -s "$W/fe-asked" && ! -s "$W/fe-pkg" && ! -e "$STATE_DIR/front-end-packages" ]] && echo "front-end-dnf-gone-already"
         rm -f "$STATE_DIR/front-end-packages"
         IS_OSTREE=1; HAVE="rpm-ostree"; RPM_E=0; RPM_HAVE=""
         # A start of the installed app asks once; not without the app, nor without KDE dialogs, nor in a report-only run.
@@ -2139,7 +2185,9 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          front-end-nothing-to-do front-end-dnf front-end-no-tool front-end-removed-with-the-app front-end-offered-once front-end-install-says-restart \
          front-end-layered-but-broken front-end-probe-without-desktop-user front-end-list-link-ignored front-end-dnf-keeps-what-others-need front-end-offer-wired \
          front-end-probe-only-missing-pyside front-end-installed-but-broken front-end-nobody-asked-not-remembered front-end-gone-already \
-         front-end-busy-rpm-keeps-list-and-app front-end-probe-unknown-offers-nothing; do
+         front-end-busy-rpm-keeps-list-and-app front-end-probe-unknown-offers-nothing front-end-remove-app-anyway front-end-rpm-read-in-english \
+         front-end-dnf-gone-already front-end-booted-layer-offered front-end-unknown-status-keeps-list front-end-uninstall-failure-keeps-app \
+         front-end-mixed-names-broken front-end-waiting-and-broken front-end-waiting-beats-installed; do
     expect "$W/t6.out" "$m" "$m"
 done
 

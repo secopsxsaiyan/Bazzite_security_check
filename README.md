@@ -79,7 +79,8 @@ missing, `--install` offers to add it, with the Qt libraries it needs (about
 is added without a "yes": an unattended `--install` leaves it out. An app
 installed or updated by an older version asks once when a check-up starts
 (not in a report-only run). `--uninstall` offers to remove what was added
-(default: keep). If a system update ever fails because of the layered
+(default: keep); if removing them fails, the app stays installed unless you
+choose to remove it anyway. If a system update ever fails because of the layered
 packages, remove them with `rpm-ostree uninstall python3-pyside6` (and
 `kf6-kirigami`, if it was added too).
 

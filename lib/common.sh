@@ -618,6 +618,36 @@ gather_facts() {
     fi
 }
 
+# _layered_booted PACKAGE... — those of PACKAGE the running image already
+# has as layered packages (requested in the booted deployment).
+_layered_booted() {
+    [[ -n "${RPMOSTREE_JSON:-}" ]] || return 0
+    python3 -I -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except ValueError:
+    sys.exit(0)
+deps = [x for x in (d.get("deployments") or []) if isinstance(x, dict)]
+req = next((x.get("requested-packages") for x in deps if x.get("booted")), None)
+req = req if isinstance(req, list) else []
+print(" ".join(p for p in sys.argv[1:] if p in req))' "$@" <<< "$RPMOSTREE_JSON" 2>/dev/null || true
+}
+
+# _rpmostree_status_known — RPMOSTREE_JSON could be read (rpm-ostree status
+# did not fail, time out or print something else); without it, what is
+# layered is not known.
+_rpmostree_status_known() {
+    [[ -n "${RPMOSTREE_JSON:-}" ]] || return 1
+    python3 -I -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if isinstance(d, dict) and isinstance(d.get("deployments"), list) else 1)' <<< "$RPMOSTREE_JSON" 2>/dev/null
+}
+
 # _layered_pending PACKAGE... — those of PACKAGE that a system image ahead
 # of the running one requests: layered, waiting for the restart. The
 # rollback image (behind the running one) does not count.

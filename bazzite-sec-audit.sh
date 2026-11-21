@@ -398,7 +398,7 @@ Many checks will not apply. Continue anyway?" "Continue" "Quit" "n"; then
         install)       install_app; exit 0 ;;
         settings)      run_settings; exit 0 ;;
         update)        update_run; exit 0 ;;
-        uninstall)     uninstall_app; exit 0 ;;
+        uninstall)     uninstall_app; exit $? ;;
         install-timer) install_timer; exit 0 ;;
         remove-timer)  remove_timer; exit 0 ;;
     esac
