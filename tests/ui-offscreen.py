@@ -1709,13 +1709,19 @@ def sc_guard():
     # holds its letters, when the new one is made). And the main button,
     # which draws its own label, shows its key on a page that appears while
     # Alt is held, as the other buttons do.
+    first = {}      # the Alt keys of a Confirm page; also used for g15 below
     if (yield from show("g9", "confirm", data, "Alt keys, first page")):
         first = alt_keys()
         check(len(first) >= 3 and len(set(first.values())) == len(first) and all(t in first for t in ("Stop reviewing", "Skip", "Apply")),
               "every button of the page has an Alt key of its own: %r" % first)
         c = first.get("Skip", "S")
         k = getattr(K(), "Key_" + c)
+        # The steps before never let go of Alt itself: do it, so that what
+        # follows shows the press, and nothing left over, sets altDown.
+        typed(K().Key_Alt, press=False)
+        check(prop("altDown") is False, "Alt let go: the window knows Alt is up")
         typed(K().Key_Alt, alt, release=False)
+        check(prop("altDown") is True, "Alt pressed: the window knows Alt is down, from the press alone")
         typed(k, alt, c.lower(), release=False)
         yield from answered("g9", "Alt+%s, the Skip button" % c)
         ask("g10", "confirm", data)
@@ -1724,8 +1730,11 @@ def sc_guard():
             typed(k, alt, c.lower(), press=False)
             typed(K().Key_Alt, press=False)
         else:
-            yield from held(k, c.lower(), 0.5, mod=alt)
+            # Before any repeat: Alt is still known to be down from its press.
             apply_ = main_button()
+            check(prop("altDown") is True and apply_ is not None and apply_.property("showsKey") is True,
+                  "the main button of a page that appears while Alt is held shows its Alt key at once (from the press, before a repeat)")
+            yield from held(k, c.lower(), 0.5, mod=alt)
             check(apply_ is not None and apply_.property("showsKey") is True,
                   "the main button of a page that appears while Alt is held shows its Alt key")
             check(alt_keys() == first, "a page that follows one with the same buttons has the same Alt keys, from the moment it appears: %r, before %r" % (alt_keys(), first))
