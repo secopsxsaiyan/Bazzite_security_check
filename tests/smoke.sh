@@ -803,16 +803,23 @@ Update failed for custom database URL: ${P2}"; case_
     # As freshclam words a refusal (403): two updates are needed, one is a note.
     printf 'DatabaseCustomURL %s\nDatabaseCustomURL %s\n' "$P1" "$P2" > "$CR/etc/freshclam.conf"
     F403="WARNING: Can't download x.ndb.old from ${P2}
-WARNING: received error code 403 or 429 from the ClamAV Content Delivery Network (CDN)."
+FreshClam received error code 403 from the ClamAV Content Delivery Network (CDN).
+You are on cool-down until after: 2026-11-21 02:00:00"
     FCLOG="${RUN}"$'\n'"${F403}"; case_
-    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"x.ndb.old (download failed); it may work next time"* ]] && echo "refusal-once-is-a-note"
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"x.ndb.old (HTTP 403); it may work next time"* ]] && echo "refusal-once-is-a-note"
     FCLOG="${RUN}"$'\n'"${F403}"$'\n'"${RUN}"$'\n'"${F403}"; case_
     [[ "${F_FIX[0]:-}" == "fix_clamav_custom_off $(printf '%q' "$P2")" ]] && echo "refusal-in-two-updates-is-a-finding"
+    # A rate limit (429) is never "gone"; something that is not a database is, after two updates.
+    F429="${F403//403/429}"; FCLOG="${RUN}"$'\n'"${F429}"$'\n'"${RUN}"$'\n'"${F429}"; case_
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"(HTTP 429); it may work next time"* ]] && echo "rate-limit-is-a-note"
+    NOTDB="Unexpected error when attempting to update from custom database URL: ${P2}"
+    FCLOG="${RUN}"$'\n'"${NOTDB}"$'\n'"${RUN}"$'\n'"${NOTDB}"; case_
+    [[ "${F_DETAIL[0]:-}" == *"x.ndb.old (not a database)"* ]] && echo "not-a-database-in-two-updates"
     # ... but not when its file is there: it worked before.
     echo x > "$CR/var/lib/clamav/x.ndb.old"; case_
     [[ ${#F_SEV[@]} -eq 0 ]] && echo "file-there-means-it-worked"; rm -f "$CR/var/lib/clamav/x.ndb.old"
     # A time stamp in front of the lines (LogTime yes).
-    FCLOG="Sat Nov 21 00:52:05 2026 -> WARNING: downloadFile: Unexpected response (410) from ${P2}"; case_
+    FCLOG="WARNING: Sat Nov 21 00:52:05 2026 -> downloadFile: Unexpected response (410) from ${P2}"; case_
     [[ "${F_FIX[0]:-}" == "fix_clamav_custom_off $(printf '%q' "$P2")" ]] && echo "logtime-failure-counts"
     FCLOG+=$'\n'"Sat Nov 21 01:52:05 2026 -> x.ndb.old updated (version: custom database, sigs: 4)"; case_
     [[ ${#F_SEV[@]} -eq 0 ]] && echo "logtime-success-clears"
@@ -833,6 +840,7 @@ WARNING: downloadFile: Unexpected response (410) from https://b.example/b.ndb"; 
        && "${CHECK_NOTE[check_deep_malware]:-}" == *"not in /var/lib/clamav yet: n.example/new.ndb "* ]] && echo "only-later-sources-are-blocked"
     # A user name and password, and a quoted address.
     [[ "$(_clamav_url_label "https://api:SECRET@sigs.example/db.ndb")" == "sigs.example/db.ndb" && "$(_clamav_url_label "https://SECRET@api.example/v1/x/db.ndb")" == "api.example/…/db.ndb" \
+       && "$(_clamav_custom_file "https://q.example/a/q.ndb?key=SECRET")" == "q.ndb?key=SECRET" && "$(_clamav_url_label "https://q.example/a/q.ndb?key=SECRET")" == "q.example/…/q.ndb" \
        && "$(_clamav_custom_urls | tail -n 1)" == "https://z.example/z.ndb" ]] && echo "labels-without-credentials-and-quotes"
     # The fix, run on a copy of a freshclam.conf: only the failing line gets a #, the rest stays; undo puts it back.
     STATE_DIR="$W/clam-state"; RUN_ID=t5b; CURRENT_FINDING=0
@@ -860,6 +868,7 @@ WARNING: downloadFile: Unexpected response (410) from https://b.example/b.ndb"; 
     printf '#!/bin/bash\necho "systemctl $*" >> "%s"; exit 1\n' "$W/clam-fix.log" > "$W/clam-bin/systemctl"
     PATH="$W/clam-bin:$PATH" bash -c 'set -euo pipefail; source "$1"' _ "$W/clam-fix.sh" > "$W/clam-fix.out" 2>&1; rc=$?
     [[ $rc -eq 0 && "$(cat "$CF")" == "# Turned off by Security Check"* ]] && grep -q "did not restart" "$W/clam-fix.out" && echo "restart-failure-keeps-the-change"
+    PATH="$W/clam-bin:$PATH" bash -c 'set -euo pipefail; source "$1"' _ "$W/clam-fix.undo" > /dev/null 2>&1 && echo "undo-restart-failure-keeps-the-restore"
 ) > "$W/clam.out" 2>&1
 for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-not-offered-again no-clamav-is-an-optional-fix \
          clamtk-alone-scans-without-setup clamtk-scans-while-clamui-is-not-set-up clamscan-without-freshclam no-definitions-offers-download \
@@ -877,7 +886,8 @@ for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-no
          worked-before-is-a-note prefix-address-not-blamed only-later-sources-are-blocked labels-without-credentials-and-quotes \
          extra-source-fix-fails-when-nothing-matches refusal-once-is-a-note refusal-in-two-updates-is-a-finding file-there-means-it-worked \
          logtime-failure-counts logtime-success-clears official-line-clears-no-source no-promise-while-an-earlier-source-fails \
-         definitions-fix-follows-exclusions restart-failure-keeps-the-change; do
+         definitions-fix-follows-exclusions restart-failure-keeps-the-change rate-limit-is-a-note not-a-database-in-two-updates \
+         undo-restart-failure-keeps-the-restore; do
     expect "$W/clam.out" "$t" "$t"
 done
 

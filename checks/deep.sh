@@ -454,7 +454,7 @@ _clamav_custom_urls() {
 
 # _clamav_custom_file URL — the name freshclam saves URL's database under.
 _clamav_custom_file() {
-    local u="${1%%[?#]*}"
+    local u="${1%%#*}"
     printf '%s' "${u##*/}"
 }
 
@@ -484,23 +484,32 @@ _clamav_fc_log() {
 # whose last download in freshclam's log failed (a later success clears
 # it). gone is 1 when the source is not coming back: the server says the
 # file is gone (404, 410), or it failed in two updates or more and never
-# worked in the log; else a failure may be passing (a busy server, a
-# refusal for a while). A log line is about URL only when it ends with it,
+# worked in the log (a refusal, 403, or something that is not a database);
+# else a failure may be passing (a busy server). A rate limit (429) is
+# always passing. A log line is about URL only when it ends with it,
 # since one source's address can be the start of another's; a time stamp
-# in front of a line (LogTime) is skipped. The updates are told apart by
+# at the start of a line (LogTime: "Sat Nov 21 00:52:05 2026 -> x.ndb
+# updated"; after the level in "WARNING: <time> -> ...") is skipped. The updates are told apart by
 # freshclam's "update process started" line.
 _clamav_custom_failed() {
     _clamav_fc_log | python3 -I -c '
 import re, sys
 urls = sys.argv[1:]
-files = {u: u.split("?")[0].split("#")[0].rsplit("/", 1)[-1] for u in urls}
-state, runs, worked, run = {}, {}, set(), 0
+files = {u: u.split("#")[0].rsplit("/", 1)[-1] for u in urls}
+state, runs, worked, run, last = {}, {}, set(), 0, None
 stamp = re.compile(r"^[A-Z][a-z]{2} [A-Z][a-z]{2} +\d+ \d\d:\d\d:\d\d \d{4} -> ")
 for line in sys.stdin:
     line = stamp.sub("", line.strip(), count=1)
     if "update process started" in line:
         run += 1
         continue
+    # A refusal or a rate limit is told on the line after the failed download.
+    m = re.search(r"received error code (\d+)", line)
+    if m and last:
+        state[last] = "HTTP " + m.group(1)
+        last = None
+        continue
+    last = None
     for u in urls:
         if line.endswith(" " + u):
             m = re.search(r"Unexpected response \((\d+)\)", line)
@@ -511,6 +520,10 @@ for line in sys.stdin:
             elif "Update failed for custom database URL" in line or "Can\x27t download" in line:
                 if not state.get(u, "ok").startswith("HTTP"):
                     state[u] = "download failed"
+                if "Can\x27t download" in line:
+                    last = u
+            elif "Unexpected error when attempting to update from custom database URL" in line:
+                state[u] = "not a database"
             else:
                 continue
             runs.setdefault(u, set()).add(run)
@@ -521,7 +534,7 @@ for line in sys.stdin:
 for u in urls:
     r = state.get(u, "ok")
     if r != "ok":
-        gone = r in ("HTTP 404", "HTTP 410") or (u not in worked and len(runs.get(u, ())) >= 2)
+        gone = r in ("HTTP 404", "HTTP 410") or (r != "HTTP 429" and u not in worked and len(runs.get(u, ())) >= 2)
         print(u + "\t" + r + "\t" + ("1" if gone else "0"))' "$@" 2>/dev/null || true
 }
 
@@ -596,7 +609,7 @@ cat -- \"\$tmp\" > $f
 rm -f -- \"\$tmp\"
 systemctl try-restart clamav-freshclam.service || echo \"clamav-freshclam.service did not restart; it reads the file when it next starts.\""
     apply_change "$script" "$(_restore_cmd "$f")
-systemctl try-restart clamav-freshclam.service" \
+systemctl try-restart clamav-freshclam.service || echo \"clamav-freshclam.service did not restart; it reads the file when it next starts.\"" \
         "Only these lines change; the other extra sources stay as they are. The commands show the full addresses, as they are in the file."
 }
 
