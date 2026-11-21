@@ -768,7 +768,8 @@ _clamav_scan_counts() {
 _clamav_stop_line() {
     local out="$1"
     [[ "$out" == *$'\n----------- SCAN SUMMARY -----------\n'* ]] && out="${out%$'\n----------- SCAN SUMMARY -----------\n'*}"
-    grep -m 1 -E "^ERROR:|^LibClamAV Error: Can't create temporary directory" <<< "$out" | cut -c1-200 || true
+    # (A hit's line, which starts with a file name, is never taken.)
+    grep -v ' FOUND$' <<< "$out" | grep -m 1 -E "^ERROR:|^LibClamAV Error: Can't create temporary directory" | cut -c1-200 || true
 }
 
 check_deep_malware() {
@@ -927,12 +928,16 @@ alarm), then change passwords used on this PC if one of them was run."
         # such as "flatpak run" failing: see below.)
         finding high "ClamAV found $([[ $ninfected -gt 0 ]] && echo "${ninfected} " || true)infected file(s)" \
 "clamscan reported infected files (exit ${rc}$([[ $ninfected -gt 0 ]] && echo ", ${ninfected} in its summary" || true)), but its list of them could not be read." \
-"Scan again to see which files: clamscan -r -i $(_join ' ' "${targets[@]}")
-Then delete them (or check them on virustotal.com if you think it is a false
-alarm), and change passwords used on this PC if one of them was run."
+"Run the check again, or scan these folders with ClamUI or ClamTk, to see which
+files: $(_join ', ' "${targets[@]}"). Then delete them (or check them on
+virustotal.com if you think it is a false alarm), and change passwords used on
+this PC if one of them was run."
     elif (( rc == 124 )); then
         mark_skip "the scan was stopped after $(( _CLAMAV_SCAN_LIMIT / 60 )) minutes, before it finished (it scans $(_join ', ' "${targets[@]}"); many files there make it slow)"
-    elif [[ $rc -ne 0 && $rc -ne 1 ]] && grep -qiE '^(LibClamAV Error|ERROR):.*(databas|cl_load|cli_load|cvd|cld|malformed|engine)' <<< "$out"; then
+    elif [[ $rc -ne 0 && $rc -ne 1 ]] && [[ $counted -eq 0 || $nfiles -eq 0 ]] \
+         && grep -qiE '^(LibClamAV Error|ERROR):.*(databas|cl_load|cli_load|cvd|cld|malformed|engine)' <<< "$out"; then
+        # (Definitions that do not load leave nothing scanned: an engine
+        # error about one file of a scan that went on is not that.)
         if [[ "$host" -eq 1 ]] && _have freshclam; then
             _clamav_defs_finding medium "ClamAV cannot load its virus definitions" \
 "The scan stopped because ClamAV could not load the definitions in ${db}
