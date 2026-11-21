@@ -729,9 +729,17 @@ echo "== 5b. the malware scan and ClamAV's setup"
     # An engine error about one file at exit 2 is not definitions that do not load.
     SCAN_OUT=$'LibClamAV Error: cli_scanpe: malformed PE header\n'"$(clam_sum 40 2)"; SCAN_RC=2; case_
     [[ ${#F_SEV[@]} -eq 0 && -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 80 file(s)"* ]] && echo "file-engine-error-is-not-broken-definitions"
-    # ClamAV's message from the second account's scan is quoted too.
-    SCAN_OUT="$(clam_sum 9)"; SCAN_RC=0; SCAN_OUT2=$'LibClamAV Error: cli_html_normalise: odd\n'"$(clam_sum 3)"; SCAN_RC2=0; case_; SCAN_OUT2=""
-    [[ "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 12 file(s) in: "*"(ClamAV said: LibClamAV Error: cli_html_normalise: odd)" ]] && echo "message-of-second-account-quoted"
+    # ClamAV's message is quoted from whichever account's scan printed it, first or later
+    # (the accounts are scanned in no fixed order, so both arrangements are checked).
+    quoted=0
+    for e in 1 2; do
+        if [[ $e -eq 1 ]]; then SCAN_OUT=$'LibClamAV Error: cli_html_normalise: odd\n'"$(clam_sum 3)"; SCAN_OUT2="$(clam_sum 9)"
+        else SCAN_OUT="$(clam_sum 9)"; SCAN_OUT2=$'LibClamAV Error: cli_html_normalise: odd\n'"$(clam_sum 3)"; fi
+        SCAN_RC=0; SCAN_RC2=0; case_
+        [[ "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 12 file(s) in: "*"(ClamAV said: LibClamAV Error: cli_html_normalise: odd)" ]] && quoted=$((quoted + 1))
+    done
+    SCAN_OUT2=""
+    [[ $quoted -eq 2 ]] && echo "message-of-second-account-quoted"
     REGULAR_USERS=("$U")
     # clamscan that gives up is not "nothing found": a bad option, memory, a temporary folder it cannot write to.
     giveup=1
