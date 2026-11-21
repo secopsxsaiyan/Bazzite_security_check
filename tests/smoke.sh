@@ -729,6 +729,9 @@ echo "== 5b. the malware scan and ClamAV's setup"
     # An engine error about one file at exit 2 is not definitions that do not load.
     SCAN_OUT=$'LibClamAV Error: cli_scanpe: malformed PE header\n'"$(clam_sum 40 2)"; SCAN_RC=2; case_
     [[ ${#F_SEV[@]} -eq 0 && -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 80 file(s)"* ]] && echo "file-engine-error-is-not-broken-definitions"
+    # ClamAV's message from the second account's scan is quoted too.
+    SCAN_OUT="$(clam_sum 9)"; SCAN_RC=0; SCAN_OUT2=$'LibClamAV Error: cli_html_normalise: odd\n'"$(clam_sum 3)"; SCAN_RC2=0; case_; SCAN_OUT2=""
+    [[ "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 12 file(s) in: "*"(ClamAV said: LibClamAV Error: cli_html_normalise: odd)" ]] && echo "message-of-second-account-quoted"
     REGULAR_USERS=("$U")
     # clamscan that gives up is not "nothing found": a bad option, memory, a temporary folder it cannot write to.
     giveup=1
@@ -978,7 +981,7 @@ for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-no
          scan-counts-from-the-real-summary no-error-trap-on-scan-results no-summary-is-not-nothing-found empty-output-is-not-nothing-found \
          no-file-scanned-is-a-skip unlisted-hit-is-a-finding engine-error-shown-at-exit-0 hit-without-summary-noted \
          stop-at-exit-0-is-not-nothing-found error-after-summary-is-not-a-stop stop-of-one-account-named \
-         file-engine-error-is-not-broken-definitions; do
+         file-engine-error-is-not-broken-definitions message-of-second-account-quoted; do
     expect "$W/clam.out" "$t" "$t"
 done
 
