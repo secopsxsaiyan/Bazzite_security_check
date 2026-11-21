@@ -370,7 +370,13 @@ Removing the app later offers to remove ${it} again." "Install" "Not now" "n" ca
 # _front_result_text — one line for the end of an install or a start, by
 # _FRONT_RESULT (nothing for "none"), and what is installed yet broken.
 _front_result_text() {
-    _front_result_line
+    if [[ -n "$_FRONT_BROKEN" && ( "$_FRONT_RESULT" == restart || "$_FRONT_RESULT" == added ) ]]; then
+        # Not a promise of the window: something it needs is still broken.
+        printf '%s %s added%s.' "${_FRONT_MISSING// /, }" "$([[ $_FRONT_MISSING == *" "* ]] && echo are || echo is)" \
+            "$([[ $_FRONT_RESULT == restart ]] && echo " to the system image (used after the next restart)" || true)"
+    else
+        _front_result_line
+    fi
     if [[ -n "$_FRONT_BROKEN" && "$_FRONT_RESULT" != broken ]]; then
         local r="$_FRONT_RESULT" m="$_FRONT_MISSING"
         _FRONT_RESULT=broken; _FRONT_MISSING="$_FRONT_BROKEN"
@@ -441,9 +447,13 @@ remove_front_end() {
         return 0
     fi
     [[ ${#pkgs[@]} -gt 1 ]] && them=them
+    ui_yesno "Installing the app also installed ${pkgs[*]} for its window. Remove ${them} too?
+
+Other programs may use ${them} as well.$([[ $tool == rpm-ostree ]] && echo " The change is active after the next restart.")" \
+        "Remove" "Keep" "n" careful || return 0
     if [[ "$tool" == dnf ]] && ! need=$(LC_ALL=C rpm -e --test -- "${pkgs[@]}" 2>&1); then
         if grep -q 'is needed by' <<< "$need"; then
-            ui_msg "Installing the app also installed ${pkgs[*]} for its window. Other installed programs need ${them} now, so $([[ $them == them ]] && echo they stay || echo it stays):
+            ui_msg "Other installed programs need ${pkgs[*]} now, so $([[ $them == them ]] && echo they stay || echo it stays):
 
 $(grep 'is needed by' <<< "$need" | head -n 6)"
             rm -f -- "${STATE_DIR:?}/${_FRONT_PKGS_FILE:?}"
@@ -455,10 +465,6 @@ $(printf '%s\n' "$need" | head -n 6)"
         _front_remove_failed "$tool" "${pkgs[@]}"
         return
     fi
-    ui_yesno "Installing the app also installed ${pkgs[*]} for its window. Remove ${them} too?
-
-Other programs may use ${them} as well.$([[ $tool == rpm-ostree ]] && echo " The change is active after the next restart.")" \
-        "Remove" "Keep" "n" careful || return 0
     if ! _pkg_run "$tool" uninstall "${pkgs[@]}"; then
         _front_remove_failed "$tool" "${pkgs[@]}"
         return
@@ -473,7 +479,9 @@ _front_remove_failed() {
     local tool="$1" cmd
     shift
     if [[ "$tool" == rpm-ostree ]]; then cmd="rpm-ostree uninstall $*"; else cmd="dnf remove $*"; fi
-    if ui_yesno "$* could not be removed. Remove the Security Check app anyway? $([[ $# -gt 1 ]] && echo They stay || echo It stays) installed; remove $([[ $# -gt 1 ]] && echo them || echo it) later with: ${cmd}" \
+    if ui_yesno "$* could not be removed. Remove the Security Check app anyway? $([[ $# -gt 1 ]] && echo They stay || echo It stays) installed; remove $([[ $# -gt 1 ]] && echo them || echo it) later with: ${cmd}
+
+Keep the app, and removing it again (--uninstall) can try again." \
         "Remove anyway" "Keep the app" "n" careful; then
         rm -f -- "${STATE_DIR:?}/${_FRONT_PKGS_FILE:?}"
         return 0
@@ -522,10 +530,7 @@ Reports, history and undo steps are kept.$(_timer_installed && printf '\nThe wee
         "Remove" "Cancel" "y" careful || return 0
     # What the install added for the window goes first: when that fails,
     # the app stays installed, so removing it again can try again.
-    if ! remove_front_end; then
-        ui_msg "The Security Check app was left installed, so removing it again (--uninstall) can try again."
-        return 1
-    fi
+    remove_front_end || return 1
     rm -f -- "$APP_DESKTOP" "$APP_ICON_DIR/${APP_ID}.svg" "$APP_ICON_DIR/${APP_ID}-symbolic.svg" "$APP_ICON_22/${APP_ID}-symbolic.svg"
     [[ -L "$APP_BIN" ]] && rm -f -- "$APP_BIN"
     _remove_copy

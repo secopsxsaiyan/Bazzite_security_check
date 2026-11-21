@@ -25,7 +25,9 @@ All notable changes to this project are listed here. The format follows
   An app installed or updated by an older version asks once when a check-up
   starts with KDE dialogs (not in a report-only run; again after a failed
   install). `--uninstall` offers to remove what was added (default: keep
-  it); with dnf, not when other installed programs need it.
+  it); with dnf, not when other installed programs need it. When removing
+  them fails, the app stays installed unless "Remove anyway" is chosen,
+  and `--uninstall` then ends with status 1.
 
 ### Changed
 
