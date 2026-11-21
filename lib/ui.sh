@@ -784,6 +784,34 @@ _kd() {
     return "$rc"
 }
 
+# _kd_answer ARGS... — _kd for a question whose labels ui_yesno or
+# ui_choice3 swapped (see there): there exit 1 means "yes", so it may only
+# come from kdialog itself. kdialog runs under "sh -c", which prints its
+# exit status after it; without that line (no desktop user, runuser or env
+# failing) or above 2, kdialog counts as failed: 255, as in _kd. (Qt exits
+# 1 itself only when a lost Wayland connection cannot be restored with
+# QT_WAYLAND_RECONNECT set; _user_env never passes that variable on.)
+_kd_answer() {
+    local out rc flag="${RUN_TMP:+${RUN_TMP}/kdialog-failed}"
+    if [[ -n "$flag" && -e "$flag" ]]; then
+        _ui_fallback
+        return 255
+    fi
+    local theme
+    theme=$(_ui_theme_env)
+    # shellcheck disable=SC2016 # $@ and $? are for the inner shell
+    out=$(_as_desktop_user env ${theme:+"$theme"} sh -c 'kdialog "$@"; echo "bsa-kdialog-exit:$?"' sh \
+              --title "$UI_TITLE" --icon "$(_ui_icon)" "$@" 2>/dev/null < /dev/null | head -c 256)
+    rc=$(sed -n 's/^bsa-kdialog-exit:\([0-9]\{1,3\}\)$/\1/p' <<< "$out" | tail -n 1)
+    if [[ -z "$rc" ]] || (( rc > 2 )); then
+        log "kdialog failed (exit ${rc:-unknown}); falling back"
+        if [[ -n "$flag" ]]; then : > "$flag"; fi
+        _ui_fallback
+        return 255
+    fi
+    return "$rc"
+}
+
 # _rich TEXT — plain text as KDE rich text (escaped, line breaks kept).
 _rich() { _reflow_html "$1"; }
 
@@ -991,7 +1019,8 @@ ui_error() {
 
 # ui_yesno TEXT [YES_LABEL] [NO_LABEL] [DEFAULT y|n] [warn|careful] — 0
 # for yes. DEFAULT is the answer of Enter on the terminal and the answer
-# when there is no one to ask.
+# when there is no one to ask, except for a marked question (careful or
+# warn): there both are "no".
 #
 # Which button a stray Enter or Space presses in a window (the same rule
 # in ui_choice3):
@@ -1004,10 +1033,17 @@ ui_error() {
 #                        or reached with Tab.
 #   warn                 as "careful", and shown as a warning (a question
 #                        with side effects)
-# kdialog cannot be told which button is the default: its plain question
-# has YES, its warning has NO. So "careful" and "warn" both use its warning
-# dialog; the other questions get YES there whatever DEFAULT is, which is
-# why a question whose YES changes something must be marked.
+# kdialog cannot be told which button is the default: Enter presses the
+# button in its YES place, in the plain question and in the warning alike
+# (since kdialog 19.12). So unless YES is the default (DEFAULT y, not
+# marked), the NO answer is put in kdialog's YES place and YES in its NO
+# place, and the answer is read back the other way round. Esc or closing
+# the window is neither (exit 2): always NO. "careful" and "warn" use the
+# warning dialog. The cost: such a question reads NO before YES, and the
+# icons kdialog gives its places (a tick for YES, a stop sign for NO) sit
+# on the other answers; the labels say what each button does. (kdialog
+# before 19.12 made the warning's default NO; Bazzite has never shipped
+# one that old.)
 ui_yesno() {
     local text="$1" yes="${2:-Yes}" no="${3:-No}" def="${4:-n}" how="${5:-}" kind="--yesno" primary=1 a rc
     [[ -z "$how" ]] || { kind="--warningyesno"; primary=-1; }
@@ -1018,11 +1054,24 @@ ui_yesno() {
         1) return 1 ;;
     esac
     if [[ "$UI_MODE" == "kde" ]]; then
-        _kd --yes-label "$yes" --no-label "$no" \
-            "$kind" "$(_ui_html "$text")"
-        rc=$?
-        [[ $rc -ne 255 ]] && return "$rc"
+        if [[ "$def" == y && -z "$how" ]]; then
+            _kd --yes-label "$yes" --no-label "$no" "$kind" "$(_ui_html "$text")"
+            rc=$?
+            [[ $rc -ne 255 ]] && return "$rc"
+        else
+            _kd_answer --yes-label "$no" --no-label "$yes" "$kind" "$(_ui_html "$text")"
+            rc=$?
+            case $rc in
+                1) return 0 ;;
+                255) ;;
+                *) return 1 ;;
+            esac
+        fi
     fi
+    # A marked question changes the PC as administrator there and then: on
+    # the terminal Enter is "no" too, and with nobody to ask (no terminal,
+    # or a dialog that failed) the answer is "no", whatever DEFAULT is.
+    [[ -n "$how" ]] && def=n
     if [[ "$UI_MODE" == "tty" ]]; then
         printf '\n%s\n' "$(_ui_plain "$text")" > /dev/tty
         a=$(_tty_read "  ${yes} / ${no}? [$([[ $def == y ]] && echo Y/n || echo y/N)] ")
@@ -1036,10 +1085,11 @@ ui_yesno() {
 # ui_choice3 HTML_OR_TEXT TEXT_FOR_TTY YES NO CANCEL [warn|careful] [y|n] —
 # 0, 1 or 2 (Yes/No/Cancel). An empty TEXT_FOR_TTY is made from the HTML
 # (only when it is needed). On the terminal, Enter gives the last
-# argument's answer (No unless "y" is given); with no one to ask, the
-# answer is always No. "warn", "careful" and the button that Enter presses
-# in a window: as in ui_yesno (kdialog's warning has Cancel as its
-# default).
+# argument's answer (No unless "y" is given; always No for a marked
+# question); with no one to ask, the answer is always No. "warn",
+# "careful" and the button that Enter presses in a window: as in ui_yesno
+# (in kdialog, NO is put in the YES place, and Esc or closing the window
+# is CANCEL).
 ui_choice3() {
     local html="$1" text="$2" yes="$3" no="$4" cancel="$5" how="${6:-}" kind="--yesnocancel" def="${7:-n}" primary=2 a rc
     [[ -z "$how" ]] || { kind="--warningyesnocancel"; primary=-1; }
@@ -1050,11 +1100,25 @@ ui_choice3() {
         1) return 2 ;;
     esac
     if [[ "$UI_MODE" == "kde" ]]; then
-        _kd --yes-label "$yes" --no-label "$no" --cancel-label "$cancel" \
-            "$kind" "<html>${html#<html>}"
-        rc=$?
-        [[ $rc -ne 255 ]] && return "$rc"
+        if [[ "$def" == y && -z "$how" ]]; then
+            _kd --yes-label "$yes" --no-label "$no" --cancel-label "$cancel" \
+                "$kind" "<html>${html#<html>}"
+            rc=$?
+            [[ $rc -ne 255 ]] && return "$rc"
+        else
+            _kd_answer --yes-label "$no" --no-label "$yes" --cancel-label "$cancel" \
+                "$kind" "<html>${html#<html>}"
+            rc=$?
+            case $rc in
+                0) return 1 ;;
+                1) return 0 ;;
+                255) ;;
+                *) return 2 ;;
+            esac
+        fi
     fi
+    # A marked question: Enter on the terminal is "no" too (see ui_yesno).
+    [[ -n "$how" ]] && def=n
     if [[ "$UI_MODE" == "tty" ]]; then
         [[ -n "$text" ]] || text=$(_html2text "<html>${html#<html>}")
         printf '\n%s\n' "$text" > /dev/tty
