@@ -458,14 +458,30 @@ fix_clamav_install() {
 
 # _freshclam_plan STATE — what fix_clamav_defs does with
 # clamav-freshclam.service in this state (systemctl is-enabled): "on"
-# (it starts with the system), "masked", "masked-runtime", "none" (not
-# installed) or "off" (also "enabled-runtime": on only until the restart).
+# (it starts with the system), "runtime" (on only until the restart; the
+# fix turns it on for good), "masked", "masked-runtime", "none" (not
+# installed) or "off".
 _freshclam_plan() {
     case "$1" in
         enabled|static|indirect|alias|generated|transient) echo on ;;
+        enabled-runtime) echo runtime ;;
         masked|masked-runtime) echo "$1" ;;
         missing|not-found|bad|"") echo none ;;
         *) echo off ;;
+    esac
+}
+
+# _freshclam_after STATE — the commands that start (or turn on)
+# clamav-freshclam.service after freshclam ran; nothing when it is not
+# installed.
+_freshclam_after() {
+    local unit="clamav-freshclam.service"
+    case "$(_freshclam_plan "$1")" in
+        on)             printf 'systemctl start %s' "$unit" ;;
+        masked)         printf 'systemctl unmask %s && systemctl enable --now %s' "$unit" "$unit" ;;
+        masked-runtime) printf 'systemctl unmask --runtime %s && systemctl enable --now %s' "$unit" "$unit" ;;
+        none)           ;;
+        *)              printf 'systemctl enable --now %s' "$unit" ;;
     esac
 }
 
@@ -476,42 +492,38 @@ _freshclam_plan() {
 # failed: the fix then fails with freshclam's status, but the automatic
 # updates are not left off. A failure to start it fails the fix too.
 fix_clamav_defs() {
-    local unit="clamav-freshclam.service" script undo="" after=""
-    script="rc=0"$'\n'
+    local unit="clamav-freshclam.service" script="rc=0"$'\n' undo="" after
+    after=$(_freshclam_after "$1")
     case "$(_freshclam_plan "$1")" in
-        on)   after="systemctl start ${unit}" ;;
-        masked)
-              after="systemctl unmask ${unit} && systemctl enable --now ${unit}"
-              undo="systemctl disable --now ${unit}"$'\n'"systemctl mask ${unit}" ;;
-        masked-runtime)
-              after="systemctl unmask --runtime ${unit} && systemctl enable --now ${unit}"
-              undo="systemctl disable --now ${unit}"$'\n'"systemctl mask --runtime ${unit}" ;;
-        none) ;;
-        *)    after="systemctl enable --now ${unit}"
-              undo="systemctl disable --now ${unit}" ;;
+        masked)         undo="systemctl disable --now ${unit}"$'\n'"systemctl mask ${unit}" ;;
+        masked-runtime) undo="systemctl disable --now ${unit}"$'\n'"systemctl mask --runtime ${unit}" ;;
+        runtime)        undo="systemctl disable ${unit}"$'\n'"systemctl enable --runtime ${unit}" ;;
+        off)            undo="systemctl disable --now ${unit}" ;;
     esac
     [[ -n "$after" ]] && script+="systemctl stop ${unit} 2>/dev/null || true"$'\n'
     script+="freshclam || rc=\$?"
     [[ -n "$after" ]] && script+=$'\n'"{ ${after}; } || { s=\$?; [ \"\$rc\" -ne 0 ] || rc=\$s; }"
     script+=$'\n'"exit \"\$rc\""
     apply_change "$script" "$undo" \
-        "$([[ -n $undo ]] && echo "Undo turns the automatic updates off again; the downloaded definitions stay.")"
+        "$([[ -n $undo ]] && echo "Undo puts the automatic updates back as they were; the downloaded definitions stay.")"
 }
 
 # _clamav_defs_finding SEV TITLE DETAIL DIR NOW — a finding whose fix
 # downloads the definitions (and turns on their automatic update); NOW is
-# what the definitions in DIR are like at present.
+# what the definitions in DIR are like at present. The manual steps are
+# the fix's commands.
 _clamav_defs_finding() {
-    local sev="$1" title="$2" detail="$3" dir="$4" now="$5" svc after manual="sudo freshclam"
+    local sev="$1" title="$2" detail="$3" dir="$4" now="$5" svc after manual="" a
     svc=$(_unit_state clamav-freshclam.service)
+    a=$(_freshclam_after "$svc")
     after="definitions downloaded now"
     case "$(_freshclam_plan "$svc")" in
         on|none) ;;
-        masked*) after+=", then updated automatically (clamav-freshclam.service)"
-                 manual+=$'\n'"sudo systemctl unmask$([[ $svc == masked-runtime ]] && echo " --runtime") clamav-freshclam.service"$'\n'"sudo systemctl enable --now clamav-freshclam.service   (keeps them up to date)" ;;
-        *)       after+=", then updated automatically (clamav-freshclam.service)"
-                 manual+=$'\n'"sudo systemctl enable --now clamav-freshclam.service   (keeps them up to date)" ;;
+        *) after+=", then updated automatically (clamav-freshclam.service)" ;;
     esac
+    [[ -n "$a" ]] && manual+="sudo systemctl stop clamav-freshclam.service   (it holds the lock freshclam needs)"$'\n'
+    manual+="sudo freshclam"
+    [[ -n "$a" ]] && manual+=$'\n'"sudo ${a//&& /&& sudo }"
     finding "$sev" "$title" "$detail" "$manual" fix_clamav_defs "$svc"
     finding_change "${dir}: ${now}" "$after" "$W_DOWNLOAD"
 }
@@ -604,7 +616,10 @@ the scan misses what came since. They are not being updated$([[ $(_freshclam_pla
     # a drive, a network share or an app image mounted below one is left
     # out (an app's own mount in /tmp can be large).
     local out="" rc=0 part prc owner
-    local -a opts=(-r -i --no-summary --cross-fs=no --max-filesize=200M --max-scansize=400M)
+    local -a opts=(-r -i --no-summary --cross-fs=no --max-filesize=200M --max-scansize=400M) dbopt=()
+    # clamscan does not read freshclam.conf: it is told where freshclam
+    # puts the definitions (the ones checked above).
+    [[ "$host" -eq 1 && -n "$db" ]] && dbopt=("--database=${db}")
     if [[ "${scanner[0]}" == "flatpak" ]]; then
         out=$(_as_desktop_user timeout "$_CLAMAV_SCAN_LIMIT" "${scanner[@]}" "${opts[@]}" "${targets[@]}" 2>&1 < /dev/null) || rc=$?
     else
@@ -612,7 +627,7 @@ the scan misses what came since. They are not being updated$([[ $(_freshclam_pla
             local -a mine=()
             mapfile -t mine <<< "${by_user[$owner]}"
             prc=0
-            part=$(_as_user "$owner" timeout "$_CLAMAV_SCAN_LIMIT" "${scanner[@]}" "${opts[@]}" "${mine[@]}" 2>&1 < /dev/null) || prc=$?
+            part=$(_as_user "$owner" timeout "$_CLAMAV_SCAN_LIMIT" "${scanner[@]}" "${opts[@]}" "${dbopt[@]}" "${mine[@]}" 2>&1 < /dev/null) || prc=$?
             out+="${part}"$'\n'
             # A stopped scan (124) is told apart from the rest.
             if (( prc == 124 )) || (( rc != 124 && prc > rc )); then rc=$prc; fi
@@ -631,14 +646,14 @@ alarm), then change passwords used on this PC if one of them was run."
         (( rc == 124 )) && check_note "The scan was stopped after $(( _CLAMAV_SCAN_LIMIT / 60 )) minutes, before it finished: other files may not have been scanned."
     elif (( rc == 124 )); then
         mark_skip "the scan was stopped after $(( _CLAMAV_SCAN_LIMIT / 60 )) minutes, before it finished (it scans $(_join ', ' "${targets[@]}"); many files there make it slow)"
-    elif [[ $rc -ne 0 && $rc -ne 1 ]] && grep -qiE '^(LibClamAV Error|ERROR):.*(databas|cl_load|cli_load|cvdload|malformed|engine|\.c[lv]d)' <<< "$out"; then
-        if [[ "$host" -eq 1 ]]; then
+    elif [[ $rc -ne 0 && $rc -ne 1 ]] && grep -qiE '^(LibClamAV Error|ERROR):.*(databas|cl_load|cli_load|cvd|cld|malformed|engine)' <<< "$out"; then
+        if [[ "$host" -eq 1 ]] && _have freshclam; then
             _clamav_defs_finding medium "ClamAV cannot load its virus definitions" \
 "The scan stopped because ClamAV could not load the definitions in ${db}
 (${first:-exit ${rc}}). They may be damaged or half written; a fresh download
 replaces them." "$db" "definitions that do not load"
         fi
-        mark_skip "ClamAV could not load its virus definitions (${first:-exit ${rc}})$([[ $host -eq 0 ]] && echo "; open ClamTk once to download them")"
+        mark_skip "ClamAV could not load its virus definitions (${first:-exit ${rc}})$([[ $host -eq 0 ]] && echo "; open ClamTk once to download them")$([[ $host -eq 1 ]] && ! _have freshclam && echo "; freshclam, which downloads them, is not installed")"
     elif [[ $rc -ne 0 && $rc -ne 1 && $rc -ne 2 ]]; then
         mark_skip "the scan did not finish (exit ${rc}${first:+: ${first}})"
     else
