@@ -2028,6 +2028,30 @@ for line in open(sys.argv[1]):
     RUN_TMP=""
     rc=0; _run_change "t6 no tmp" "touch $W/no-private-tmp" "" > /dev/null 2>&1 || rc=$?
     [[ $rc -eq 3 && ! -e "$W/no-private-tmp" ]] && echo "fix-needs-private-tmp"
+    # A fix that fails while nobody can answer the rollback question is
+    # not rolled back, and its undo step is kept for --undo.
+    (
+        UI_MODE=none; RUN_ID="t6left"; RUN_TMP=$(mktemp -d "$W/runtmp.XXXXXX"); ui_error() { :; }
+        rc=0; _run_change "t6 half" "echo half > $W/t6-half; exit 1" "rm -f $W/t6-half" > /dev/null 2>&1 || rc=$?
+        [[ $rc -eq 3 && -e "$W/t6-half" && -f "$STATE_DIR/undo/t6left/01-undo.sh" ]] \
+            && grep -qx '# TITLE: t6 half (did not complete)' "$STATE_DIR/undo/t6left/01-undo.sh" && echo "failed-fix-left-keeps-undo"
+        # ... and one that is rolled back keeps nothing.
+        RUN_ID="t6back"; ui_yesno() { return 0; }
+        _run_change "t6 back" "echo half > $W/t6-back; exit 1" "rm -f $W/t6-back" > /dev/null 2>&1
+        [[ ! -e "$W/t6-back" && ! -e "$STATE_DIR/undo/t6back/01-undo.sh" ]] && echo "failed-fix-rolled-back-keeps-nothing"
+    )
+    # On the terminal, Enter is "no" for a question that changes the PC, whatever its default.
+    (
+        # (An earlier test removed ui_choice3 from this shell: take it again.)
+        eval "$(sed -n '/^ui_choice3() {/,/^}/p' "$HERE/../lib/ui.sh")"
+        UI_MODE="tty"; _ui_dialog() { return 4; }; _tty_read() { printf '%s\n' "$1" >> "$W/tty-prompts"; printf ''; }
+        : > "$W/tty-prompts"
+        ui_yesno "q" Remove Cancel y careful 2>/dev/null; r1=$?
+        ui_yesno "q" Open Close y 2>/dev/null; r2=$?
+        ui_choice3 "q" "q" Apply Skip Stop careful y 2>/dev/null; r3=$?
+        [[ "$r1$r2$r3" == 101 ]] && grep -qF 'Remove / Cancel? [y/N]' "$W/tty-prompts" && grep -qF 'Open / Close? [Y/n]' "$W/tty-prompts" \
+            && grep -qF '(default n)' "$W/tty-prompts" && echo "tty-enter-is-no-for-a-change" || echo "tty answers $r1$r2$r3: $(tr '\n' '|' < "$W/tty-prompts")"
+    )
 
     # A line break in a path does not turn it into two paths.
     mkdir -p "$UH/t6nl"$'\n'"/etc"
@@ -2079,9 +2103,18 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          yesno-enter-follows-the-default-never-a-change choice3-enter-follows-the-default-never-a-change apply-fallback-enter-is-skip \
          undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked \
          kdialog-enter-is-not-yes kdialog-failure-asks-on kdialog-wrapper-failure-is-not-yes kdialog-own-exit-1-is-yes \
-         kdialog-own-exits-mapped; do
+         kdialog-own-exits-mapped failed-fix-left-keeps-undo failed-fix-rolled-back-keeps-nothing tty-enter-is-no-for-a-change; do
     expect "$W/t6.out" "$m" "$m"
 done
+# --install and the other actions that change the PC only after a "yes"
+# say so and stop when nobody can answer (no terminal, no desktop).
+mkdir -p "$W/unatt-state"; chmod 700 "$W/unatt-state"
+unatt_ok=1
+for a in --install --install-timer --uninstall --remove-timer --undo --update; do
+    out=$(env -u DISPLAY -u WAYLAND_DISPLAY AUDIT_STATE_DIR="$W/unatt-state" setsid bash "$TOOL" "$a" --no-gui < /dev/null 2>&1); rc=$?
+    [[ $rc -eq 1 && "$out" == *"${a} asks before it changes anything"*"nothing was changed."* ]] || { unatt_ok=0; echo "  $a: rc=$rc ${out: -160}"; }
+done
+[[ $unatt_ok -eq 1 && ! -e "/usr/local/share/applications/bazzite-security-check.desktop" ]] && ok "unattended-changes-refused" || bad "unattended-changes-refused"
 
 # One window for the whole run: ui_app talks to one long-lived front end
 # over two pipes. A stand-in that speaks the same protocol (no Qt here)

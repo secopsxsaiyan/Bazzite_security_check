@@ -131,7 +131,11 @@ All notable changes to this project are listed here. The format follows
   the answer is read back the other way round; Esc or closing it is never
   "Yes". The plain questions whose default is "No" get the same. On the
   terminal Enter is "No" for these questions too, and when nobody can be
-  asked (no terminal, or a dialog that failed) their answer is "No".
+  asked (no terminal, or a dialog that failed) their answer is "No". So
+  `--install`, `--uninstall`, `--install-timer`, `--remove-timer`,
+  `--undo` and `--update` no longer run unattended: without a terminal or
+  the desktop they say that nothing was changed and exit with status 1. A
+  fix that failed and was not rolled back keeps its undo step for `--undo`.
 - What a fix prints is copied into the run log like an undo step's output:
   only the end of it, cut to size and marked `fix:`. What kdialog or a
   one-page window prints is read only up to the size of an answer.

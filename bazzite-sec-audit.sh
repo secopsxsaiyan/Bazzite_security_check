@@ -393,6 +393,16 @@ Many checks will not apply. Continue anyway?" "Continue" "Quit" "n"; then
         fi
     fi
 
+    # These change the PC, and only after a "yes": without a terminal or the
+    # desktop nobody can give it, so say so instead of doing nothing.
+    case "$ACTION" in
+        undo|install|uninstall|install-timer|remove-timer|update)
+            if ! ui_interactive; then
+                echo "--${ACTION} asks before it changes anything, and there is no terminal or desktop to answer; nothing was changed." >&2
+                exit 1
+            fi ;;
+    esac
+
     case "$ACTION" in
         undo)          run_undo; exit 0 ;;
         install)       install_app; exit 0 ;;

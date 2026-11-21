@@ -1085,8 +1085,8 @@ ui_yesno() {
 # ui_choice3 HTML_OR_TEXT TEXT_FOR_TTY YES NO CANCEL [warn|careful] [y|n] —
 # 0, 1 or 2 (Yes/No/Cancel). An empty TEXT_FOR_TTY is made from the HTML
 # (only when it is needed). On the terminal, Enter gives the last
-# argument's answer (No unless "y" is given); with no one to ask, the
-# answer is always No. "warn", "careful" and the button that Enter presses
+# argument's answer (No unless "y" is given; always No for a marked
+# question); with no one to ask, the answer is always No. "warn", "careful" and the button that Enter presses
 # in a window: as in ui_yesno (in kdialog, NO is put in the YES place, and
 # Esc or closing the window is CANCEL).
 ui_choice3() {

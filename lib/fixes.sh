@@ -302,12 +302,14 @@ _run_change() {
     out=$_RUN_OUT
     rm -f -- "$tmpfile"
     log "--- end of the output (exit ${rc}) ---"
+    local kept=0
     if [[ $rc -eq 0 ]]; then
         [[ -n "$undo" ]] && _undo_record "$title" "$undo"
     elif [[ $_SIGNAL_PENDING -eq 1 && -n "$undo" ]]; then
         # Failed, and the tool is about to stop: nobody is asked about a
         # rollback now, so keep the undo step for --undo.
         _undo_record "${title} (did not complete)" "$undo"
+        kept=1
         log "interrupted after a failed fix: its undo step was kept"
     fi
     ui_busy_stop
@@ -329,15 +331,23 @@ _run_change() {
 
 Output:
 $(tail -n 15 <<< "$out")"
-    if [[ -n "$undo" ]] && ui_yesno "Put back what this fix may already have changed?" "Roll back" "Leave it" "y" careful; then
+    [[ -n "$undo" ]] || return 3
+    if ui_yesno "Put back what this fix may already have changed?" "Roll back" "Leave it" "y" careful; then
         local undo_rc=0
         _undo_run bash -c "$undo" || undo_rc=$?
         if [[ $undo_rc -eq 0 ]]; then
             print_status "OK" "Rolled back: ${title}"
-        else
-            ui_error "Rolling back \"${title}\" failed too - see the run log: ${RUN_LOG}"
+            return 3
         fi
+        ui_error "Rolling back \"${title}\" failed too - see the run log: ${RUN_LOG}"
     fi
+    # Left as it is (also when nobody could answer), or the rollback failed:
+    # the undo step stays on record, so --undo can put it back later.
+    if [[ $kept -eq 0 ]]; then
+        _undo_record "${title} (did not complete)" "$undo"
+        log "failed fix left as it is: its undo step was kept"
+    fi
+    print_status "INFO" "The undo step of \"${title}\" was kept: --undo can put it back later."
     return 3
 }
 
