@@ -588,7 +588,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     RUN_LOG="$W/clam.log"; UI_MODE="none"; CURRENT_CHECK=check_deep_malware
     CR="$W/clam-root"; mkdir -p "$CR/var/lib/clamav" "$CR/etc"; AUDIT_ROOT="$CR"
     REGULAR_USERS=("$U"); DESKTOP_USER="$U"; IS_OSTREE=1; RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
-    HAVE=""; FLATPAKS=""; SVC=enabled; SCAN_OUT=""; SCAN_RC=0
+    HAVE=""; FLATPAKS=""; SVC=enabled; SCAN_OUT=$'\n----------- SCAN SUMMARY -----------\nScanned files: 10\nInfected files: 0\n'; SCAN_RC=0
     _have() { [[ " $HAVE " == *" $1 "* ]]; }
     _flatpak_installed() { [[ " $FLATPAKS " == *" $1 "* ]]; }
     _unit_state() { printf '%s' "$SVC"; }
@@ -597,7 +597,9 @@ echo "== 5b. the malware scan and ClamAV's setup"
         local who="$1"; shift
         case "$1" in
             xdg-user-dir) printf '%s' "$UH" ;;
-            timeout) printf '%s %s\n' "$who" "$*" >> "$W/clam-scans"; printf '%s' "$SCAN_OUT"; return "$SCAN_RC" ;;
+            timeout) printf '%s %s\n' "$who" "$*" >> "$W/clam-scans"
+                     if [[ "$who" == "${U}2" && -n "${SCAN_OUT2:-}" ]]; then printf '%s' "$SCAN_OUT2"; return "$SCAN_RC2"; fi
+                     printf '%s' "$SCAN_OUT"; return "$SCAN_RC" ;;
         esac
     }
     _as_desktop_user() { _as_user "$DESKTOP_USER" "$@"; }
@@ -608,6 +610,8 @@ echo "== 5b. the malware scan and ClamAV's setup"
         check_deep_malware > /dev/null 2>&1
     }
     scans() { grep -c . "$W/clam-scans" || true; }
+    # clam_sum FILES [ERRORS] [INFECTED] — clamscan's summary as clamscan 1.4.6 prints it.
+    clam_sum() { printf '\n----------- SCAN SUMMARY -----------\nKnown viruses: 8708930\nEngine version: 1.4.6\nScanned directories: 9\nScanned files: %s\nInfected files: %s\n%bData scanned: 1.00 MB\nData read: 1.00 MB (ratio 1.00:1)\nTime: 2.000 sec (0 m 2 s)\n' "$1" "${3:-0}" "${2:+Total errors: $2\n}"; }
 
     # ClamUI without the system's ClamAV: ClamUI cannot scan; the fix layers both packages.
     HAVE=""; FLATPAKS="io.github.linx_systems.ClamUI"; defs; case_
@@ -630,7 +634,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     # Nothing at all, no ClamUI: an optional note with the same fix; ClamTk alone needs nothing.
     FLATPAKS=""; case_
     [[ "${F_SEV[0]:-}" == info && "${F_FIX[0]}" == "fix_clamav_install clamav clamav-freshclam" ]] && echo "no-clamav-is-an-optional-fix"
-    FLATPAKS="com.gitlab.davem.ClamTk"; SCAN_OUT=""; SCAN_RC=0; case_
+    FLATPAKS="com.gitlab.davem.ClamTk"; SCAN_OUT="$(clam_sum 10)"; SCAN_RC=0; case_
     [[ ${#F_SEV[@]} -eq 0 && "$(scans)" -eq 1 ]] && grep -q "flatpak run --command=clamscan com.gitlab.davem.ClamTk" "$W/clam-scans" && echo "clamtk-alone-scans-without-setup"
     # ClamTk and ClamUI: ClamTk still scans, and ClamUI's missing ClamAV is still a finding.
     FLATPAKS="com.gitlab.davem.ClamTk io.github.linx_systems.ClamUI"; case_
@@ -678,7 +682,9 @@ echo "== 5b. the malware scan and ClamAV's setup"
     SVC=enabled; defs 0; case_
     [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"updated today (clamav-freshclam.service: enabled)"*"nothing found"* ]] && echo "fresh-definitions-no-finding"
     # The scan runs as the account, stays on each folder's file system, and never as root.
-    grep -q "^${U} timeout 1800 clamscan -r -i --no-summary --cross-fs=no .* --database=/var/lib/clamav " "$W/clam-scans" && ! grep -q "^root " "$W/clam-scans" && echo "scan-as-account-on-one-file-system"
+    # It keeps clamscan's summary, which counts the files it could not read.
+    grep -q "^${U} timeout 1800 clamscan -r -i --cross-fs=no .* --database=/var/lib/clamav " "$W/clam-scans" && ! grep -q "^root " "$W/clam-scans" \
+       && ! grep -q -- "--no-summary" "$W/clam-scans" && echo "scan-as-account-on-one-file-system"
     # A scan stopped by the time limit says so - not that the database is missing.
     SCAN_OUT=""; SCAN_RC=124; case_
     [[ "${CHECK_SKIPPED[check_deep_malware]:-}" == "the scan was stopped after 30 minutes, before it finished"* && "${CHECK_SKIPPED[check_deep_malware]:-}" != *database* && ${#F_SEV[@]} -eq 0 ]] && echo "timeout-is-not-blamed-on-the-database"
@@ -692,7 +698,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     # Without freshclam, nothing offers to download them: the skip says why.
     HAVE="clamscan"; SCAN_OUT=$'LibClamAV Error: cli_cvdload(): Corrupted CVD header\n'; case_
     [[ "${F_TITLE[0]:-}" == *"freshclam is not installed" && ${#F_SEV[@]} -eq 1 && "${CHECK_SKIPPED[check_deep_malware]:-}" == *"freshclam, which downloads them, is not installed"* ]] && echo "broken-definitions-without-freshclam"
-    SCAN_OUT=""; SCAN_RC=0; defs 12; case_
+    SCAN_OUT="$(clam_sum 10)"; SCAN_RC=0; defs 12; case_
     [[ "${F_TITLE[0]:-}" == *"freshclam is not installed" && ${#F_SEV[@]} -eq 1 && "$(scans)" -eq 1 ]] && echo "old-definitions-without-freshclam"
     defs; case_
     [[ "${F_TITLE[0]:-}" == *"freshclam is not installed" && ${#F_SEV[@]} -eq 1 && "$(scans)" -eq 0 \
@@ -702,8 +708,94 @@ echo "== 5b. the malware scan and ClamAV's setup"
     ! grep -q "^ERR at" "$W/clam-err" && echo "no-error-trap" || head -3 "$W/clam-err"
     HAVE="clamscan freshclam"; defs 0
     # A file it could not read, even one named "database", is not a database error.
-    SCAN_OUT="$UH/Downloads/database.sqlite: Can't open file or directory ERROR"$'\n'; SCAN_RC=2; case_
-    [[ ${#F_SEV[@]} -eq 0 && -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"may not read were left out"* ]] && echo "unreadable-file-is-not-a-database-error"
+    SCAN_OUT="$UH/Downloads/database.sqlite: Can't open file or directory ERROR"$'\n'"$(clam_sum 10)"; SCAN_RC=2; case_
+    [[ ${#F_SEV[@]} -eq 0 && -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"could not be read were left out"* ]] && echo "unreadable-file-is-not-a-database-error"
+    # Files the account may not read (with -i clamscan lists none of them, exit 2): nothing found, and how many were left out.
+    SCAN_OUT="$(clam_sum 120 3)"; SCAN_RC=2; case_
+    [[ ${#F_SEV[@]} -eq 0 && -z "${CHECK_SKIPPED[check_deep_malware]:-}" \
+       && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 120 file(s) in: $UH, "*" - nothing found (3 file(s) could not be read or scanned and were left out)" ]] && echo "unreadable-files-are-counted"
+    # A clean scan says how many files it scanned and nothing about files left out.
+    SCAN_OUT="$(clam_sum 120)"; SCAN_RC=0; case_
+    [[ "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 120 file(s) in: "*" - nothing found" ]] && echo "clean-scan-counts-files"
+    # Each account's scan adds up.
+    REGULAR_USERS=("$U" "${U}2"); SCAN_OUT="$(clam_sum 120 3)"; SCAN_RC=2; case_
+    [[ "$(scans)" -eq 2 && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 240 file(s) in: "*"(6 file(s) could not be read"* ]] && echo "counts-of-every-account-add-up"
+    # Only the second account's scan stops: the message names that account; a hit's file name is never a stop.
+    SCAN_OUT="$(clam_sum 9)"; SCAN_RC=0; SCAN_OUT2=$'ERROR: scandirs: Memory allocation failed for fname\n'"$(clam_sum 1)"; SCAN_RC2=0; case_
+    s1=${CHECK_SKIPPED[check_deep_malware]:-}
+    SCAN_OUT=$'/tmp/a\nERROR: fake: Win.Test.EICAR_HDB-1 FOUND\n'"$(clam_sum 9 0 1)"; SCAN_RC=1; SCAN_OUT2=""; case_
+    [[ "$s1" == "ClamAV stopped with an error before it scanned the folders of ${U}2 (ERROR: scandirs:"* \
+       && "${F_TITLE[0]:-}" == "ClamAV found 2 infected file(s)" && "${CHECK_NOTE[check_deep_malware]:-}" != *"stopped with an error"* ]] && echo "stop-of-one-account-named"
+    # An engine error about one file at exit 2 is not definitions that do not load.
+    SCAN_OUT=$'LibClamAV Error: cli_scanpe: malformed PE header\n'"$(clam_sum 40 2)"; SCAN_RC=2; case_
+    [[ ${#F_SEV[@]} -eq 0 && -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 80 file(s)"* ]] && echo "file-engine-error-is-not-broken-definitions"
+    # ClamAV's message is quoted from whichever account's scan printed it, first or later
+    # (the accounts are scanned in no fixed order, so both arrangements are checked).
+    quoted=0
+    for e in 1 2; do
+        if [[ $e -eq 1 ]]; then SCAN_OUT=$'LibClamAV Error: cli_html_normalise: odd\n'"$(clam_sum 3)"; SCAN_OUT2="$(clam_sum 9)"
+        else SCAN_OUT="$(clam_sum 9)"; SCAN_OUT2=$'LibClamAV Error: cli_html_normalise: odd\n'"$(clam_sum 3)"; fi
+        SCAN_RC=0; SCAN_RC2=0; case_
+        [[ "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 12 file(s) in: "*"(ClamAV said: LibClamAV Error: cli_html_normalise: odd)" ]] && quoted=$((quoted + 1))
+    done
+    SCAN_OUT2=""
+    [[ $quoted -eq 2 ]] && echo "message-of-second-account-quoted"
+    REGULAR_USERS=("$U")
+    # clamscan that gives up is not "nothing found": a bad option, memory, a temporary folder it cannot write to.
+    giveup=1
+    # (A bad option ends clamscan before its summary; without a temporary folder libclamav fails every file, exit 0.)
+    for SCAN_OUT in $'clamscan: unrecognized option `--bogus\'\nERROR: Unknown option passed\nERROR: Can\'t parse command line options\n'"|2" \
+                    $'LibClamAV Error: cli_malloc(): Can\'t allocate memory (65536 bytes).\nERROR: Can\'t allocate memory\n'"$(clam_sum 0)|2" \
+                    $'LibClamAV Error: Can\'t create temporary directory for scan: /tmp/20261121_172102-scantemp.d486705759.\n'"$(clam_sum 4)|0"; do
+        SCAN_RC=${SCAN_OUT##*|}; SCAN_OUT=${SCAN_OUT%|*}; case_
+        [[ ${#F_SEV[@]} -eq 0 && "${CHECK_SKIPPED[check_deep_malware]:-}" == "ClamAV stopped with an error before it scanned the folders of $U ("*")" \
+           && "${CHECK_SKIPPED[check_deep_malware]}" == *"$(grep -m 1 -E "^ERROR:|^LibClamAV Error: Can't create" <<< "$SCAN_OUT")"* && "${CHECK_NOTE[check_deep_malware]:-}" != *"nothing found"* ]] \
+           || { giveup=0; echo "not reported as stopped: ${SCAN_OUT%%$'\n'*} -> ${CHECK_SKIPPED[check_deep_malware]:-} / ${CHECK_NOTE[check_deep_malware]:-}"; }
+    done
+    [[ $giveup -eq 1 ]] && echo "clamscan-error-is-not-nothing-found"
+    # An engine error on one file, without "ERROR:": the scan went on; nothing found, and ClamAV's words.
+    SCAN_OUT=$'LibClamAV Error: cli_scanxz: decompress error: 2\n'"$(clam_sum 50 1)"; SCAN_RC=2; case_
+    [[ -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 50 file(s) in: "*"(1 file(s) could not be read or scanned and were left out; ClamAV said: LibClamAV Error: cli_scanxz: decompress error: 2)" ]] && echo "one-file-error-is-counted-not-a-stop"
+    # No summary: the scanner did not start (ClamTk's "flatpak run" failing, exit 1) or did not finish - never "nothing found", never a hit.
+    FLATPAKS="com.gitlab.davem.ClamTk"; HAVE=""; SCAN_OUT=$'bwrap: execvp clamscan: No such file or directory\n'; SCAN_RC=1; case_
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_SKIPPED[check_deep_malware]:-}" == "the scan did not finish: ClamAV gave no summary (exit 1: bwrap: execvp clamscan: No such file or directory)" \
+       && "${CHECK_NOTE[check_deep_malware]:-}" != *"nothing found"* ]] && echo "no-summary-is-not-nothing-found"
+    FLATPAKS=""; HAVE="clamscan freshclam"; SCAN_OUT=""; SCAN_RC=0; case_
+    [[ "${CHECK_SKIPPED[check_deep_malware]:-}" == "the scan did not finish: ClamAV gave no summary (exit 0)" ]] && echo "empty-output-is-not-nothing-found"
+    # Exit 2 and not one file scanned: nothing could be read.
+    SCAN_OUT="$(clam_sum 0)"; SCAN_RC=2; case_
+    [[ "${CHECK_SKIPPED[check_deep_malware]:-}" == "ClamAV could not read any file in $UH, "* ]] && echo "no-file-scanned-is-a-skip"
+    # A hit in the summary (or exit 1 from a finished scan) without a line that names it: a finding, never "nothing found".
+    SCAN_OUT="$(clam_sum 9 0 2)"; SCAN_RC=1; case_
+    [[ "${F_SEV[0]:-}" == high && "${F_TITLE[0]}" == "ClamAV found 2 infected file(s)" && "${F_MANUAL[0]}" == "Run the check again, or scan these folders with ClamUI or ClamTk"*"$UH, "* ]] && echo "unlisted-hit-is-a-finding"
+    # An engine error at exit 0 is shown with the note.
+    SCAN_OUT=$'LibClamAV Error: cli_html_normalise: odd\n'"$(clam_sum 3)"; SCAN_RC=0; case_
+    [[ "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 3 file(s) in: "*" - nothing found (ClamAV said: LibClamAV Error: cli_html_normalise: odd)" ]] && echo "engine-error-shown-at-exit-0"
+    # A hit from one account's scan while another's gave no summary: the hit, and a note.
+    REGULAR_USERS=("$U" "${U}2"); SCAN_OUT="$UH/Downloads/x.exe: Win.Test.EICAR_HDB-1 FOUND"$'\n'"$(clam_sum 5 0 1)"; SCAN_RC=1
+    SCAN_OUT2=$'bwrap: execvp clamscan: No such file or directory\n'; SCAN_RC2=1; case_; SCAN_OUT2=""
+    [[ "${F_TITLE[0]:-}" == "ClamAV found 1 infected file(s)" && "${CHECK_NOTE[check_deep_malware]:-}" == *"did not finish (no summary from ClamAV)"* ]] && echo "hit-without-summary-noted"
+    REGULAR_USERS=("$U")
+    # A hit and a scan that gave up: the hit is reported, with a note that other files may not have been scanned.
+    # (One clamscan exits 1 when it found something, also after an error.)
+    SCAN_OUT="$UH/Downloads/x.exe: Win.Test.EICAR_HDB-1 FOUND"$'\nERROR: scandirs: Memory allocation failed for fname\n'"$(clam_sum 5 0 1)"; SCAN_RC=1; case_
+    [[ "${F_TITLE[0]:-}" == "ClamAV found 1 infected file(s)" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV stopped with an error before it scanned every folder of $U (ERROR: scandirs: Memory allocation failed for fname)"* ]] && echo "hit-and-a-stop"
+    # A folder walk that stopped early exits 0 with a summary: not "nothing found".
+    SCAN_OUT=$'ERROR: scandirs: Memory allocation failed for fname\n'"$(clam_sum 5)"; SCAN_RC=0; case_
+    [[ "${CHECK_SKIPPED[check_deep_malware]:-}" == *"(ERROR: scandirs: Memory allocation failed for fname)" && "${CHECK_NOTE[check_deep_malware]:-}" != *"nothing found"* ]] && echo "stop-at-exit-0-is-not-nothing-found"
+    # An error clamscan logs after its summary (the date) stops nothing.
+    SCAN_OUT="$(clam_sum 5)"$'\nERROR: Failed to get local time for Start Date.\n'; SCAN_RC=0; case_
+    [[ -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"ClamAV scanned 5 file(s) in: "*" - nothing found" ]] && echo "error-after-summary-is-not-a-stop"
+    # The counts come from the real summary, which comes last: a file name with a line break cannot fake it.
+    [[ "$(_clamav_scan_counts "/tmp/a"$'\n----------- SCAN SUMMARY -----------\nScanned files: 999\nTotal errors: 0: Eicar FOUND'"$(clam_sum 7 2)")" == "7 2 0" \
+       && "$(_clamav_scan_counts "$(clam_sum 7)")" == "7 0 0" && "$(_clamav_scan_counts "$(clam_sum 7 0 3)")" == "7 0 3" && -z "$(_clamav_scan_counts "no summary here")" \
+       && -z "$(_clamav_scan_counts $'\n----------- SCAN SUMMARY -----------\nScanned files: lots\n')" ]] && echo "scan-counts-from-the-real-summary"
+    # ... and the error trap stays quiet on the new paths (counted, stopped, two accounts).
+    : > "$W/clam-err2"
+    for SCAN_OUT in "$(clam_sum 120 3)" $'ERROR: Can\'t allocate memory\n'"$(clam_sum 0)" "no summary"; do
+        SCAN_RC=2; ( REGULAR_USERS=("$U" "${U}2"); set -E; trap 'echo "ERR at $LINENO: $BASH_COMMAND"' ERR; check_deep_malware ) >> "$W/clam-err2" 2>/dev/null
+    done
+    ! grep -q "^ERR at" "$W/clam-err2" && echo "no-error-trap-on-scan-results" || head -3 "$W/clam-err2"
     # A hit is reported.
     SCAN_OUT="$UH/Downloads/x.exe: Win.Test.EICAR_HDB-1 FOUND"$'\n'; SCAN_RC=1; case_
     [[ "${F_SEV[0]:-}" == high && "${F_TITLE[0]}" == "ClamAV found 1 infected file(s)" ]] && echo "infected-file-found"
@@ -740,7 +832,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     # DatabaseDirectory from freshclam.conf is where the definitions are looked for.
     printf 'DatabaseDirectory "/srv/quoted"\n' > "$CR/etc/freshclam.conf"
     [[ "$(_clamav_db_dir)" == /srv/quoted ]] && echo "quoted-database-directory"
-    mkdir -p "$CR/srv/defs"; printf 'DatabaseDirectory /srv/defs\n' > "$CR/etc/freshclam.conf"; SCAN_OUT=""; SCAN_RC=0; defs 0; case_
+    mkdir -p "$CR/srv/defs"; printf 'DatabaseDirectory /srv/defs\n' > "$CR/etc/freshclam.conf"; SCAN_OUT="$(clam_sum 10)"; SCAN_RC=0; defs 0; case_
     [[ "$(_clamav_db_dir)" == /srv/defs && "${F_TITLE[0]:-}" == "ClamAV has no virus definitions" && "${F_DETAIL[0]}" == *"/srv/defs"* ]] && echo "database-directory-from-freshclam-conf"
     # ... and clamscan, which does not read freshclam.conf, is told to use them.
     echo x > "$CR/srv/defs/main.cvd"; echo x > "$CR/srv/defs/daily.cvd"; case_
@@ -754,7 +846,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     DEAD="https://urlhaus.example/downloads/urlhaus.ndb"; OK2="http://sigs.example/shell.ldb"
     KEYED="https://api.example/v2/files/exports/SECRETKEY123/urlhaus_clamav.ndb"
     printf 'DatabaseMirror database.clamav.net\nDatabaseCustomURL %s\n  DatabaseCustomURL %s\nDatabaseCustomURL %s\nExtraDatabase foo\nExtraDatabase a;b\nExtraDatabase SafeBrowsing\n' "$DEAD" "$OK2" "$KEYED" > "$CR/etc/freshclam.conf"
-    defs 0; HAVE="clamscan freshclam"; SVC=enabled; SCAN_OUT=""; SCAN_RC=0
+    defs 0; HAVE="clamscan freshclam"; SVC=enabled; SCAN_OUT="$(clam_sum 10)"; SCAN_RC=0
     FCLOG="WARNING: downloadFile: Unexpected response (410) from ${DEAD}
 ERROR: Can't download urlhaus.ndb from ${DEAD}
 Update failed for custom database URL: ${DEAD}
@@ -892,7 +984,12 @@ for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-no
          extra-source-fix-fails-when-nothing-matches refusal-once-is-a-note refusal-in-two-updates-is-a-finding file-there-means-it-worked \
          logtime-failure-counts logtime-success-clears official-line-clears-no-source no-promise-while-an-earlier-source-fails \
          definitions-fix-follows-exclusions restart-failure-keeps-the-change rate-limit-is-a-note not-a-database-in-two-updates \
-         undo-restart-failure-keeps-the-restore rate-limit-stops-nothing; do
+         undo-restart-failure-keeps-the-restore rate-limit-stops-nothing unreadable-files-are-counted clean-scan-counts-files \
+         counts-of-every-account-add-up clamscan-error-is-not-nothing-found one-file-error-is-counted-not-a-stop hit-and-a-stop \
+         scan-counts-from-the-real-summary no-error-trap-on-scan-results no-summary-is-not-nothing-found empty-output-is-not-nothing-found \
+         no-file-scanned-is-a-skip unlisted-hit-is-a-finding engine-error-shown-at-exit-0 hit-without-summary-noted \
+         stop-at-exit-0-is-not-nothing-found error-after-summary-is-not-a-stop stop-of-one-account-named \
+         file-engine-error-is-not-broken-definitions message-of-second-account-quoted; do
     expect "$W/clam.out" "$t" "$t"
 done
 
