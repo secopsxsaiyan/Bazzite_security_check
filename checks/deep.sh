@@ -409,15 +409,17 @@ print(" ".join(p for p in sys.argv[1:] if any(p in r for r in req)))' "$@" <<< "
 }
 
 # _clamav_official_dbs — the definitions freshclam takes from ClamAV's own
-# mirrors: main, daily and bytecode, and any ExtraDatabase in
-# freshclam.conf. The definitions fix updates only these (--update-db), so
-# an extra source that fails does not fail it.
+# mirrors: main, daily and bytecode, and safebrowsing or valhalla when an
+# ExtraDatabase line asks for them. The definitions fix updates only these
+# (--update-db): freshclam refuses the whole update for a name it does not
+# know there, and "custom" would fetch the extra sources again.
 _clamav_official_dbs() {
     local x
     printf '%s\n' main daily bytecode
     while IFS= read -r x; do
-        [[ "$x" =~ ^[A-Za-z0-9._-]+$ ]] && printf '%s\n' "$x"
-    done < <(sed -n 's/^[[:space:]]*ExtraDatabase[[:space:]]\{1,\}\([^[:space:]]\{1,\}\)[[:space:]]*$/\1/p' "$(_r /etc/freshclam.conf)" 2>/dev/null)
+        x="${x,,}"
+        [[ "$x" == safebrowsing || "$x" == valhalla ]] && printf '%s\n' "$x"
+    done < <(sed -n 's/^[[:space:]]*ExtraDatabase[[:space:]]\{1,\}\([^[:space:]]\{1,\}\)[[:space:]]*$/\1/p' "$(_r /etc/freshclam.conf)" 2>/dev/null | sort -u)
     return 0
 }
 
@@ -429,9 +431,15 @@ _freshclam_cmd() {
 }
 
 # _clamav_custom_urls — the extra signature sources freshclam.conf lists
-# (DatabaseCustomURL), one per line, in the file's order.
+# (DatabaseCustomURL), one per line, in the file's order (one pair of
+# surrounding quotes removed, as freshclam does).
 _clamav_custom_urls() {
-    sed -n 's/^[[:space:]]*DatabaseCustomURL[[:space:]]\{1,\}\([^[:space:]]\{1,\}\)[[:space:]]*$/\1/p' "$(_r /etc/freshclam.conf)" 2>/dev/null || true
+    local u
+    while IFS= read -r u; do
+        [[ "$u" == \"*\" && ${#u} -gt 2 ]] && u="${u:1:${#u}-2}"
+        printf '%s\n' "$u"
+    done < <(sed -n 's/^[[:space:]]*DatabaseCustomURL[[:space:]]\{1,\}\([^[:space:]]\{1,\}\)[[:space:]]*$/\1/p' "$(_r /etc/freshclam.conf)" 2>/dev/null)
+    return 0
 }
 
 # _clamav_custom_file URL — the name freshclam saves URL's database under.
@@ -441,14 +449,19 @@ _clamav_custom_file() {
 }
 
 # _clamav_url_label URL — URL as the report shows it: the host and the
-# file name only, since the path between them can hold an access key.
+# file name only. A user name and password before the host, and the path
+# between host and file (which can hold an access key), are left out.
 _clamav_url_label() {
-    local u="${1%%[?#]*}" rest
+    local u="${1%%[?#]*}" rest host
     rest="${u#*://}"
+    host="${rest%%/*}"
+    host="${host##*@}"
     if [[ "$rest" == */*/* ]]; then
-        printf '%s/…/%s' "${rest%%/*}" "${u##*/}"
+        printf '%s/…/%s' "$host" "${u##*/}"
+    elif [[ "$rest" == */* ]]; then
+        printf '%s/%s' "$host" "${u##*/}"
     else
-        printf '%s' "$rest"
+        printf '%s' "$host"
     fi
 }
 
@@ -457,89 +470,110 @@ _clamav_fc_log() {
     journalctl -u clamav-freshclam.service --since "-3 days" -n 3000 --no-pager -q -o cat 2>/dev/null || true
 }
 
-# _clamav_custom_failed URL... — "URL<TAB>reason" for each URL whose last
-# download in freshclam's log failed (a later success clears it).
+# _clamav_custom_failed URL... — "URL<TAB>reason<TAB>gone" for each URL
+# whose last download in freshclam's log failed (a later success clears
+# it). gone is 1 when the source is not coming back: the server says so
+# (403, 404, 410), or it failed in two updates or more and never worked
+# in the log; else a failure may be passing (a server that was busy).
+# A log line is about URL only when it ends with it: one source's address
+# can be the start of another's.
 _clamav_custom_failed() {
     _clamav_fc_log | python3 -I -c '
 import re, sys
 urls = sys.argv[1:]
 files = {u: u.split("?")[0].split("#")[0].rsplit("/", 1)[-1] for u in urls}
-state = {}
+state, fails, worked = {}, {}, set()
 for line in sys.stdin:
     line = line.strip()
     for u in urls:
-        if u in line:
+        if line.endswith(" " + u):
             m = re.search(r"Unexpected response \((\d+)\)", line)
             if m:
                 state[u] = "HTTP " + m.group(1)
-            elif "Update failed for custom database URL" in line or "Can\x27t download" in line:
+            elif "Update failed for custom database URL" in line:
+                fails[u] = fails.get(u, 0) + 1
                 if not state.get(u, "ok").startswith("HTTP"):
                     state[u] = "download failed"
+            elif "Can\x27t download" in line and not state.get(u, "ok").startswith("HTTP"):
+                state[u] = "download failed"
         elif files[u] and re.match(re.escape(files[u]) + r" (database )?(is up-to-date|updated)", line):
             state[u] = "ok"
+            fails[u] = 0
+            worked.add(u)
 for u in urls:
-    if state.get(u, "ok") != "ok":
-        print(u + "\t" + state[u])' "$@" 2>/dev/null || true
+    r = state.get(u, "ok")
+    if r != "ok":
+        gone = r in ("HTTP 403", "HTTP 404", "HTTP 410") or (u not in worked and fails.get(u, 0) >= 2)
+        print(u + "\t" + r + "\t" + ("1" if gone else "0"))' "$@" 2>/dev/null || true
 }
 
-# _clamav_custom_check DIR URL... — the extra sources: a finding for those
-# freshclam fails to download (and the ones it then never reaches, as it
-# stops at the first that fails), a note for ones that are just missing.
+# _clamav_custom_check DIR URL... — the extra sources. One that is not
+# coming back is a finding whose fix turns it off; one that failed only
+# lately is a note. Either way freshclam stopped there, so the sources
+# listed after the first failing one are no longer updated: both name
+# them. A source that is only missing is a note too.
 _clamav_custom_check() {
-    local dir="$1" u r line n=0 labels="" blocked="" manual="" missing=""
+    local dir="$1" u r g n=0 labels="" after="" manual="" missing="" passing="" first=""
     shift
-    local -a urls=("$@") bad=()
+    local -a urls=("$@") gone=()
     local -A why=()
-    while IFS=$'\t' read -r u r; do
+    while IFS=$'\t' read -r u r g; do
         [[ -n "$u" ]] || continue
-        bad+=("$u"); why["$u"]="$r"
+        why["$u"]="$r"
+        if [[ "$g" == 1 ]]; then gone+=("$u"); else passing+="${passing:+, }$(_clamav_url_label "$u") (${r})"; fi
     done < <(_clamav_custom_failed "${urls[@]}")
     for u in "${urls[@]}"; do
-        [[ -n "${why[$u]:-}" ]] && continue
-        [[ -f "$(_r "$dir")/$(_clamav_custom_file "$u")" ]] && continue
-        if (( ${#bad[@]} > 0 )); then
-            blocked+="${blocked:+, }$(_clamav_url_label "$u")"
-        else
+        if [[ -n "${why[$u]:-}" ]]; then
+            first=1
+        elif [[ -n "$first" ]]; then
+            after+="${after:+, }$(_clamav_url_label "$u")"
+        elif [[ ! -f "$(_r "$dir")/$(_clamav_custom_file "$u")" ]]; then
             missing+="${missing:+, }$(_clamav_url_label "$u")"
         fi
     done
     [[ -n "$missing" ]] && check_note "Extra signature sources in freshclam.conf not in ${dir} yet: ${missing} (see: journalctl -u clamav-freshclam.service)"
-    (( ${#bad[@]} > 0 )) || return 0
-    manual="# In /etc/freshclam.conf, put a # in front of:"
-    for u in "${bad[@]}"; do
+    if [[ -n "$passing" ]]; then
+        check_note "The last update could not download ${passing}; it may work next time.$([[ ${#gone[@]} -eq 0 && -n $after ]] && echo " freshclam stopped there, so these were not updated: ${after}." || true)"
+    fi
+    (( ${#gone[@]} > 0 )) || return 0
+    manual="sudoedit /etc/freshclam.conf"$'\n'"# In it, put a # in front of:"
+    for u in "${gone[@]}"; do
         n=$(( n + 1 ))
         labels+="${labels:+$'\n'}$(_clamav_url_label "$u") (${why[$u]})"
         manual+=$'\n'"#   DatabaseCustomURL $(_clamav_url_label "$u")"
     done
     manual+=$'\n'"sudo systemctl try-restart clamav-freshclam.service"
     finding low "freshclam cannot download ${n} extra signature source(s)" \
-"freshclam.conf lists extra virus signature sources (DatabaseCustomURL). The
-last tries to download these failed:
-${labels}$([[ -n $blocked ]] && printf '\nfreshclam stops at a source that fails, so these are not downloaded either:\n%s' "$blocked" || true)
+"freshclam.conf lists extra virus signature sources (DatabaseCustomURL). These
+can no longer be downloaded:
+${labels}$([[ -n $after ]] && printf '\nfreshclam stops at a source that fails, so these, listed after it, are no longer updated:\n%s' "$after" || true)
 Each update of the definitions ends in an error while they stay listed." \
-        "$manual" fix_clamav_custom_off "${bad[@]}"
-    finding_change "${n} extra source(s) fail to download" "turned off in /etc/freshclam.conf$([[ -n $blocked ]] && echo "; the others download again" || true)"
+        "$manual" fix_clamav_custom_off "${gone[@]}"
+    finding_change "${n} extra source(s) fail to download" "turned off in /etc/freshclam.conf$([[ -n $after ]] && echo "; the others are updated again" || true)"
     return 0
 }
 
 # fix_clamav_custom_off URL... — put a # in front of these extra sources
 # in /etc/freshclam.conf (the file keeps its owner, mode and label), then
-# let the running update service read it again.
+# let the running update service read it again. It fails, changing
+# nothing, when none of the lines is there any more.
 fix_clamav_custom_off() {
     local f=/etc/freshclam.conf u qurls="" script
     for u in "$@"; do qurls+=" $(_q "$u")"; done
     script="$(_backup_cmd "$f")
 urls=\$(printf '%s\n'${qurls})
-new=\$(URLS=\"\$urls\" awk 'BEGIN { n = split(ENVIRON[\"URLS\"], u, \"\\n\"); for (i = 1; i <= n; i++) off[u[i]] = 1 }
+new=\$(URLS=\"\$urls\" awk 'BEGIN { n = split(ENVIRON[\"URLS\"], u, \"\\n\"); for (i = 1; i <= n; i++) off[u[i]] = 1; done = 0 }
 { s = \$0; sub(/^[ \\t]+/, \"\", s)
-  if (s ~ /^DatabaseCustomURL[ \\t]/) { v = s; sub(/^DatabaseCustomURL[ \\t]+/, \"\", v); sub(/[ \\t]+\$/, \"\", v)
-    if (v in off) { print \"# Turned off by Security Check (it could not be downloaded): \" \$0; next } }
-  print }' $f)
+  if (s ~ /^DatabaseCustomURL[ \\t]/) { v = s; sub(/^DatabaseCustomURL[ \\t]+/, \"\", v); sub(/[ \\t\\r]+\$/, \"\", v)
+    if (v ~ /^\".*\"\$/ && length(v) > 2) v = substr(v, 2, length(v) - 2)
+    if (v in off) { print \"# Turned off by Security Check (it could not be downloaded): \" \$0; done++; next } }
+  print }
+END { if (!done) exit 3 }' $f)
 printf '%s\n' \"\$new\" > $f
 systemctl try-restart clamav-freshclam.service"
     apply_change "$script" "$(_restore_cmd "$f")
 systemctl try-restart clamav-freshclam.service" \
-        "Only these lines change; the other extra sources stay as they are."
+        "Only these lines change; the other extra sources stay as they are. The commands show the full addresses, as they are in the file."
 }
 
 # _clamav_not_set_up CLAMUI HOST MISSING... — part of ClamAV is not

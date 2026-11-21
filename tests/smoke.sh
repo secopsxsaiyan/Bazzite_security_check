@@ -753,7 +753,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     # Extra signature sources (DatabaseCustomURL).
     DEAD="https://urlhaus.example/downloads/urlhaus.ndb"; OK2="http://sigs.example/shell.ldb"
     KEYED="https://api.example/v2/files/exports/SECRETKEY123/urlhaus_clamav.ndb"
-    printf 'DatabaseMirror database.clamav.net\nDatabaseCustomURL %s\n  DatabaseCustomURL %s\nDatabaseCustomURL %s\nExtraDatabase foo\nExtraDatabase a;b\n' "$DEAD" "$OK2" "$KEYED" > "$CR/etc/freshclam.conf"
+    printf 'DatabaseMirror database.clamav.net\nDatabaseCustomURL %s\n  DatabaseCustomURL %s\nDatabaseCustomURL %s\nExtraDatabase foo\nExtraDatabase a;b\nExtraDatabase SafeBrowsing\n' "$DEAD" "$OK2" "$KEYED" > "$CR/etc/freshclam.conf"
     defs 0; HAVE="clamscan freshclam"; SVC=enabled; SCAN_OUT=""; SCAN_RC=0
     FCLOG="WARNING: downloadFile: Unexpected response (410) from ${DEAD}
 ERROR: Can't download urlhaus.ndb from ${DEAD}
@@ -764,7 +764,7 @@ ERROR: Update failed."
     case_
     [[ "${F_SEV[0]:-}" == low && "${F_TITLE[0]}" == "freshclam cannot download 1 extra signature source(s)" \
        && "${F_FIX[0]}" == "fix_clamav_custom_off $(printf '%q' "$DEAD")" && "${F_DETAIL[0]}" == *"urlhaus.example/…/urlhaus.ndb (HTTP 410)"* \
-       && "${F_DETAIL[0]}" == *"not downloaded either"*"sigs.example/shell.ldb"*"api.example/…/urlhaus_clamav.ndb"* \
+       && "${F_DETAIL[0]}" == *"listed after it, are no longer updated"*"sigs.example/shell.ldb, api.example/…/urlhaus_clamav.ndb"* \
        && "${F_DETAIL[0]}${F_MANUAL[0]}${F_NOW[0]}${F_AFTER[0]}" != *SECRETKEY123* && -z "$(bash -n <<< "${F_MANUAL[0]}" 2>&1)" \
        && "$(scans)" -eq 1 ]] && echo "failing-extra-source-found"
     # A later download of it that worked clears the failure.
@@ -774,10 +774,40 @@ ERROR: Update failed."
     echo x > "$CR/var/lib/clamav/shell.ldb"; echo x > "$CR/var/lib/clamav/urlhaus_clamav.ndb"; case_
     [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" != *"Extra signature"* ]] && echo "extra-sources-all-there"
     # The definitions fix updates only the official sets (and ExtraDatabase names that are names).
-    [[ "$(_freshclam_cmd)" == "freshclam --update-db=main --update-db=daily --update-db=bytecode --update-db=foo" ]] && echo "definitions-fix-only-official-sets"
+    [[ "$(_freshclam_cmd)" == "freshclam --update-db=main --update-db=daily --update-db=bytecode --update-db=safebrowsing" ]] && echo "definitions-fix-only-official-sets"
+    # A failure that may pass (one busy answer) is a note, with what freshclam did not reach.
+    rm -f "$CR/var/lib/clamav/urlhaus.ndb"
+    FCLOG="WARNING: downloadFile: Unexpected response (503) from ${DEAD}
+ERROR: Can't download urlhaus.ndb from ${DEAD}
+Update failed for custom database URL: ${DEAD}"; case_
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"could not download urlhaus.example/…/urlhaus.ndb (HTTP 503); it may work next time. freshclam stopped there, so these were not updated: sigs.example/shell.ldb, api.example/…/urlhaus_clamav.ndb."* ]] && echo "passing-failure-is-a-note"
+    # No connection in two updates, never worked: not coming back. Worked before: may pass.
+    CONN="ERROR: Download failed (7) ERROR:  Message: Could not connect to server
+ERROR: Can't download urlhaus.ndb from ${DEAD}
+Update failed for custom database URL: ${DEAD}"
+    FCLOG="${CONN}"$'\n'"${CONN}"; case_
+    [[ "${F_DETAIL[0]:-}" == *"urlhaus.example/…/urlhaus.ndb (download failed)"* && "${F_FIX[0]}" == fix_clamav_custom_off* ]] && echo "connection-failure-twice-is-a-finding"
+    FCLOG="urlhaus.ndb updated (version: custom database, sigs: 3)"$'\n'"${CONN}"$'\n'"${CONN}"; case_
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"(download failed); it may work next time"* ]] && echo "worked-before-is-a-note"
+    # One address that starts another's is not blamed for the other's failure.
+    P1="https://p.example/db/x.ndb"; P2="https://p.example/db/x.ndb.old"
+    printf 'DatabaseCustomURL %s\nDatabaseCustomURL %s\n' "$P1" "$P2" > "$CR/etc/freshclam.conf"
+    FCLOG="WARNING: downloadFile: Unexpected response (404) from ${P2}
+ERROR: Can't download x.ndb.old from ${P2}
+Update failed for custom database URL: ${P2}"; case_
+    [[ "${F_FIX[0]:-}" == "fix_clamav_custom_off $(printf '%q' "$P2")" ]] && echo "prefix-address-not-blamed"
+    # Only sources listed after the failing one are "no longer updated"; an earlier missing one is a note.
+    printf 'DatabaseCustomURL https://n.example/new.ndb\nDatabaseCustomURL https://b.example/bad.ndb\nDatabaseCustomURL https://l.example/later.ndb\nDatabaseCustomURL "https://z.example/z.ndb"\n' > "$CR/etc/freshclam.conf"
+    echo x > "$CR/var/lib/clamav/later.ndb"
+    FCLOG="WARNING: downloadFile: Unexpected response (410) from https://b.example/bad.ndb"; case_
+    [[ "${F_DETAIL[0]:-}" == *"no longer updated:"$'\n'"l.example/later.ndb, z.example/z.ndb"* && "${F_DETAIL[0]}" != *new.ndb* \
+       && "${CHECK_NOTE[check_deep_malware]:-}" == *"not in /var/lib/clamav yet: n.example/new.ndb "* ]] && echo "only-later-sources-are-blocked"
+    # A user name and password, and a quoted address.
+    [[ "$(_clamav_url_label "https://api:SECRET@sigs.example/db.ndb")" == "sigs.example/db.ndb" && "$(_clamav_url_label "https://SECRET@api.example/v1/x/db.ndb")" == "api.example/…/db.ndb" \
+       && "$(_clamav_custom_urls | tail -n 1)" == "https://z.example/z.ndb" ]] && echo "labels-without-credentials-and-quotes"
     # The fix, run on a copy of a freshclam.conf: only the failing line gets a #, the rest stays; undo puts it back.
     STATE_DIR="$W/clam-state"; RUN_ID=t5b; CURRENT_FINDING=0
-    CF="$W/clam-fc.conf"; printf '# a comment\nDatabaseCustomURL %s\n  DatabaseCustomURL %s\nDatabaseCustomURL %sX\nDatabaseCustomURL %s\n' "$DEAD" "$DEAD" "$DEAD" "$OK2" > "$CF"; cp "$CF" "$CF.orig"
+    CF="$W/clam-fc.conf"; printf '# a comment\nDatabaseCustomURL %s\n  DatabaseCustomURL %s\nDatabaseCustomURL %sX\nDatabaseCustomURL %s\nDatabaseCustomURL "%s"\r\n' "$DEAD" "$DEAD" "$DEAD" "$OK2" "$DEAD" > "$CF"; cp "$CF" "$CF.orig"
     apply_change() { printf '%s\n' "$1" > "$W/clam-fix.sh"; printf '%s\n' "$2" > "$W/clam-fix.undo"; return 0; }
     printf '#!/bin/bash\necho "systemctl $*" >> "%s"\n' "$W/clam-fix.log" > "$W/clam-bin/systemctl"
     fix_clamav_custom_off "$DEAD"; : > "$W/clam-fix.log"
@@ -787,9 +817,14 @@ ERROR: Update failed."
     [[ $rc -eq 0 && "$(sed -n 2p "$CF")" == "# Turned off by Security Check (it could not be downloaded): DatabaseCustomURL ${DEAD}" \
        && "$(sed -n 3p "$CF")" == "# Turned off by Security Check (it could not be downloaded):   DatabaseCustomURL ${DEAD}" \
        && "$(sed -n 4p "$CF")" == "DatabaseCustomURL ${DEAD}X" && "$(sed -n 5p "$CF")" == "DatabaseCustomURL ${OK2}" && "$(sed -n 1p "$CF")" == "# a comment" \
+       && "$(sed -n 6p "$CF")" == "# Turned off by Security Check (it could not be downloaded): DatabaseCustomURL \"${DEAD}\""$'\r' \
        && "$(cat "$W/clam-fix.log")" == "systemctl try-restart clamav-freshclam.service" ]] && echo "extra-source-fix-comments-only-that-line"
     PATH="$W/clam-bin:$PATH" bash -c 'set -euo pipefail; source "$1"' _ "$W/clam-fix.undo"
     cmp -s "$CF" "$CF.orig" && echo "extra-source-fix-undo"
+    # Nothing left to turn off: the fix fails and the file stays as it was.
+    printf 'DatabaseCustomURL %s\n' "$OK2" > "$CF"; cp "$CF" "$CF.orig"
+    PATH="$W/clam-bin:$PATH" bash -c 'set -euo pipefail; source "$1"' _ "$W/clam-fix.sh"; rc=$?
+    [[ $rc -ne 0 ]] && cmp -s "$CF" "$CF.orig" && echo "extra-source-fix-fails-when-nothing-matches"
 ) > "$W/clam.out" 2>&1
 for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-not-offered-again no-clamav-is-an-optional-fix \
          clamtk-alone-scans-without-setup clamtk-scans-while-clamui-is-not-set-up clamscan-without-freshclam no-definitions-offers-download \
@@ -803,7 +838,9 @@ for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-no
          old-definitions-without-freshclam scan-uses-the-database-directory layering-records-the-restart manual-steps-can-be-pasted \
          no-definitions-without-freshclam no-error-trap quoted-database-directory failing-extra-source-found \
          later-success-clears-and-missing-is-a-note extra-sources-all-there definitions-fix-only-official-sets \
-         extra-source-fix-comments-only-that-line extra-source-fix-undo; do
+         extra-source-fix-comments-only-that-line extra-source-fix-undo passing-failure-is-a-note connection-failure-twice-is-a-finding \
+         worked-before-is-a-note prefix-address-not-blamed only-later-sources-are-blocked labels-without-credentials-and-quotes \
+         extra-source-fix-fails-when-nothing-matches; do
     expect "$W/clam.out" "$t" "$t"
 done
 
