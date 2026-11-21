@@ -1991,7 +1991,7 @@ for line in open(sys.argv[1]):
         ui_busy_start() { :; }; ui_busy_stop() { :; }; ui_interactive() { [[ $INTER == yes ]]; }
         fe_clear() { : > "$W/fe-pkg"; : > "$W/fe-asked"; : > "$W/fe-msg"; }
         fe_case() { fe_clear; install_front_end; }
-        # PySide6 missing on Bazzite: asked (a change: no default, "Not now" when nobody answers), layered, recorded.
+        # PySide6 missing on Bazzite: asked (a change: careful, Enter and nobody answering mean "Not now"), layered, recorded.
         fe_case
         [[ "$_FRONT_RESULT" == restart && "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent python3-pyside6" \
            && "$(cat "$W/fe-asked")" == "Install|Not now|n|careful" && "$(_front_pkgs_recorded)" == python3-pyside6 \
@@ -2135,6 +2135,20 @@ for line in open(sys.argv[1]):
         rm -f "$STATE_DIR/front-end-packages"; fe_clear
         _install_app_files() { return 0; }; _timer_installed() { return 1; }; install_app
         grep -q "^MSG Security Check is installed.*Restart the PC to use Security Check's window: python3-pyside6 is added" "$W/fe-msg" && echo "front-end-install-says-restart"
+        # The check-up's "remove layered packages" fix says that removing
+        # them ends the window (and is high risk); other packages do not.
+        # (The checklist stub writes the items to a file and picks none.)
+        : > "$W/fe-layered"
+        (
+            ui_checklist() { shift; while [[ $# -ge 3 ]]; do printf '%s|%s|%s\n' "$1" "$(_ui_item_part "$2" 2)" "$(_ui_item_part "$2" 3)" >> "$W/fe-layered"; shift 3; done; return 1; }
+            rpm() { return 1; }
+            apply_change() { echo "applied" >> "$W/fe-layered"; return 1; }
+            fix_layered_remove python3-pyside6 kf6-kirigami htop || true
+        )
+        grep -q "^python3-pyside6|high|Security Check's window needs it" "$W/fe-layered" \
+            && grep -q "^kf6-kirigami|high|Security Check's window needs it" "$W/fe-layered" \
+            && grep -q "^htop|medium|Its programs are gone" "$W/fe-layered" \
+            && ! grep -q "^htop|.*Security Check" "$W/fe-layered" && echo "front-end-layered-fix-warns"
     )
 
     # A root run started through pkexec that stops with an error says why.
@@ -2431,7 +2445,7 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          failed-fix-left-says-so rolled-back-attempt-not-an-undo rollback-interrupted-is-marked failed-fix-left-not-twice-on-terminal \
          front-end-layered-on-install front-end-kirigami-too front-end-declined front-end-pending-not-asked front-end-failure-shown \
          front-end-nothing-to-do front-end-dnf front-end-no-tool front-end-removed-with-the-app front-end-offered-once front-end-install-says-restart \
-         front-end-layered-but-broken front-end-probe-without-desktop-user front-end-list-link-ignored front-end-dnf-keeps-what-others-need front-end-offer-wired \
+         front-end-layered-but-broken front-end-probe-without-desktop-user front-end-list-link-ignored front-end-dnf-keeps-what-others-need front-end-offer-wired front-end-layered-fix-warns \
          front-end-probe-only-missing-pyside front-end-installed-but-broken front-end-nobody-asked-not-remembered front-end-gone-already \
          front-end-busy-rpm-keeps-list-and-app front-end-probe-unknown-offers-nothing front-end-remove-app-anyway front-end-rpm-read-in-english \
          front-end-dnf-gone-already front-end-booted-layer-offered front-end-unknown-status-keeps-list front-end-uninstall-failure-keeps-app \

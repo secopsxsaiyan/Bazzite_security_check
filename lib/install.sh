@@ -293,8 +293,9 @@ _pkg_run() {
 # use from the next start), "restart" (layered, or already waiting: active
 # after the restart), "declined", "failed", "manual" (no package tool known
 # here) or "broken" (installed, or layered in the running image, yet the
-# window still cannot run). _FRONT_MISSING: the packages that were missing. The question
-# defaults to "Not now": a lost dialog or nobody to ask adds nothing.
+# window still cannot run). _FRONT_MISSING: the packages that were missing.
+# The question defaults to "Not now": a lost dialog or nobody to ask adds
+# nothing.
 _FRONT_RESULT=""; _FRONT_MISSING=""; _FRONT_BROKEN=""
 install_front_end() {
     local miss tool p left="" it=it they=It is=is need=needs

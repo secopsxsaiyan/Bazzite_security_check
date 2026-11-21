@@ -293,6 +293,7 @@ fix_layered_remove() {
         risk=medium
         warn="Its programs are gone after the reboot; install them as a Flatpak, with Homebrew or in a Distrobox if you still need them."
         case "$p" in
+            python3-pyside6|kf6-kirigami) risk=high; warn="Security Check's window needs it: after the reboot Security Check uses plain KDE dialogs. Installing the app again (--install) offers to add it back." ;;
             clamav*|clamd*) risk=high; warn="The deep check's ClamAV malware scan, ClamUI and any scan you run stop working after the reboot." ;;
             lact*) risk=high; warn="LACT controls your GPU's clocks, power limits and fan curve; what it applies stops after the reboot." ;;
             *akmod*|*kmod*|*nvidia*|mesa*|gamescope*|*firmware*|*driver*) risk=high; warn="A driver or graphics component: removing it can break graphics or gaming." ;;
