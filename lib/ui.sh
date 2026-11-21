@@ -788,7 +788,9 @@ _kd() {
 # ui_choice3 swapped (see there): there exit 1 means "yes", so it may only
 # come from kdialog itself. kdialog runs under "sh -c", which prints its
 # exit status after it; without that line (no desktop user, runuser or env
-# failing) or above 2, kdialog counts as failed: 255, as in _kd.
+# failing) or above 2, kdialog counts as failed: 255, as in _kd. (Qt exits
+# 1 itself only when a lost Wayland connection cannot be restored with
+# QT_WAYLAND_RECONNECT set; _user_env never passes that variable on.)
 _kd_answer() {
     local out rc flag="${RUN_TMP:+${RUN_TMP}/kdialog-failed}"
     if [[ -n "$flag" && -e "$flag" ]]; then

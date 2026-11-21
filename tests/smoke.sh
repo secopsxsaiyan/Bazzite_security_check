@@ -1639,6 +1639,14 @@ for line in open(sys.argv[1]):
             PATH="$W/kd-own-bin:$PATH"
             ui_choice3 "q" "" Apply Skip Stop careful; r3=$?
             [[ "$r3" == 0 ]] && echo "kdialog-own-exit-1-is-yes" || echo "own exit 1 gave $r3"
+            # ... and its 0 and 2 are Skip and Stop; 3 is kdialog failing.
+            got=""
+            for k in 0 2 3; do
+                rm -f "$RUN_TMP/kdialog-failed"; UI_MODE=kde
+                printf '#!/bin/sh\nexit %s\n' "$k" > "$W/kd-own-bin/kdialog"
+                ui_choice3 "q" "" Apply Skip Stop careful; got+="$?$([[ -e "$RUN_TMP/kdialog-failed" ]] && echo f || true) "
+            done
+            [[ "$got" == "1 2 1f " ]] && echo "kdialog-own-exits-mapped" || echo "own exits gave: $got"
         )
         # Every question whose Yes changes the PC there and then is marked.
         marked=1
@@ -2067,7 +2075,8 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          kept-becomes-note kept-not-scored kept-labelled kept-saved kept-untick-counts-again kept-symlink-refused dashboard-keep-action affects-change-not-unticked kept-exact-ports-and-severity anticheat-lockdown-mark-only-when-added detect-honest-steam-and-servers sunshine-admin-port-not-streaming kept-untick-holds-in-session kept-subset-entry-kept kept-worse-reticked kept-overlap-merged kept-overlap-untick-all kept-retick-restores-widest kept-any-level-stays-any ui-item-parts choose-input-json choose-answer-offered-only confirm-answer-checked check-answer-checked check-input-json check-page-fixes-offered-only port-close-risk firewall-list-no-low-only fix-item-maybe-medium confirm-fallback-and-close-skips dialog-answer-checked dialog-button-in-range kept-no-date-no-since \
          yesno-enter-follows-the-default-never-a-change choice3-enter-follows-the-default-never-a-change apply-fallback-enter-is-skip \
          undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked \
-         kdialog-enter-is-not-yes kdialog-failure-asks-on kdialog-wrapper-failure-is-not-yes kdialog-own-exit-1-is-yes; do
+         kdialog-enter-is-not-yes kdialog-failure-asks-on kdialog-wrapper-failure-is-not-yes kdialog-own-exit-1-is-yes \
+         kdialog-own-exits-mapped; do
     expect "$W/t6.out" "$m" "$m"
 done
 
@@ -2225,9 +2234,9 @@ PYEOF
     ui_app wizard '{}' > /dev/null; [[ $? -eq 4 ]] && echo "front-not-used-again"
     # With the front end gone, a question is asked with kdialog (whose
     # Enter, exit 0, is the "No" answer of a question that defaults to No).
-    _as_desktop_user() { printf '%s\n' "$@" >> "$W/front-kd"; return 0; }
+    _as_desktop_user() { printf '%s\n' "$@" >> "$W/front-kd"; echo "bsa-kdialog-exit:0"; return 0; }
     ! ui_yesno "Continue?" && [[ "$(grep -A1 -x -- --yes-label "$W/front-kd" | tail -n 1)" == No && "$(grep -A1 -x -- --no-label "$W/front-kd" | tail -n 1)" == Yes ]] \
-        && echo "front-gone-kdialog-asks"
+        && [[ ! -e "$RUN_TMP/kdialog-failed" && "$UI_MODE" == kde ]] && echo "front-gone-kdialog-asks"
 
     new_run; ui_front_start
     a=$(ui_app wizard '{"fail":true}'); rc=$?
