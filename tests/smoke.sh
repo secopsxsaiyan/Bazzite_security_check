@@ -2043,6 +2043,10 @@ for line in open(sys.argv[1]):
         RUN_ID="t6bad"
         _run_change "t6 bad" "echo half > $W/t6-bad; exit 1" "exit 4" > /dev/null 2>&1
         [[ -e "$W/t6-bad" && "$(compgen -G "$STATE_DIR/undo/t6bad/*-undo.sh" | wc -l)" -eq 1 ]] && echo "failed-rollback-keeps-undo-once"
+        # ... one left as it is by the person says so in a window too ...
+        RUN_ID="t6leave"; ui_yesno() { return 1; }; ui_interactive() { return 0; }; ui_msg() { printf '%s\n' "$1" > "$W/t6-leave-msg"; }
+        _run_change "t6 leave" "echo half > $W/t6-leave; exit 1" "rm -f $W/t6-leave" > /dev/null 2>&1
+        [[ -f "$STATE_DIR/undo/t6leave/01-undo.sh" ]] && grep -q '"t6 leave" was left as it is. Its undo step was kept' "$W/t6-leave-msg" && echo "failed-fix-left-says-so"
         # ... and one interrupted at the rollback question keeps it too.
         RUN_ID="t6hup"; ui_yesno() { kill -HUP "$BASHPID"; sleep 1; return 1; }
         ( trap _on_signal INT TERM HUP; _run_change "t6 hup" "echo half > $W/t6-hup; exit 1" "rm -f $W/t6-hup" ) > /dev/null 2>&1
@@ -2119,7 +2123,8 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked \
          kdialog-enter-is-not-yes kdialog-failure-asks-on kdialog-wrapper-failure-is-not-yes kdialog-own-exit-1-is-yes \
          kdialog-own-exits-mapped failed-fix-left-keeps-undo failed-fix-rolled-back-keeps-nothing tty-enter-is-no-for-a-change \
-         failed-rollback-keeps-undo-once failed-fix-interrupted-at-question-keeps-undo action-end-after-lost-window; do
+         failed-rollback-keeps-undo-once failed-fix-interrupted-at-question-keeps-undo action-end-after-lost-window \
+         failed-fix-left-says-so; do
     expect "$W/t6.out" "$m" "$m"
 done
 # --install and the other actions that change the PC only after a "yes"

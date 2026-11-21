@@ -348,6 +348,7 @@ Its undo step was kept: Undo on the dashboard, or --undo, can try again."
     # Left as it is (also when nobody could answer): the undo step stays
     # on record, so --undo can put it back later.
     print_status "INFO" "The undo step of \"${title}\" was kept: Undo on the dashboard, or --undo, can put it back later."
+    ui_interactive && ui_msg "\"${title}\" was left as it is. Its undo step was kept: Undo on the dashboard, or --undo, can put it back later."
     return 3
 }
 
