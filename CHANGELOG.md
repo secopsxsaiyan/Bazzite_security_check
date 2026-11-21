@@ -15,6 +15,19 @@ All notable changes to this project are listed here. The format follows
   as the new "UI test" job, in a Fedora container.
 - `docs/ui.md` describes the front end for developers: the protocol between
   the root side and the window, what a page is, and how to add one.
+- Installing the app (`--install`) offers to add what Security Check's
+  window needs when it is missing: `python3-pyside6` (Bazzite's KDE images
+  have Kirigami but not PySide6) and, if needed, Kirigami, with the Qt
+  libraries they need. On Bazzite and other Fedora Atomic images they are
+  layered with rpm-ostree and used after the next restart; on Fedora they
+  come from dnf. The question is a change to the PC: Enter does not answer
+  it, and with nobody to answer (or a dialog that fails) nothing is added.
+  An app installed or updated by an older version asks once when a check-up
+  starts with KDE dialogs (not in a report-only run; again after a failed
+  install). `--uninstall` offers to remove what was added (default: keep
+  it); with dnf, not when other installed programs need it. When removing
+  them fails, the app stays installed unless "Remove anyway" is chosen,
+  and `--uninstall` then ends with status 1.
 
 ### Changed
 
