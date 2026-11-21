@@ -540,9 +540,10 @@ for u in urls:
 
 # _clamav_custom_check DIR URL... — the extra sources. One that is not
 # coming back is a finding whose fix turns it off; one that failed only
-# lately is a note. Either way freshclam stopped there, so the sources
-# listed after the first failing one are no longer updated: both name
-# them. A source that is only missing is a note too.
+# lately is a note. Either way freshclam stopped there (unless it was only
+# rate-limited, 429, after which it goes on), so the sources listed after
+# the first such failure are no longer updated: both name them. A source
+# that is only missing is a note too.
 _clamav_custom_check() {
     local dir="$1" u r g n=0 labels="" after="" manual="" missing="" passing="" first="" firstgone=""
     shift
