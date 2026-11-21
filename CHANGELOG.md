@@ -28,7 +28,7 @@ All notable changes to this project are listed here. The format follows
   it); with dnf, not when other installed programs need it. When removing
   them fails, the app stays installed unless "Remove anyway" is chosen,
   and `--uninstall` then ends with status 1. The check-up's fix that
-  removes layered packages marks these two as high risk and says that
+  removes layered packages marks these two as high risk on KDE and says that
   without them Security Check goes back to plain KDE dialogs.
 
 ### Changed

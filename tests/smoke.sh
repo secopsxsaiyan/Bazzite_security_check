@@ -2136,19 +2136,36 @@ for line in open(sys.argv[1]):
         _install_app_files() { return 0; }; _timer_installed() { return 1; }; install_app
         grep -q "^MSG Security Check is installed.*Restart the PC to use Security Check's window: python3-pyside6 is added" "$W/fe-msg" && echo "front-end-install-says-restart"
         # The check-up's "remove layered packages" fix says that removing
-        # them ends the window (and is high risk); other packages do not.
-        # (The checklist stub writes the items to a file and picks none.)
-        : > "$W/fe-layered"
-        (
-            ui_checklist() { shift; while [[ $# -ge 3 ]]; do printf '%s|%s|%s\n' "$1" "$(_ui_item_part "$2" 2)" "$(_ui_item_part "$2" 3)" >> "$W/fe-layered"; shift 3; done; return 1; }
-            rpm() { return 1; }
-            apply_change() { echo "applied" >> "$W/fe-layered"; return 1; }
-            fix_layered_remove python3-pyside6 kf6-kirigami htop || true
-        )
-        grep -q "^python3-pyside6|high|Security Check's window needs it" "$W/fe-layered" \
-            && grep -q "^kf6-kirigami|high|Security Check's window needs it" "$W/fe-layered" \
+        # them ends the window (and is high risk), on KDE only and only for
+        # a layer that is active; other packages, other desktops and an
+        # inactive request keep the usual text. Picking none
+        # applies nothing. (The checklist stub writes the items to a file.)
+        fe_layered() {
+            : > "$W/fe-layered"
+            (
+                DESKTOP_ENV="$1"
+                RPMOSTREE_JSON="{\"deployments\": [{\"booted\": true, \"requested-packages\": [\"htop\", \"kf6-kirigami\", \"python3-pyside6\"], \"packages\": [${2:-}]}]}"
+                ui_checklist() { shift; while [[ $# -ge 3 ]]; do printf '%s|%s|%s\n' "$1" "$(_ui_item_part "$2" 2)" "$(_ui_item_part "$2" 3)" >> "$W/fe-layered"; shift 3; done; return 1; }
+                rpm() { return 1; }
+                apply_change() { echo "applied" >> "$W/fe-layered"; return 1; }
+                fix_layered_remove python3-pyside6 kf6-kirigami htop || true
+            )
+        }
+        fe_warn="Security Check's window needs it: after the reboot Security Check uses plain KDE dialogs. Installing the app again (--install) offers to add it back."
+        fe_layered kde '"htop", "kf6-kirigami", "python3-pyside6"'
+        if grep -qxF "python3-pyside6|high|${fe_warn}" "$W/fe-layered" \
+            && grep -qxF "kf6-kirigami|high|${fe_warn}" "$W/fe-layered" \
             && grep -q "^htop|medium|Its programs are gone" "$W/fe-layered" \
-            && ! grep -q "^htop|.*Security Check" "$W/fe-layered" && echo "front-end-layered-fix-warns"
+            && ! grep -q "^htop|.*Security Check" "$W/fe-layered" && ! grep -q "^applied" "$W/fe-layered"; then
+            fe_layered gnome '"htop", "kf6-kirigami", "python3-pyside6"'
+            if grep -q "^python3-pyside6|medium|Its programs are gone" "$W/fe-layered" \
+                && ! grep -q "Security Check" "$W/fe-layered" && ! grep -q "^applied" "$W/fe-layered"; then
+                # Kirigami requested but already in the image (inactive): no warning for it.
+                fe_layered kde '"htop", "python3-pyside6"'
+                grep -qxF "python3-pyside6|high|${fe_warn}" "$W/fe-layered" \
+                    && grep -q "^kf6-kirigami|medium|Its programs are gone" "$W/fe-layered" && echo "front-end-layered-fix-warns"
+            fi
+        fi
     )
 
     # A root run started through pkexec that stops with an error says why.

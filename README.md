@@ -83,8 +83,8 @@ installed or updated by an older version asks once when a check-up starts
 choose to remove it anyway. If a system update ever fails because of the layered
 packages, remove them with `rpm-ostree uninstall python3-pyside6` (and
 `kf6-kirigami`, if it was added too). The check-up's "Layered packages" fix
-can remove them too, and warns that Security Check then goes back to plain
-KDE dialogs.
+can remove them too, and on KDE warns that Security Check then goes back to
+plain KDE dialogs.
 
 The setup wizard, the dashboard, the fixes and Settings are pages of one
 Kirigami (Plasma) window when PySide6 and Kirigami are installed (see
