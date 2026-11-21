@@ -572,6 +572,7 @@ echo "== 5. every fix builds valid shell commands"
     run fix_clamav_defs not-found
     run fix_clamav_defs masked-runtime
     run fix_clamav_defs enabled-runtime
+    run fix_clamav_custom_off "https://a.example/x.ndb" "http://b.example/p/key123/y.hdb"
 ) > "$W/fix5.out" 2>&1
 n_ok=$(grep -c '^OK ' "$W/fix5.out" || true)
 if grep -q '^BAD ' "$W/fix5.out"; then bad "invalid fix commands:"; grep -A8 '^BAD ' "$W/fix5.out"
@@ -657,7 +658,7 @@ echo "== 5b. the malware scan and ClamAV's setup"
     # With the service on, the manual steps do not tell to turn it on.
     SVC=enabled; defs; case_
     [[ "${F_FIX[0]:-}" == "fix_clamav_defs enabled" && "${F_AFTER[0]}" == "definitions downloaded now" \
-       && "$(tr '\n' '|' <<< "${F_MANUAL[0]}")" == "# The service holds the lock freshclam needs: stop it first.|sudo systemctl stop clamav-freshclam.service|sudo freshclam|sudo systemctl start clamav-freshclam.service|" \
+       && "$(tr '\n' '|' <<< "${F_MANUAL[0]}")" == "# The service holds the lock freshclam needs: stop it first.|sudo systemctl stop clamav-freshclam.service|sudo freshclam --update-db=main --update-db=daily --update-db=bytecode|sudo systemctl start clamav-freshclam.service|" \
        && "$(bash -n <<< "${F_MANUAL[0]}" 2>&1)" == "" ]] && echo "manual-steps-follow-the-service"
     # Every way the manual steps can come out is shell that can be pasted.
     pasteable=1
@@ -748,6 +749,47 @@ echo "== 5b. the malware scan and ClamAV's setup"
     apply_change() { printf '%s' "$4" > "$W/clam-reboot"; return 0; }
     fix_clamav_install clamav clamav-freshclam
     [[ -n "$(cat "$W/clam-reboot")" ]] && echo "layering-records-the-restart"
+
+    # Extra signature sources (DatabaseCustomURL).
+    DEAD="https://urlhaus.example/downloads/urlhaus.ndb"; OK2="http://sigs.example/shell.ldb"
+    KEYED="https://api.example/v2/files/exports/SECRETKEY123/urlhaus_clamav.ndb"
+    printf 'DatabaseMirror database.clamav.net\nDatabaseCustomURL %s\n  DatabaseCustomURL %s\nDatabaseCustomURL %s\nExtraDatabase foo\nExtraDatabase a;b\n' "$DEAD" "$OK2" "$KEYED" > "$CR/etc/freshclam.conf"
+    defs 0; HAVE="clamscan freshclam"; SVC=enabled; SCAN_OUT=""; SCAN_RC=0
+    FCLOG="WARNING: downloadFile: Unexpected response (410) from ${DEAD}
+ERROR: Can't download urlhaus.ndb from ${DEAD}
+Update failed for custom database URL: ${DEAD}
+ERROR: Update failed."
+    _clamav_fc_log() { printf '%s\n' "$FCLOG"; }
+    # The definitions are looked for in /var/lib/clamav again (freshclam.conf no longer moves them).
+    case_
+    [[ "${F_SEV[0]:-}" == low && "${F_TITLE[0]}" == "freshclam cannot download 1 extra signature source(s)" \
+       && "${F_FIX[0]}" == "fix_clamav_custom_off $(printf '%q' "$DEAD")" && "${F_DETAIL[0]}" == *"urlhaus.example/…/urlhaus.ndb (HTTP 410)"* \
+       && "${F_DETAIL[0]}" == *"not downloaded either"*"sigs.example/shell.ldb"*"api.example/…/urlhaus_clamav.ndb"* \
+       && "${F_DETAIL[0]}${F_MANUAL[0]}${F_NOW[0]}${F_AFTER[0]}" != *SECRETKEY123* && -z "$(bash -n <<< "${F_MANUAL[0]}" 2>&1)" \
+       && "$(scans)" -eq 1 ]] && echo "failing-extra-source-found"
+    # A later download of it that worked clears the failure.
+    FCLOG+=$'\nurlhaus.ndb updated (version: custom database, sigs: 12)'; echo x > "$CR/var/lib/clamav/urlhaus.ndb"; case_
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"not in /var/lib/clamav yet: sigs.example/shell.ldb, api.example/…/urlhaus_clamav.ndb"* ]] && echo "later-success-clears-and-missing-is-a-note"
+    # No failure in the log, nothing missing: nothing to say.
+    echo x > "$CR/var/lib/clamav/shell.ldb"; echo x > "$CR/var/lib/clamav/urlhaus_clamav.ndb"; case_
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" != *"Extra signature"* ]] && echo "extra-sources-all-there"
+    # The definitions fix updates only the official sets (and ExtraDatabase names that are names).
+    [[ "$(_freshclam_cmd)" == "freshclam --update-db=main --update-db=daily --update-db=bytecode --update-db=foo" ]] && echo "definitions-fix-only-official-sets"
+    # The fix, run on a copy of a freshclam.conf: only the failing line gets a #, the rest stays; undo puts it back.
+    STATE_DIR="$W/clam-state"; RUN_ID=t5b; CURRENT_FINDING=0
+    CF="$W/clam-fc.conf"; printf '# a comment\nDatabaseCustomURL %s\n  DatabaseCustomURL %s\nDatabaseCustomURL %sX\nDatabaseCustomURL %s\n' "$DEAD" "$DEAD" "$DEAD" "$OK2" > "$CF"; cp "$CF" "$CF.orig"
+    apply_change() { printf '%s\n' "$1" > "$W/clam-fix.sh"; printf '%s\n' "$2" > "$W/clam-fix.undo"; return 0; }
+    printf '#!/bin/bash\necho "systemctl $*" >> "%s"\n' "$W/clam-fix.log" > "$W/clam-bin/systemctl"
+    fix_clamav_custom_off "$DEAD"; : > "$W/clam-fix.log"
+    sed -i "s|/etc/freshclam.conf|$CF|g" "$W/clam-fix.sh" "$W/clam-fix.undo"
+    mkdir -p "$STATE_DIR/backups/$RUN_ID/f0$(dirname "$CF")"   # the backup's folder, for the file's new place
+    PATH="$W/clam-bin:$PATH" bash -c 'set -euo pipefail; source "$1"' _ "$W/clam-fix.sh"; rc=$?
+    [[ $rc -eq 0 && "$(sed -n 2p "$CF")" == "# Turned off by Security Check (it could not be downloaded): DatabaseCustomURL ${DEAD}" \
+       && "$(sed -n 3p "$CF")" == "# Turned off by Security Check (it could not be downloaded):   DatabaseCustomURL ${DEAD}" \
+       && "$(sed -n 4p "$CF")" == "DatabaseCustomURL ${DEAD}X" && "$(sed -n 5p "$CF")" == "DatabaseCustomURL ${OK2}" && "$(sed -n 1p "$CF")" == "# a comment" \
+       && "$(cat "$W/clam-fix.log")" == "systemctl try-restart clamav-freshclam.service" ]] && echo "extra-source-fix-comments-only-that-line"
+    PATH="$W/clam-bin:$PATH" bash -c 'set -euo pipefail; source "$1"' _ "$W/clam-fix.undo"
+    cmp -s "$CF" "$CF.orig" && echo "extra-source-fix-undo"
 ) > "$W/clam.out" 2>&1
 for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-not-offered-again no-clamav-is-an-optional-fix \
          clamtk-alone-scans-without-setup clamtk-scans-while-clamui-is-not-set-up clamscan-without-freshclam no-definitions-offers-download \
@@ -759,7 +801,9 @@ for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-no
          runtime-enable-made-permanent corrupted-cvd-is-a-database-error runtime-mask-fix-and-undo start-failure-keeps-the-download-status \
          start-failure-fails-the-fix runtime-enable-undo-restores-it unreadable-cvd-is-a-database-error broken-definitions-without-freshclam \
          old-definitions-without-freshclam scan-uses-the-database-directory layering-records-the-restart manual-steps-can-be-pasted \
-         no-definitions-without-freshclam no-error-trap quoted-database-directory; do
+         no-definitions-without-freshclam no-error-trap quoted-database-directory failing-extra-source-found \
+         later-success-clears-and-missing-is-a-note extra-sources-all-there definitions-fix-only-official-sets \
+         extra-source-fix-comments-only-that-line extra-source-fix-undo; do
     expect "$W/clam.out" "$t" "$t"
 done
 

@@ -408,6 +408,140 @@ req = [r for r in req if isinstance(r, list)]
 print(" ".join(p for p in sys.argv[1:] if any(p in r for r in req)))' "$@" <<< "$RPMOSTREE_JSON" 2>/dev/null || true
 }
 
+# _clamav_official_dbs — the definitions freshclam takes from ClamAV's own
+# mirrors: main, daily and bytecode, and any ExtraDatabase in
+# freshclam.conf. The definitions fix updates only these (--update-db), so
+# an extra source that fails does not fail it.
+_clamav_official_dbs() {
+    local x
+    printf '%s\n' main daily bytecode
+    while IFS= read -r x; do
+        [[ "$x" =~ ^[A-Za-z0-9._-]+$ ]] && printf '%s\n' "$x"
+    done < <(sed -n 's/^[[:space:]]*ExtraDatabase[[:space:]]\{1,\}\([^[:space:]]\{1,\}\)[[:space:]]*$/\1/p' "$(_r /etc/freshclam.conf)" 2>/dev/null)
+    return 0
+}
+
+# _freshclam_cmd — the freshclam command of the definitions fix.
+_freshclam_cmd() {
+    local d c="freshclam"
+    while IFS= read -r d; do c+=" --update-db=${d}"; done < <(_clamav_official_dbs)
+    printf '%s' "$c"
+}
+
+# _clamav_custom_urls — the extra signature sources freshclam.conf lists
+# (DatabaseCustomURL), one per line, in the file's order.
+_clamav_custom_urls() {
+    sed -n 's/^[[:space:]]*DatabaseCustomURL[[:space:]]\{1,\}\([^[:space:]]\{1,\}\)[[:space:]]*$/\1/p' "$(_r /etc/freshclam.conf)" 2>/dev/null || true
+}
+
+# _clamav_custom_file URL — the name freshclam saves URL's database under.
+_clamav_custom_file() {
+    local u="${1%%[?#]*}"
+    printf '%s' "${u##*/}"
+}
+
+# _clamav_url_label URL — URL as the report shows it: the host and the
+# file name only, since the path between them can hold an access key.
+_clamav_url_label() {
+    local u="${1%%[?#]*}" rest
+    rest="${u#*://}"
+    if [[ "$rest" == */*/* ]]; then
+        printf '%s/…/%s' "${rest%%/*}" "${u##*/}"
+    else
+        printf '%s' "$rest"
+    fi
+}
+
+# _clamav_fc_log — the recent messages of clamav-freshclam.service.
+_clamav_fc_log() {
+    journalctl -u clamav-freshclam.service --since "-3 days" -n 3000 --no-pager -q -o cat 2>/dev/null || true
+}
+
+# _clamav_custom_failed URL... — "URL<TAB>reason" for each URL whose last
+# download in freshclam's log failed (a later success clears it).
+_clamav_custom_failed() {
+    _clamav_fc_log | python3 -I -c '
+import re, sys
+urls = sys.argv[1:]
+files = {u: u.split("?")[0].split("#")[0].rsplit("/", 1)[-1] for u in urls}
+state = {}
+for line in sys.stdin:
+    line = line.strip()
+    for u in urls:
+        if u in line:
+            m = re.search(r"Unexpected response \((\d+)\)", line)
+            if m:
+                state[u] = "HTTP " + m.group(1)
+            elif "Update failed for custom database URL" in line or "Can\x27t download" in line:
+                if not state.get(u, "ok").startswith("HTTP"):
+                    state[u] = "download failed"
+        elif files[u] and re.match(re.escape(files[u]) + r" (database )?(is up-to-date|updated)", line):
+            state[u] = "ok"
+for u in urls:
+    if state.get(u, "ok") != "ok":
+        print(u + "\t" + state[u])' "$@" 2>/dev/null || true
+}
+
+# _clamav_custom_check DIR URL... — the extra sources: a finding for those
+# freshclam fails to download (and the ones it then never reaches, as it
+# stops at the first that fails), a note for ones that are just missing.
+_clamav_custom_check() {
+    local dir="$1" u r line n=0 labels="" blocked="" manual="" missing=""
+    shift
+    local -a urls=("$@") bad=()
+    local -A why=()
+    while IFS=$'\t' read -r u r; do
+        [[ -n "$u" ]] || continue
+        bad+=("$u"); why["$u"]="$r"
+    done < <(_clamav_custom_failed "${urls[@]}")
+    for u in "${urls[@]}"; do
+        [[ -n "${why[$u]:-}" ]] && continue
+        [[ -f "$(_r "$dir")/$(_clamav_custom_file "$u")" ]] && continue
+        if (( ${#bad[@]} > 0 )); then
+            blocked+="${blocked:+, }$(_clamav_url_label "$u")"
+        else
+            missing+="${missing:+, }$(_clamav_url_label "$u")"
+        fi
+    done
+    [[ -n "$missing" ]] && check_note "Extra signature sources in freshclam.conf not in ${dir} yet: ${missing} (see: journalctl -u clamav-freshclam.service)"
+    (( ${#bad[@]} > 0 )) || return 0
+    manual="# In /etc/freshclam.conf, put a # in front of:"
+    for u in "${bad[@]}"; do
+        n=$(( n + 1 ))
+        labels+="${labels:+$'\n'}$(_clamav_url_label "$u") (${why[$u]})"
+        manual+=$'\n'"#   DatabaseCustomURL $(_clamav_url_label "$u")"
+    done
+    manual+=$'\n'"sudo systemctl try-restart clamav-freshclam.service"
+    finding low "freshclam cannot download ${n} extra signature source(s)" \
+"freshclam.conf lists extra virus signature sources (DatabaseCustomURL). The
+last tries to download these failed:
+${labels}$([[ -n $blocked ]] && printf '\nfreshclam stops at a source that fails, so these are not downloaded either:\n%s' "$blocked" || true)
+Each update of the definitions ends in an error while they stay listed." \
+        "$manual" fix_clamav_custom_off "${bad[@]}"
+    finding_change "${n} extra source(s) fail to download" "turned off in /etc/freshclam.conf$([[ -n $blocked ]] && echo "; the others download again" || true)"
+    return 0
+}
+
+# fix_clamav_custom_off URL... — put a # in front of these extra sources
+# in /etc/freshclam.conf (the file keeps its owner, mode and label), then
+# let the running update service read it again.
+fix_clamav_custom_off() {
+    local f=/etc/freshclam.conf u qurls="" script
+    for u in "$@"; do qurls+=" $(_q "$u")"; done
+    script="$(_backup_cmd "$f")
+urls=\$(printf '%s\n'${qurls})
+new=\$(URLS=\"\$urls\" awk 'BEGIN { n = split(ENVIRON[\"URLS\"], u, \"\\n\"); for (i = 1; i <= n; i++) off[u[i]] = 1 }
+{ s = \$0; sub(/^[ \\t]+/, \"\", s)
+  if (s ~ /^DatabaseCustomURL[ \\t]/) { v = s; sub(/^DatabaseCustomURL[ \\t]+/, \"\", v); sub(/[ \\t]+\$/, \"\", v)
+    if (v in off) { print \"# Turned off by Security Check (it could not be downloaded): \" \$0; next } }
+  print }' $f)
+printf '%s\n' \"\$new\" > $f
+systemctl try-restart clamav-freshclam.service"
+    apply_change "$script" "$(_restore_cmd "$f")
+systemctl try-restart clamav-freshclam.service" \
+        "Only these lines change; the other extra sources stay as they are."
+}
+
 # _clamav_not_set_up CLAMUI HOST MISSING... — part of ClamAV is not
 # installed: the scanner (clamscan, package clamav) or freshclam, which
 # keeps its virus definitions up to date. With ClamUI that matters most:
@@ -503,7 +637,7 @@ fix_clamav_defs() {
         off)            undo="systemctl disable --now ${unit}" ;;
     esac
     [[ -n "$after" ]] && script+="systemctl stop ${unit} 2>/dev/null || true"$'\n'
-    script+="freshclam || rc=\$?"
+    script+="$(_freshclam_cmd) || rc=\$?"
     [[ -n "$after" ]] && script+=$'\n'"{ ${after}; } || { s=\$?; [ \"\$rc\" -ne 0 ] || rc=\$s; }"
     script+=$'\n'"exit \"\$rc\""
     apply_change "$script" "$undo" \
@@ -528,7 +662,7 @@ _clamav_defs_finding() {
         *) after+=", then updated automatically (clamav-freshclam.service)" ;;
     esac
     [[ -n "$a" ]] && manual+="# The service holds the lock freshclam needs: stop it first."$'\n'"sudo systemctl stop clamav-freshclam.service"$'\n'
-    manual+="sudo freshclam"
+    manual+="sudo $(_freshclam_cmd)"
     [[ -n "$a" ]] && manual+=$'\n'"sudo ${a//&& /&& sudo }"
     finding "$sev" "$title" "$detail" "$manual" fix_clamav_defs "$svc"
     finding_change "${dir}: ${now}" "$after" "$W_DOWNLOAD"
@@ -585,6 +719,11 @@ scan$([[ $clamui -eq 1 ]] && echo " - in ClamUI either" || true). The malware sc
             return 0
         fi
         check_note "Virus definitions: updated $([[ $age -eq 0 ]] && echo "today" || echo "${age} day(s) ago") (clamav-freshclam.service: ${svc})$([[ $clamui -eq 1 ]] && echo "; ClamUI uses this ClamAV" || true)"
+        if _have freshclam; then
+            local -a curls=()
+            mapfile -t curls < <(_clamav_custom_urls)
+            [[ ${#curls[@]} -gt 0 ]] && _clamav_custom_check "$db" "${curls[@]}"
+        fi
         if (( age > _CLAMAV_DEFS_OLD )) && _have freshclam; then
             _clamav_defs_finding low "ClamAV's virus definitions are ${age} days old" \
 "New malware is added to the definitions every day; with definitions ${age} days old

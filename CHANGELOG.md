@@ -27,6 +27,14 @@ All notable changes to this project are listed here. The format follows
   the time limit now says that, instead of blaming the virus database, and
   the scan no longer follows other drives or app images mounted inside the
   scanned folders.
+- Extra virus signature sources in freshclam.conf (DatabaseCustomURL):
+  when freshclam's log shows that one can no longer be downloaded, the
+  deep check says so, names the sources freshclam then never reaches
+  (it stops at the first that fails), and offers to put a # in front of
+  the failing ones. The report shows only the host and file name of a
+  source, as its address can hold an access key. Downloading the
+  definitions as a fix updates only ClamAV's own sets, so a broken extra
+  source does not make it fail.
 - Security Check now has one window for the whole run. The setup wizard, the
   dashboard, a check's page, the lists of fixes, the "Apply this fix?" page
   and Settings are pages of that window, and questions, messages and errors
