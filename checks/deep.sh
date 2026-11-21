@@ -360,6 +360,7 @@ readonly _CLAMAV_DEFS_OLD=7          # days before the definitions count as old
 _clamav_db_dir() {
     local d
     d=$(sed -n 's/^[[:space:]]*DatabaseDirectory[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p' "$(_r /etc/freshclam.conf)" 2>/dev/null | tail -n 1)
+    [[ "$d" == \"*\" ]] && d="${d:1:${#d}-2}"
     [[ "$d" == /* && "$d" != *$'\n'* ]] || d=/var/lib/clamav
     printf '%s' "${d%/}"
 }
@@ -420,7 +421,7 @@ _clamav_not_set_up() {
         sev=low
         title="ClamAV's virus definitions cannot be updated: freshclam is not installed"
         detail="clamscan is installed, but freshclam (package clamav-freshclam) is not, so the
-virus definitions are never updated$([[ $clamui -eq 1 ]] && echo ", by ClamUI either"). The scan misses what is newer than them."
+virus definitions are never updated$([[ $clamui -eq 1 ]] && echo ", by ClamUI either" || true). The scan misses what is newer than them."
     elif [[ "$clamui" -eq 1 ]]; then
         sev=medium
         title="ClamUI is installed, but ClamAV is not set up on the system"
@@ -495,6 +496,7 @@ fix_clamav_defs() {
     local unit="clamav-freshclam.service" script="rc=0"$'\n' undo="" after
     after=$(_freshclam_after "$1")
     case "$(_freshclam_plan "$1")" in
+        on)             undo="systemctl start ${unit}" ;;
         masked)         undo="systemctl disable --now ${unit}"$'\n'"systemctl mask ${unit}" ;;
         masked-runtime) undo="systemctl disable --now ${unit}"$'\n'"systemctl mask --runtime ${unit}" ;;
         runtime)        undo="systemctl disable ${unit}"$'\n'"systemctl enable --runtime ${unit}" ;;
@@ -505,7 +507,7 @@ fix_clamav_defs() {
     [[ -n "$after" ]] && script+=$'\n'"{ ${after}; } || { s=\$?; [ \"\$rc\" -ne 0 ] || rc=\$s; }"
     script+=$'\n'"exit \"\$rc\""
     apply_change "$script" "$undo" \
-        "$([[ -n $undo ]] && echo "Undo puts the automatic updates back as they were; the downloaded definitions stay.")"
+        "$([[ $(_freshclam_plan "$1") != on && -n $undo ]] && echo "Undo puts the automatic updates back as they were; the downloaded definitions stay." || true)"
 }
 
 # _clamav_defs_finding SEV TITLE DETAIL DIR NOW — a finding whose fix
@@ -521,7 +523,7 @@ _clamav_defs_finding() {
         on|none) ;;
         *) after+=", then updated automatically (clamav-freshclam.service)" ;;
     esac
-    [[ -n "$a" ]] && manual+="sudo systemctl stop clamav-freshclam.service   (it holds the lock freshclam needs)"$'\n'
+    [[ -n "$a" ]] && manual+="# The service holds the lock freshclam needs: stop it first."$'\n'"sudo systemctl stop clamav-freshclam.service"$'\n'
     manual+="sudo freshclam"
     [[ -n "$a" ]] && manual+=$'\n'"sudo ${a//&& /&& sudo }"
     finding "$sev" "$title" "$detail" "$manual" fix_clamav_defs "$svc"
@@ -559,7 +561,7 @@ check_deep_malware() {
         return 0
     fi
     if [[ ${#scanner[@]} -eq 0 ]]; then
-        mark_skip "ClamAV is not installed$([[ $clamui -eq 0 ]] && echo " (ClamTk from Flathub brings its own; ClamUI needs the system's ClamAV)")"
+        mark_skip "ClamAV is not installed$([[ $clamui -eq 0 ]] && echo " (ClamTk from Flathub brings its own; ClamUI needs the system's ClamAV)" || true)"
         return 0
     fi
     if [[ "$host" -eq 1 ]]; then
@@ -574,11 +576,11 @@ check_deep_malware() {
             fi
             _clamav_defs_finding medium "$([[ $age == partial ]] && echo "ClamAV's virus definitions are incomplete" || echo "ClamAV has no virus definitions")" \
 "ClamAV is installed, but ${db} holds ${what}, so it cannot
-scan$([[ $clamui -eq 1 ]] && echo " - in ClamUI either"). The malware scan was left out." "$db" "$what"
+scan$([[ $clamui -eq 1 ]] && echo " - in ClamUI either" || true). The malware scan was left out." "$db" "$what"
             mark_skip "ClamAV has ${what} in ${db}"
             return 0
         fi
-        check_note "Virus definitions: updated $([[ $age -eq 0 ]] && echo "today" || echo "${age} day(s) ago") (clamav-freshclam.service: ${svc})$([[ $clamui -eq 1 ]] && echo "; ClamUI uses this ClamAV")"
+        check_note "Virus definitions: updated $([[ $age -eq 0 ]] && echo "today" || echo "${age} day(s) ago") (clamav-freshclam.service: ${svc})$([[ $clamui -eq 1 ]] && echo "; ClamUI uses this ClamAV" || true)"
         if (( age > _CLAMAV_DEFS_OLD )) && _have freshclam; then
             _clamav_defs_finding low "ClamAV's virus definitions are ${age} days old" \
 "New malware is added to the definitions every day; with definitions ${age} days old
@@ -653,13 +655,13 @@ alarm), then change passwords used on this PC if one of them was run."
 (${first:-exit ${rc}}). They may be damaged or half written; a fresh download
 replaces them." "$db" "definitions that do not load"
         fi
-        mark_skip "ClamAV could not load its virus definitions (${first:-exit ${rc}})$([[ $host -eq 0 ]] && echo "; open ClamTk once to download them")$([[ $host -eq 1 ]] && ! _have freshclam && echo "; freshclam, which downloads them, is not installed")"
+        mark_skip "ClamAV could not load its virus definitions (${first:-exit ${rc}})$([[ $host -eq 0 ]] && echo "; open ClamTk once to download them" || true)$([[ $host -eq 1 ]] && ! _have freshclam && echo "; freshclam, which downloads them, is not installed" || true)"
     elif [[ $rc -ne 0 && $rc -ne 1 && $rc -ne 2 ]]; then
         mark_skip "the scan did not finish (exit ${rc}${first:+: ${first}})"
     else
         # Exit 2 without a database error: files the scanning account may
         # not read (other accounts' private files in /tmp) were left out.
-        check_note "ClamAV scanned: $(_join ', ' "${targets[@]}") - nothing found$([[ $rc -eq 2 ]] && echo " (files the scanning account may not read were left out)")"
+        check_note "ClamAV scanned: $(_join ', ' "${targets[@]}") - nothing found$([[ $rc -eq 2 ]] && echo " (files the scanning account may not read were left out)" || true)"
     fi
     return 0
 }
