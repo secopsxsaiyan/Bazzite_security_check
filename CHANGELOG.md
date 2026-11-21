@@ -134,8 +134,11 @@ All notable changes to this project are listed here. The format follows
   asked (no terminal, or a dialog that failed) their answer is "No". So
   `--install`, `--uninstall`, `--install-timer`, `--remove-timer`,
   `--undo` and `--update` no longer run unattended: without a terminal or
-  the desktop they say that nothing was changed and exit with status 1. A
-  fix that failed and was not rolled back keeps its undo step for `--undo`.
+  the desktop they say that nothing was changed and exit with status 1
+  (also `--undo` with nothing to undo), and when their window stops
+  working on the way they end with status 1 too. A fix that fails keeps
+  its undo step for `--undo` from the moment it failed (also when the tool
+  is interrupted at the rollback question) until a rollback works.
 - What a fix prints is copied into the run log like an undo step's output:
   only the end of it, cut to size and marked `fix:`. What kdialog or a
   one-page window prints is read only up to the size of an answer.

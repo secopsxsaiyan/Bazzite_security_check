@@ -302,15 +302,16 @@ _run_change() {
     out=$_RUN_OUT
     rm -f -- "$tmpfile"
     log "--- end of the output (exit ${rc}) ---"
-    local kept=0
+    local kept=""
     if [[ $rc -eq 0 ]]; then
         [[ -n "$undo" ]] && _undo_record "$title" "$undo"
-    elif [[ $_SIGNAL_PENDING -eq 1 && -n "$undo" ]]; then
-        # Failed, and the tool is about to stop: nobody is asked about a
-        # rollback now, so keep the undo step for --undo.
+    elif [[ -n "$undo" ]]; then
+        # Failed: the undo step is kept for --undo before anything else
+        # happens (an interruption, or the rollback question below), and
+        # marked done only if the rollback works.
         _undo_record "${title} (did not complete)" "$undo"
-        kept=1
-        log "interrupted after a failed fix: its undo step was kept"
+        kept="$_UNDO_LAST"
+        log "failed fix: its undo step was kept"
     fi
     ui_busy_stop
     _signals_release
@@ -336,18 +337,17 @@ $(tail -n 15 <<< "$out")"
         local undo_rc=0
         _undo_run bash -c "$undo" || undo_rc=$?
         if [[ $undo_rc -eq 0 ]]; then
+            [[ -n "$kept" && -f "$kept" ]] && mv -f -- "$kept" "${kept%.sh}.done"
             print_status "OK" "Rolled back: ${title}"
             return 3
         fi
-        ui_error "Rolling back \"${title}\" failed too - see the run log: ${RUN_LOG}"
+        ui_error "Rolling back \"${title}\" failed too - see the run log: ${RUN_LOG}
+Its undo step was kept: Undo on the dashboard, or --undo, can try again."
+        return 3
     fi
-    # Left as it is (also when nobody could answer), or the rollback failed:
-    # the undo step stays on record, so --undo can put it back later.
-    if [[ $kept -eq 0 ]]; then
-        _undo_record "${title} (did not complete)" "$undo"
-        log "failed fix left as it is: its undo step was kept"
-    fi
-    print_status "INFO" "The undo step of \"${title}\" was kept: --undo can put it back later."
+    # Left as it is (also when nobody could answer): the undo step stays
+    # on record, so --undo can put it back later.
+    print_status "INFO" "The undo step of \"${title}\" was kept: Undo on the dashboard, or --undo, can put it back later."
     return 3
 }
 
@@ -674,6 +674,7 @@ _undo_record() {
         printf '%s\n' "$2"
     } > "$f"
     chmod 700 "$f"
+    _UNDO_LAST="$f"
     _write_undo_all "$dir"
 }
 

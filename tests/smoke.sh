@@ -2035,10 +2035,25 @@ for line in open(sys.argv[1]):
         rc=0; _run_change "t6 half" "echo half > $W/t6-half; exit 1" "rm -f $W/t6-half" > /dev/null 2>&1 || rc=$?
         [[ $rc -eq 3 && -e "$W/t6-half" && -f "$STATE_DIR/undo/t6left/01-undo.sh" ]] \
             && grep -qx '# TITLE: t6 half (did not complete)' "$STATE_DIR/undo/t6left/01-undo.sh" && echo "failed-fix-left-keeps-undo"
-        # ... and one that is rolled back keeps nothing.
+        # ... one that is rolled back keeps no step to undo (it is marked done) ...
         RUN_ID="t6back"; ui_yesno() { return 0; }
         _run_change "t6 back" "echo half > $W/t6-back; exit 1" "rm -f $W/t6-back" > /dev/null 2>&1
-        [[ ! -e "$W/t6-back" && ! -e "$STATE_DIR/undo/t6back/01-undo.sh" ]] && echo "failed-fix-rolled-back-keeps-nothing"
+        [[ ! -e "$W/t6-back" && -z "$(compgen -G "$STATE_DIR/undo/t6back/*-undo.sh")" && -f "$STATE_DIR/undo/t6back/01-undo.done" ]] && echo "failed-fix-rolled-back-keeps-nothing"
+        # ... one whose rollback fails keeps its step, once ...
+        RUN_ID="t6bad"
+        _run_change "t6 bad" "echo half > $W/t6-bad; exit 1" "exit 4" > /dev/null 2>&1
+        [[ -e "$W/t6-bad" && "$(compgen -G "$STATE_DIR/undo/t6bad/*-undo.sh" | wc -l)" -eq 1 ]] && echo "failed-rollback-keeps-undo-once"
+        # ... and one interrupted at the rollback question keeps it too.
+        RUN_ID="t6hup"; ui_yesno() { kill -HUP "$BASHPID"; sleep 1; return 1; }
+        ( trap _on_signal INT TERM HUP; _run_change "t6 hup" "echo half > $W/t6-hup; exit 1" "rm -f $W/t6-hup" ) > /dev/null 2>&1
+        [[ -e "$W/t6-hup" && -f "$STATE_DIR/undo/t6hup/01-undo.sh" ]] && echo "failed-fix-interrupted-at-question-keeps-undo"
+    )
+    # An action whose window stopped working on the way ends with status 1 and says so.
+    (
+        ACTION=install; UI_MODE=none; ui_interactive() { [[ "$UI_MODE" != none ]]; }
+        ( _action_end ) 2> "$W/action-end.err"; r1=$?
+        UI_MODE=kde; ( _action_end ) 2>/dev/null; r2=$?
+        [[ "$r1 $r2" == "1 0" ]] && grep -q -- "--install: the window stopped working" "$W/action-end.err" && echo "action-end-after-lost-window"
     )
     # On the terminal, Enter is "no" for a question that changes the PC, whatever its default.
     (
@@ -2103,7 +2118,8 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          yesno-enter-follows-the-default-never-a-change choice3-enter-follows-the-default-never-a-change apply-fallback-enter-is-skip \
          undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked \
          kdialog-enter-is-not-yes kdialog-failure-asks-on kdialog-wrapper-failure-is-not-yes kdialog-own-exit-1-is-yes \
-         kdialog-own-exits-mapped failed-fix-left-keeps-undo failed-fix-rolled-back-keeps-nothing tty-enter-is-no-for-a-change; do
+         kdialog-own-exits-mapped failed-fix-left-keeps-undo failed-fix-rolled-back-keeps-nothing tty-enter-is-no-for-a-change \
+         failed-rollback-keeps-undo-once failed-fix-interrupted-at-question-keeps-undo action-end-after-lost-window; do
     expect "$W/t6.out" "$m" "$m"
 done
 # --install and the other actions that change the PC only after a "yes"
