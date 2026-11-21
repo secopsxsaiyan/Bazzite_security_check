@@ -564,11 +564,204 @@ echo "== 5. every fix builds valid shell commands"
     run fix_sunshine_setting "$U" "$UH/.config/sunshine/sunshine.conf" upnp off app-dev.lizardbyte.app.Sunshine.service
     run fix_strip_suid "4755|/opt/x/helper"
     run fix_remove_world_write "${U}|666|$UH/x" "root|666|/etc/y"
+    run fix_clamav_install clamav clamav-freshclam
+    run fix_clamav_defs disabled
+    run fix_clamav_defs enabled
+    run fix_clamav_defs masked
+    run fix_clamav_defs missing
+    run fix_clamav_defs not-found
+    run fix_clamav_defs masked-runtime
+    run fix_clamav_defs enabled-runtime
 ) > "$W/fix5.out" 2>&1
 n_ok=$(grep -c '^OK ' "$W/fix5.out" || true)
 if grep -q '^BAD ' "$W/fix5.out"; then bad "invalid fix commands:"; grep -A8 '^BAD ' "$W/fix5.out"
 else ok "all ${n_ok} fix scripts and their undo steps parse"; fi
 [[ "$n_ok" -ge 32 ]] && ok "every fix function was exercised" || { bad "only ${n_ok} fixes ran"; cat "$W/fix5.out" | head -20; }
+
+# ---------------------------------------------------------------- 5b. the malware scan
+echo "== 5b. the malware scan and ClamAV's setup"
+(
+    # shellcheck source=../bazzite-sec-audit.sh
+    source "$TOOL"
+    _load_check_table
+    RUN_LOG="$W/clam.log"; UI_MODE="none"; CURRENT_CHECK=check_deep_malware
+    CR="$W/clam-root"; mkdir -p "$CR/var/lib/clamav" "$CR/etc"; AUDIT_ROOT="$CR"
+    REGULAR_USERS=("$U"); DESKTOP_USER="$U"; IS_OSTREE=1; RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
+    HAVE=""; FLATPAKS=""; SVC=enabled; SCAN_OUT=""; SCAN_RC=0
+    _have() { [[ " $HAVE " == *" $1 "* ]]; }
+    _flatpak_installed() { [[ " $FLATPAKS " == *" $1 "* ]]; }
+    _unit_state() { printf '%s' "$SVC"; }
+    _home_of() { printf '%s' "$UH"; }
+    _as_user() {
+        local who="$1"; shift
+        case "$1" in
+            xdg-user-dir) printf '%s' "$UH" ;;
+            timeout) printf '%s %s\n' "$who" "$*" >> "$W/clam-scans"; printf '%s' "$SCAN_OUT"; return "$SCAN_RC" ;;
+        esac
+    }
+    _as_desktop_user() { _as_user "$DESKTOP_USER" "$@"; }
+    defs() { rm -f "$CR"/var/lib/clamav/*; [[ $# -gt 0 ]] || return 0; echo x > "$CR/var/lib/clamav/main.cvd"; echo x > "$CR/var/lib/clamav/daily.cld"; touch -d "$1 days ago" "$CR/var/lib/clamav/daily.cld"; }
+    case_() {
+        F_SEV=(); F_CHECK=(); F_TITLE=(); F_DETAIL=(); F_MANUAL=(); F_FIX=(); F_STATE=(); F_NOW=(); F_AFTER=(); F_WARN=(); F_VERIFY=(); F_RECHECK=(); F_AFFECT=(); F_KEYX=()
+        CHECK_SKIPPED=(); CHECK_NOTE=(); CHECK_FAILED=(); : > "$W/clam-scans"
+        check_deep_malware > /dev/null 2>&1
+    }
+    scans() { grep -c . "$W/clam-scans" || true; }
+
+    # ClamUI without the system's ClamAV: ClamUI cannot scan; the fix layers both packages.
+    HAVE=""; FLATPAKS="io.github.linx_systems.ClamUI"; defs; case_
+    [[ "${F_SEV[0]:-}" == medium && "${F_TITLE[0]}" == "ClamUI is installed, but ClamAV is not set up on the system" \
+       && "${F_FIX[0]}" == "fix_clamav_install clamav clamav-freshclam" && "${F_WARN[0]}" == "downloads|"*$'\n'"needs a reboot|"* \
+       && "${F_MANUAL[0]##*$'\n'}" == "# "* && -z "$(bash -n <<< "${F_MANUAL[0]}" 2>&1)" ]] \
+       && [[ ${#F_SEV[@]} -eq 1 && "${CHECK_SKIPPED[check_deep_malware]:-}" == "ClamAV is not installed" && "$(scans)" -eq 0 ]] && echo "clamui-without-clamav-offers-the-setup"
+    # ... and not again while the layered packages wait for the restart (the image is staged) ...
+    RPMOSTREE_JSON='{"deployments":[{"staged":true,"booted":false,"requested-packages":["clamav","clamav-freshclam"]},{"booted":true}]}'; case_
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_SKIPPED[check_deep_malware]:-}" == *"waits for a restart"* \
+       && "${CHECK_NOTE[check_deep_malware]:-}" == *"waiting for the restart: clamav clamav-freshclam"* ]] && echo "clamav-waiting-for-restart-is-not-offered-again"
+    # ... but an older image to roll back to, which still lists them, is not a restart that waits.
+    RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]},{"booted":false,"requested-packages":["clamav","clamav-freshclam"]}]}'; case_
+    [[ "${F_FIX[0]:-}" == "fix_clamav_install clamav clamav-freshclam" && "${CHECK_SKIPPED[check_deep_malware]:-}" == "ClamAV is not installed" ]] && echo "rollback-image-is-not-a-pending-restart"
+    # Only what the waiting image lacks is offered.
+    RPMOSTREE_JSON='{"deployments":[{"staged":true,"requested-packages":["clamav"]},{"booted":true}]}'; case_
+    [[ "${F_FIX[0]:-}" == "fix_clamav_install clamav-freshclam" && "${CHECK_NOTE[check_deep_malware]:-}" == *"restart: clamav" \
+       && "${CHECK_SKIPPED[check_deep_malware]:-}" == *"waits for a restart"* ]] && echo "only-the-missing-package-is-offered"
+    RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
+    # Nothing at all, no ClamUI: an optional note with the same fix; ClamTk alone needs nothing.
+    FLATPAKS=""; case_
+    [[ "${F_SEV[0]:-}" == info && "${F_FIX[0]}" == "fix_clamav_install clamav clamav-freshclam" ]] && echo "no-clamav-is-an-optional-fix"
+    FLATPAKS="com.gitlab.davem.ClamTk"; SCAN_OUT=""; SCAN_RC=0; case_
+    [[ ${#F_SEV[@]} -eq 0 && "$(scans)" -eq 1 ]] && grep -q "flatpak run --command=clamscan com.gitlab.davem.ClamTk" "$W/clam-scans" && echo "clamtk-alone-scans-without-setup"
+    # ClamTk and ClamUI: ClamTk still scans, and ClamUI's missing ClamAV is still a finding.
+    FLATPAKS="com.gitlab.davem.ClamTk io.github.linx_systems.ClamUI"; case_
+    [[ "${F_TITLE[0]:-}" == "ClamUI is installed"* && "$(scans)" -eq 1 ]] && echo "clamtk-scans-while-clamui-is-not-set-up"
+    # The system's clamscan without freshclam.
+    FLATPAKS=""; HAVE="clamscan"; defs 1; case_
+    [[ "${F_SEV[0]:-}" == low && "${F_TITLE[0]}" == *"freshclam is not installed" && "${F_FIX[0]}" == "fix_clamav_install clamav-freshclam" && "$(scans)" -eq 1 ]] && echo "clamscan-without-freshclam"
+    # ... with freshclam layered and waiting for the restart: a note, no finding, and the scan runs.
+    RPMOSTREE_JSON='{"deployments":[{"staged":true,"requested-packages":["clamav","clamav-freshclam"]},{"booted":true,"requested-packages":["clamav"]},{"requested-packages":["clamav"]}]}'; case_
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"waiting for the restart: clamav-freshclam"* && "$(scans)" -eq 1 ]] && echo "freshclam-waiting-for-restart"
+    # ... and with the only other image a rollback that lists clamav: still offered.
+    RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":["clamav"]},{"requested-packages":["clamav","clamav-freshclam"]}]}'; case_
+    [[ "${F_FIX[0]:-}" == "fix_clamav_install clamav-freshclam" ]] && echo "freshclam-offered-despite-rollback"
+    # A malformed status (a string, not a list of packages) hides nothing.
+    RPMOSTREE_JSON='{"deployments":[{"staged":true,"requested-packages":"clamav-freshclam-helper"},{"booted":true}]}'; case_
+    [[ "${F_FIX[0]:-}" == "fix_clamav_install clamav-freshclam" ]] && echo "malformed-status-hides-nothing"
+    RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
+    # No definitions: a finding whose fix downloads them, and no scan.
+    HAVE="clamscan freshclam"; SVC=disabled; defs; case_
+    [[ "${F_SEV[0]:-}" == medium && "${F_TITLE[0]}" == "ClamAV has no virus definitions" && "${F_FIX[0]}" == "fix_clamav_defs disabled" \
+       && "${F_AFTER[0]}" == *"updated automatically"* && "${CHECK_SKIPPED[check_deep_malware]:-}" == *"no virus definitions"* && "$(scans)" -eq 0 ]] && echo "no-definitions-offers-download"
+    # Only the daily set: incomplete, not "none".
+    defs; echo x > "$CR/var/lib/clamav/daily.cld"; case_
+    [[ "${F_TITLE[0]:-}" == "ClamAV's virus definitions are incomplete" && "${F_NOW[0]}" == *"incomplete set"* && "$(scans)" -eq 0 ]] && echo "incomplete-definitions"
+    # With the service on, the manual steps do not tell to turn it on.
+    SVC=enabled; defs; case_
+    [[ "${F_FIX[0]:-}" == "fix_clamav_defs enabled" && "${F_AFTER[0]}" == "definitions downloaded now" \
+       && "$(tr '\n' '|' <<< "${F_MANUAL[0]}")" == "# The service holds the lock freshclam needs: stop it first.|sudo systemctl stop clamav-freshclam.service|sudo freshclam|sudo systemctl start clamav-freshclam.service|" \
+       && "$(bash -n <<< "${F_MANUAL[0]}" 2>&1)" == "" ]] && echo "manual-steps-follow-the-service"
+    # Every way the manual steps can come out is shell that can be pasted.
+    pasteable=1
+    for SVC in enabled disabled masked masked-runtime enabled-runtime not-found; do
+        case_; bash -n <<< "${F_MANUAL[0]:-x(}" 2>/dev/null || { pasteable=0; echo "not pasteable for ${SVC}: ${F_MANUAL[0]:-}"; }
+    done
+    SVC=enabled; [[ $pasteable -eq 1 ]] && echo "manual-steps-can-be-pasted"
+    # A runtime mask needs "unmask --runtime"; on only until the restart is turned on for good.
+    SVC=masked-runtime; case_
+    [[ "${F_MANUAL[0]:-}" == *"sudo systemctl unmask --runtime clamav-freshclam.service"* ]] && echo "runtime-mask-manual-steps"
+    SVC=enabled-runtime; case_
+    [[ "${F_MANUAL[0]:-}" == *"systemctl enable --now clamav-freshclam.service"* && "${F_AFTER[0]}" == *"updated automatically"* ]] && echo "runtime-enable-made-permanent"
+    SVC=disabled
+    # Old definitions: a low finding, and the scan still runs.
+    defs 12; case_
+    [[ "${F_SEV[0]:-}" == low && "${F_TITLE[0]}" == "ClamAV's virus definitions are 12 days old" && "${F_DETAIL[0]}" == *"clamav-freshclam.service is disabled"* && "$(scans)" -eq 1 ]] && echo "old-definitions-found-and-scanned"
+    SVC=enabled; defs 0; case_
+    [[ ${#F_SEV[@]} -eq 0 && "${CHECK_NOTE[check_deep_malware]:-}" == *"updated today (clamav-freshclam.service: enabled)"*"nothing found"* ]] && echo "fresh-definitions-no-finding"
+    # The scan runs as the account, stays on each folder's file system, and never as root.
+    grep -q "^${U} timeout 1800 clamscan -r -i --no-summary --cross-fs=no .* --database=/var/lib/clamav " "$W/clam-scans" && ! grep -q "^root " "$W/clam-scans" && echo "scan-as-account-on-one-file-system"
+    # A scan stopped by the time limit says so - not that the database is missing.
+    SCAN_OUT=""; SCAN_RC=124; case_
+    [[ "${CHECK_SKIPPED[check_deep_malware]:-}" == "the scan was stopped after 30 minutes, before it finished"* && "${CHECK_SKIPPED[check_deep_malware]:-}" != *database* && ${#F_SEV[@]} -eq 0 ]] && echo "timeout-is-not-blamed-on-the-database"
+    # Definitions that do not load: a finding that downloads them again.
+    SCAN_OUT=$'LibClamAV Error: cli_loaddbdir(): No supported database files found in /var/lib/clamav\nERROR: Can\'t open file or directory\n'; SCAN_RC=2; case_
+    [[ "${F_TITLE[0]:-}" == "ClamAV cannot load its virus definitions" && "${F_FIX[0]}" == "fix_clamav_defs enabled" && "${CHECK_SKIPPED[check_deep_malware]:-}" == *"cli_loaddbdir"* ]] && echo "broken-definitions-offer-download"
+    SCAN_OUT=$'LibClamAV Error: cli_cvdload(): Corrupted CVD header\n'; SCAN_RC=2; case_
+    [[ "${F_TITLE[0]:-}" == "ClamAV cannot load its virus definitions" ]] && echo "corrupted-cvd-is-a-database-error"
+    SCAN_OUT=$'LibClamAV Error: cli_cvdverify: Can\'t read CVD header\n'; case_
+    [[ "${F_TITLE[0]:-}" == "ClamAV cannot load its virus definitions" ]] && echo "unreadable-cvd-is-a-database-error"
+    # Without freshclam, nothing offers to download them: the skip says why.
+    HAVE="clamscan"; SCAN_OUT=$'LibClamAV Error: cli_cvdload(): Corrupted CVD header\n'; case_
+    [[ "${F_TITLE[0]:-}" == *"freshclam is not installed" && ${#F_SEV[@]} -eq 1 && "${CHECK_SKIPPED[check_deep_malware]:-}" == *"freshclam, which downloads them, is not installed"* ]] && echo "broken-definitions-without-freshclam"
+    SCAN_OUT=""; SCAN_RC=0; defs 12; case_
+    [[ "${F_TITLE[0]:-}" == *"freshclam is not installed" && ${#F_SEV[@]} -eq 1 && "$(scans)" -eq 1 ]] && echo "old-definitions-without-freshclam"
+    defs; case_
+    [[ "${F_TITLE[0]:-}" == *"freshclam is not installed" && ${#F_SEV[@]} -eq 1 && "$(scans)" -eq 0 \
+       && "${CHECK_SKIPPED[check_deep_malware]:-}" == *"freshclam, which downloads them, is not installed"* ]] && echo "no-definitions-without-freshclam"
+    # The check's own error trap stays quiet (a condition that is false is not an error).
+    ( set -E; trap 'echo "ERR at $LINENO: $BASH_COMMAND"' ERR; check_deep_malware ) > "$W/clam-err" 2>/dev/null
+    ! grep -q "^ERR at" "$W/clam-err" && echo "no-error-trap" || head -3 "$W/clam-err"
+    HAVE="clamscan freshclam"; defs 0
+    # A file it could not read, even one named "database", is not a database error.
+    SCAN_OUT="$UH/Downloads/database.sqlite: Can't open file or directory ERROR"$'\n'; SCAN_RC=2; case_
+    [[ ${#F_SEV[@]} -eq 0 && -z "${CHECK_SKIPPED[check_deep_malware]:-}" && "${CHECK_NOTE[check_deep_malware]:-}" == *"may not read were left out"* ]] && echo "unreadable-file-is-not-a-database-error"
+    # A hit is reported.
+    SCAN_OUT="$UH/Downloads/x.exe: Win.Test.EICAR_HDB-1 FOUND"$'\n'; SCAN_RC=1; case_
+    [[ "${F_SEV[0]:-}" == high && "${F_TITLE[0]}" == "ClamAV found 1 infected file(s)" ]] && echo "infected-file-found"
+    # ... also from a scan the time limit stopped, with a note that it did not finish.
+    SCAN_RC=124; case_
+    [[ "${F_TITLE[0]:-}" == "ClamAV found 1 infected file(s)" && -z "${CHECK_SKIPPED[check_deep_malware]:-}" \
+       && "${CHECK_NOTE[check_deep_malware]:-}" == *"stopped after 30 minutes, before it finished"* ]] && echo "hit-from-a-stopped-scan"
+    # The definitions fix, run: freshclam fails, the service is started again all the same, and the fix fails.
+    mkdir -p "$W/clam-bin"
+    printf '#!/bin/bash\necho "systemctl $*" >> "%s"\n' "$W/clam-fix.log" > "$W/clam-bin/systemctl"
+    printf '#!/bin/bash\necho freshclam >> "%s"; exit 17\n' "$W/clam-fix.log" > "$W/clam-bin/freshclam"
+    chmod 755 "$W/clam-bin/systemctl" "$W/clam-bin/freshclam"
+    apply_change() { printf '%s\n' "$1" > "$W/clam-fix.sh"; printf '%s\n' "$2" > "$W/clam-fix.undo"; return 0; }
+    fixrun() { : > "$W/clam-fix.log"; fix_clamav_defs "$1"; PATH="$W/clam-bin:$PATH" bash -c 'set -euo pipefail; source "$1"' _ "$W/clam-fix.sh"; }
+    fixrun enabled; rc=$?
+    [[ $rc -eq 17 && "$(tr '\n' '|' < "$W/clam-fix.log")" == "systemctl stop clamav-freshclam.service|freshclam|systemctl start clamav-freshclam.service|" \
+       && "$(cat "$W/clam-fix.undo")" == "systemctl start clamav-freshclam.service" ]] && echo "failed-download-restarts-the-service"
+    fixrun disabled; rc=$?
+    [[ $rc -eq 17 && "$(tr '\n' '|' < "$W/clam-fix.log")" == *"freshclam|systemctl enable --now clamav-freshclam.service|" && "$(cat "$W/clam-fix.undo")" == "systemctl disable --now clamav-freshclam.service" ]] && echo "failed-download-still-turns-updates-on"
+    fixrun masked-runtime; rc=$?
+    [[ $rc -eq 17 && "$(tr '\n' '|' < "$W/clam-fix.log")" == "systemctl stop clamav-freshclam.service|freshclam|systemctl unmask --runtime clamav-freshclam.service|systemctl enable --now clamav-freshclam.service|" \
+       && "$(tr '\n' '|' < "$W/clam-fix.undo")" == "systemctl disable --now clamav-freshclam.service|systemctl mask --runtime clamav-freshclam.service|" ]] && echo "runtime-mask-fix-and-undo"
+    fixrun enabled-runtime
+    [[ "$(tr '\n' '|' < "$W/clam-fix.undo")" == "systemctl disable clamav-freshclam.service|systemctl enable --runtime clamav-freshclam.service|" ]] && echo "runtime-enable-undo-restores-it"
+    # A service that does not start: the download's failure is kept; after a good download the start's failure is the fix's.
+    printf '#!/bin/bash\necho "systemctl $*" >> "%s"; [[ $1 == start ]] && exit 3; exit 0\n' "$W/clam-fix.log" > "$W/clam-bin/systemctl"
+    fixrun enabled; rc=$?
+    [[ $rc -eq 17 && "$(tr '\n' '|' < "$W/clam-fix.log")" == *"systemctl start clamav-freshclam.service|" ]] && echo "start-failure-keeps-the-download-status"
+    printf '#!/bin/bash\necho freshclam >> "%s"\n' "$W/clam-fix.log" > "$W/clam-bin/freshclam"
+    fixrun enabled; rc=$?
+    [[ $rc -eq 3 ]] && echo "start-failure-fails-the-fix"
+    fixrun not-found; rc=$?
+    [[ $rc -eq 0 && "$(tr '\n' '|' < "$W/clam-fix.log")" == "freshclam|" ]] && echo "no-service-only-downloads"
+    # DatabaseDirectory from freshclam.conf is where the definitions are looked for.
+    printf 'DatabaseDirectory "/srv/quoted"\n' > "$CR/etc/freshclam.conf"
+    [[ "$(_clamav_db_dir)" == /srv/quoted ]] && echo "quoted-database-directory"
+    mkdir -p "$CR/srv/defs"; printf 'DatabaseDirectory /srv/defs\n' > "$CR/etc/freshclam.conf"; SCAN_OUT=""; SCAN_RC=0; defs 0; case_
+    [[ "$(_clamav_db_dir)" == /srv/defs && "${F_TITLE[0]:-}" == "ClamAV has no virus definitions" && "${F_DETAIL[0]}" == *"/srv/defs"* ]] && echo "database-directory-from-freshclam-conf"
+    # ... and clamscan, which does not read freshclam.conf, is told to use them.
+    echo x > "$CR/srv/defs/main.cvd"; echo x > "$CR/srv/defs/daily.cvd"; case_
+    [[ ${#F_SEV[@]} -eq 0 ]] && grep -q -- " --database=/srv/defs " "$W/clam-scans" && echo "scan-uses-the-database-directory"
+    # The layering fix records that it needs a restart.
+    apply_change() { printf '%s' "$4" > "$W/clam-reboot"; return 0; }
+    fix_clamav_install clamav clamav-freshclam
+    [[ -n "$(cat "$W/clam-reboot")" ]] && echo "layering-records-the-restart"
+) > "$W/clam.out" 2>&1
+for t in clamui-without-clamav-offers-the-setup clamav-waiting-for-restart-is-not-offered-again no-clamav-is-an-optional-fix \
+         clamtk-alone-scans-without-setup clamtk-scans-while-clamui-is-not-set-up clamscan-without-freshclam no-definitions-offers-download \
+         old-definitions-found-and-scanned fresh-definitions-no-finding scan-as-account-on-one-file-system timeout-is-not-blamed-on-the-database \
+         broken-definitions-offer-download unreadable-file-is-not-a-database-error infected-file-found database-directory-from-freshclam-conf \
+         rollback-image-is-not-a-pending-restart only-the-missing-package-is-offered freshclam-waiting-for-restart freshclam-offered-despite-rollback \
+         incomplete-definitions manual-steps-follow-the-service hit-from-a-stopped-scan failed-download-restarts-the-service \
+         failed-download-still-turns-updates-on no-service-only-downloads malformed-status-hides-nothing runtime-mask-manual-steps \
+         runtime-enable-made-permanent corrupted-cvd-is-a-database-error runtime-mask-fix-and-undo start-failure-keeps-the-download-status \
+         start-failure-fails-the-fix runtime-enable-undo-restores-it unreadable-cvd-is-a-database-error broken-definitions-without-freshclam \
+         old-definitions-without-freshclam scan-uses-the-database-directory layering-records-the-restart manual-steps-can-be-pasted \
+         no-definitions-without-freshclam no-error-trap quoted-database-directory; do
+    expect "$W/clam.out" "$t" "$t"
+done
 
 # ---------------------------------------------------------------- 6. safety details
 echo "== 6. safety details"

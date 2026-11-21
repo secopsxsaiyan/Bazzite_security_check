@@ -351,15 +351,246 @@ _etc_area() {
 }
 
 # ====================== MALWARE SCAN ======================
+readonly _CLAMUI_APP="io.github.linx_systems.ClamUI"
+readonly _CLAMAV_SCAN_LIMIT=1800     # seconds for one account's folders
+readonly _CLAMAV_DEFS_OLD=7          # days before the definitions count as old
+
+# _clamav_db_dir — where freshclam keeps the virus definitions
+# (DatabaseDirectory in /etc/freshclam.conf, else ClamAV's default).
+_clamav_db_dir() {
+    local d
+    d=$(sed -n 's/^[[:space:]]*DatabaseDirectory[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p' "$(_r /etc/freshclam.conf)" 2>/dev/null | tail -n 1)
+    [[ "$d" == \"*\" ]] && d="${d:1:${#d}-2}"
+    [[ "$d" == /* && "$d" != *$'\n'* ]] || d=/var/lib/clamav
+    printf '%s' "${d%/}"
+}
+
+# _clamav_defs_age DIR — days since the daily definitions in DIR were last
+# written. Status 1 with "none" (no definitions at all) or "partial" (the
+# main or the daily set is missing: ClamAV needs both) instead.
+_clamav_defs_age() {
+    local dir f t newest=0 main=0 any=0
+    dir=$(_r "$1")
+    for f in "$dir/main.cvd" "$dir/main.cld"; do
+        [[ -f "$f" && ! -L "$f" && -s "$f" ]] && { main=1; any=1; }
+    done
+    for f in "$dir/daily.cvd" "$dir/daily.cld"; do
+        [[ -f "$f" && ! -L "$f" && -s "$f" ]] || continue
+        any=1
+        t=$(stat -c %Y -- "$f" 2>/dev/null) || continue
+        (( t > newest )) && newest=$t
+    done
+    if (( main == 0 || newest == 0 )); then
+        (( any )) && printf 'partial' || printf 'none'
+        return 1
+    fi
+    t=$(( ( $(date +%s) - newest ) / 86400 ))
+    (( t < 0 )) && t=0
+    printf '%s' "$t"
+}
+
+# _clamav_pending PACKAGE... — those of PACKAGE that a system image ahead
+# of the running one requests: layered, waiting for the restart. The
+# rollback image (behind the running one) does not count.
+_clamav_pending() {
+    [[ -n "${RPMOSTREE_JSON:-}" ]] || return 0
+    python3 -I -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except ValueError:
+    sys.exit(0)
+deps = [x for x in (d.get("deployments") or []) if isinstance(x, dict)]
+booted = next((i for i, x in enumerate(deps) if x.get("booted")), 0)
+ahead = [x for i, x in enumerate(deps) if x.get("staged") or i < booted]
+req = [x.get("requested-packages") for x in ahead]
+req = [r for r in req if isinstance(r, list)]
+print(" ".join(p for p in sys.argv[1:] if any(p in r for r in req)))' "$@" <<< "$RPMOSTREE_JSON" 2>/dev/null || true
+}
+
+# _clamav_not_set_up CLAMUI HOST MISSING... — part of ClamAV is not
+# installed: the scanner (clamscan, package clamav) or freshclam, which
+# keeps its virus definitions up to date. With ClamUI that matters most:
+# ClamUI is only a window over the system's ClamAV. On Bazzite the fix
+# layers the packages; the definitions follow after the restart.
+_clamav_not_set_up() {
+    local clamui="$1" host="$2" sev title detail
+    shift 2
+    local -a missing=("$@")
+    if [[ "$host" -eq 1 ]]; then
+        sev=low
+        title="ClamAV's virus definitions cannot be updated: freshclam is not installed"
+        detail="clamscan is installed, but freshclam (package clamav-freshclam) is not, so the
+virus definitions are never updated$([[ $clamui -eq 1 ]] && echo ", by ClamUI either" || true). The scan misses what is newer than them."
+    elif [[ "$clamui" -eq 1 ]]; then
+        sev=medium
+        title="ClamUI is installed, but ClamAV is not set up on the system"
+        detail="ClamUI is only the window: it scans with the system's ClamAV (clamscan) and
+updates the virus definitions with the system's freshclam. Not installed:
+${missing[*]}. So ClamUI cannot scan anything."
+    else
+        sev=info
+        title="The malware scan needs ClamAV, which is not installed"
+        detail="The deep check scans Downloads, the Desktop and the temporary folders with
+ClamAV, which is not installed, so that part was left out. ClamTk from
+Flathub brings its own ClamAV; ClamUI uses the system's (this fix)."
+    fi
+    if [[ "$IS_OSTREE" -eq 1 ]]; then
+        finding "$sev" "$title" "$detail" "sudo rpm-ostree install ${missing[*]}
+systemctl reboot
+# Then run the check again: it offers to download the virus definitions." \
+            fix_clamav_install "${missing[@]}"
+        finding_change "not installed: ${missing[*]}" "layered on the system image: ${missing[*]} (after a restart)" "$W_DOWNLOAD" "$W_REBOOT"
+    else
+        finding "$sev" "$title" "$detail" "sudo dnf install ${missing[*]}
+sudo freshclam"
+    fi
+    return 0
+}
+
+# fix_clamav_install PACKAGE... — layer ClamAV's packages on the system image.
+fix_clamav_install() {
+    local q="" p
+    for p in "$@"; do q+=" $(_q "$p")"; done
+    apply_change "rpm-ostree install${q}" "rpm-ostree uninstall${q}" \
+"Layered packages stay through system updates and are updated with them. After the restart, run the check again: it offers to download the virus definitions and to keep them up to date." \
+        "layer ClamAV on the system image"
+}
+
+# _freshclam_plan STATE — what fix_clamav_defs does with
+# clamav-freshclam.service in this state (systemctl is-enabled): "on"
+# (it starts with the system), "runtime" (on only until the restart; the
+# fix turns it on for good), "masked", "masked-runtime", "none" (not
+# installed) or "off".
+_freshclam_plan() {
+    case "$1" in
+        enabled|static|indirect|alias|generated|transient) echo on ;;
+        enabled-runtime) echo runtime ;;
+        masked|masked-runtime) echo "$1" ;;
+        missing|not-found|bad|"") echo none ;;
+        *) echo off ;;
+    esac
+}
+
+# _freshclam_after STATE — the commands that start (or turn on)
+# clamav-freshclam.service after freshclam ran; nothing when it is not
+# installed.
+_freshclam_after() {
+    local unit="clamav-freshclam.service"
+    case "$(_freshclam_plan "$1")" in
+        on)             printf 'systemctl start %s' "$unit" ;;
+        masked)         printf 'systemctl unmask %s && systemctl enable --now %s' "$unit" "$unit" ;;
+        masked-runtime) printf 'systemctl unmask --runtime %s && systemctl enable --now %s' "$unit" "$unit" ;;
+        none)           ;;
+        *)              printf 'systemctl enable --now %s' "$unit" ;;
+    esac
+}
+
+# fix_clamav_defs SERVICE_STATE — download the virus definitions now and
+# keep them up to date with clamav-freshclam.service. freshclam and the
+# service take the same lock, so the service is stopped while freshclam
+# runs. It is started (or turned on) afterwards even when the download
+# failed: the fix then fails with freshclam's status, but the automatic
+# updates are not left off. A failure to start it fails the fix too.
+fix_clamav_defs() {
+    local unit="clamav-freshclam.service" script="rc=0"$'\n' undo="" after
+    after=$(_freshclam_after "$1")
+    case "$(_freshclam_plan "$1")" in
+        on)             undo="systemctl start ${unit}" ;;
+        masked)         undo="systemctl disable --now ${unit}"$'\n'"systemctl mask ${unit}" ;;
+        masked-runtime) undo="systemctl disable --now ${unit}"$'\n'"systemctl mask --runtime ${unit}" ;;
+        runtime)        undo="systemctl disable ${unit}"$'\n'"systemctl enable --runtime ${unit}" ;;
+        off)            undo="systemctl disable --now ${unit}" ;;
+    esac
+    [[ -n "$after" ]] && script+="systemctl stop ${unit} 2>/dev/null || true"$'\n'
+    script+="freshclam || rc=\$?"
+    [[ -n "$after" ]] && script+=$'\n'"{ ${after}; } || { s=\$?; [ \"\$rc\" -ne 0 ] || rc=\$s; }"
+    script+=$'\n'"exit \"\$rc\""
+    apply_change "$script" "$undo" \
+        "$(case "$(_freshclam_plan "$1")" in
+               on)   echo "Undo only starts the service again; the downloaded definitions stay." ;;
+               none) ;;
+               *)    echo "Undo puts the automatic updates back as they were; the downloaded definitions stay." ;;
+           esac)"
+}
+
+# _clamav_defs_finding SEV TITLE DETAIL DIR NOW — a finding whose fix
+# downloads the definitions (and turns on their automatic update); NOW is
+# what the definitions in DIR are like at present. The manual steps are
+# the fix's commands.
+_clamav_defs_finding() {
+    local sev="$1" title="$2" detail="$3" dir="$4" now="$5" svc after manual="" a
+    svc=$(_unit_state clamav-freshclam.service)
+    a=$(_freshclam_after "$svc")
+    after="definitions downloaded now"
+    case "$(_freshclam_plan "$svc")" in
+        on|none) ;;
+        *) after+=", then updated automatically (clamav-freshclam.service)" ;;
+    esac
+    [[ -n "$a" ]] && manual+="# The service holds the lock freshclam needs: stop it first."$'\n'"sudo systemctl stop clamav-freshclam.service"$'\n'
+    manual+="sudo freshclam"
+    [[ -n "$a" ]] && manual+=$'\n'"sudo ${a//&& /&& sudo }"
+    finding "$sev" "$title" "$detail" "$manual" fix_clamav_defs "$svc"
+    finding_change "${dir}: ${now}" "$after" "$W_DOWNLOAD"
+}
+
 check_deep_malware() {
-    local -a scanner=() targets=()
+    local -a scanner=() targets=() missing=()
+    local clamui=0 host=0 db="" age="" svc
+    _flatpak_installed "$_CLAMUI_APP" && clamui=1
+    _have clamscan || missing+=(clamav)
+    _have freshclam || missing+=(clamav-freshclam)
     if _have clamscan; then
-        scanner=(clamscan)
+        scanner=(clamscan); host=1
     elif _flatpak_installed com.gitlab.davem.ClamTk; then
         scanner=(flatpak run --command=clamscan com.gitlab.davem.ClamTk)
-    else
-        mark_skip "ClamAV is not installed (install ClamTk from Flathub to enable this scan)"
+    fi
+    # What is missing matters with ClamUI (which needs the system's
+    # ClamAV), for the system's clamscan without freshclam, and when there
+    # is no scanner at all. ClamTk alone brings both.
+    # A package already layered in the image that waits for the restart is
+    # not offered again; the note says so.
+    local pending="" p
+    local -a still=()
+    if [[ ${#missing[@]} -gt 0 ]] && [[ $clamui -eq 1 || $host -eq 1 || ${#scanner[@]} -eq 0 ]]; then
+        pending=$(_clamav_pending "${missing[@]}")
+        for p in "${missing[@]}"; do
+            [[ " ${pending} " == *" ${p} "* ]] || still+=("$p")
+        done
+        [[ -n "$pending" ]] && check_note "Layered, waiting for the restart: ${pending}"
+        [[ ${#still[@]} -gt 0 ]] && _clamav_not_set_up "$clamui" "$host" "${still[@]}"
+    fi
+    if [[ ${#scanner[@]} -eq 0 && " ${pending} " == *" clamav "* ]]; then
+        mark_skip "ClamAV is in the system update that waits for a restart; restart the PC, then run the check again"
         return 0
+    fi
+    if [[ ${#scanner[@]} -eq 0 ]]; then
+        mark_skip "ClamAV is not installed$([[ $clamui -eq 0 ]] && echo " (ClamTk from Flathub brings its own; ClamUI needs the system's ClamAV)" || true)"
+        return 0
+    fi
+    if [[ "$host" -eq 1 ]]; then
+        db=$(_clamav_db_dir)
+        svc=$(_unit_state clamav-freshclam.service)
+        if ! age=$(_clamav_defs_age "$db"); then
+            local what="no virus definitions"
+            [[ "$age" == partial ]] && what="an incomplete set of virus definitions (main and daily are both needed)"
+            if ! _have freshclam; then
+                mark_skip "ClamAV has ${what} in ${db}, and freshclam, which downloads them, is not installed"
+                return 0
+            fi
+            _clamav_defs_finding medium "$([[ $age == partial ]] && echo "ClamAV's virus definitions are incomplete" || echo "ClamAV has no virus definitions")" \
+"ClamAV is installed, but ${db} holds ${what}, so it cannot
+scan$([[ $clamui -eq 1 ]] && echo " - in ClamUI either" || true). The malware scan was left out." "$db" "$what"
+            mark_skip "ClamAV has ${what} in ${db}"
+            return 0
+        fi
+        check_note "Virus definitions: updated $([[ $age -eq 0 ]] && echo "today" || echo "${age} day(s) ago") (clamav-freshclam.service: ${svc})$([[ $clamui -eq 1 ]] && echo "; ClamUI uses this ClamAV" || true)"
+        if (( age > _CLAMAV_DEFS_OLD )) && _have freshclam; then
+            _clamav_defs_finding low "ClamAV's virus definitions are ${age} days old" \
+"New malware is added to the definitions every day; with definitions ${age} days old
+the scan misses what came since. They are not being updated$([[ $(_freshclam_plan "$svc") == on ]] && echo " although clamav-freshclam.service is on (see: journalctl -u clamav-freshclam.service)" || echo " automatically (clamav-freshclam.service is ${svc})")." \
+                "$db" "last updated ${age} days ago"
+        fi
     fi
     local u h d shared
     local -A by_user=()
@@ -387,34 +618,54 @@ check_deep_malware() {
     # a download) controls, and a folder name an account reports must not
     # send a root process anywhere. Each account's folders are scanned as
     # that account; the shared temporary folders as the desktop user (or
-    # the first account).
+    # the first account). It stays on the file system of each folder:
+    # a drive, a network share or an app image mounted below one is left
+    # out (an app's own mount in /tmp can be large).
     local out="" rc=0 part prc owner
-    local -a opts=(-r -i --no-summary --max-filesize=200M --max-scansize=400M)
+    local -a opts=(-r -i --no-summary --cross-fs=no --max-filesize=200M --max-scansize=400M) dbopt=()
+    # clamscan does not read freshclam.conf: it is told where freshclam
+    # puts the definitions (the ones checked above).
+    [[ "$host" -eq 1 && -n "$db" ]] && dbopt=("--database=${db}")
     if [[ "${scanner[0]}" == "flatpak" ]]; then
-        out=$(_as_desktop_user timeout 1800 "${scanner[@]}" "${opts[@]}" "${targets[@]}" 2>&1 < /dev/null) || rc=$?
+        out=$(_as_desktop_user timeout "$_CLAMAV_SCAN_LIMIT" "${scanner[@]}" "${opts[@]}" "${targets[@]}" 2>&1 < /dev/null) || rc=$?
     else
         for owner in "${!by_user[@]}"; do
             local -a mine=()
             mapfile -t mine <<< "${by_user[$owner]}"
             prc=0
-            part=$(_as_user "$owner" timeout 1800 "${scanner[@]}" "${opts[@]}" "${mine[@]}" 2>&1 < /dev/null) || prc=$?
+            part=$(_as_user "$owner" timeout "$_CLAMAV_SCAN_LIMIT" "${scanner[@]}" "${opts[@]}" "${dbopt[@]}" "${mine[@]}" 2>&1 < /dev/null) || prc=$?
             out+="${part}"$'\n'
-            (( prc > rc )) && rc=$prc
+            # A stopped scan (124) is told apart from the rest.
+            if (( prc == 124 )) || (( rc != 124 && prc > rc )); then rc=$prc; fi
         done
     fi
-    local found
+    local found first
     found=$(grep -E ' FOUND$' <<< "$out" || true)
+    # ClamAV's own error lines start with "LibClamAV Error:" or "ERROR:";
+    # a file it could not read is "PATH: ... ERROR" (exit 2).
+    first=$(grep -m 1 -iE '^(LibClamAV Error|ERROR):' <<< "$out" | cut -c1-200 || true)
     if [[ -n "$found" ]]; then
         finding high "ClamAV found $(grep -c . <<< "$found") infected file(s)" \
 "${found}" \
 "Delete the files (or check them on virustotal.com if you think it is a false
 alarm), then change passwords used on this PC if one of them was run."
-    elif [[ $rc -ne 0 && $rc -ne 1 ]] && { [[ $rc -ne 2 ]] || grep -qiE 'database|cl_load|cli_load|engine' <<< "$out"; }; then
-        mark_skip "the scan did not finish (exit ${rc}; the virus database may be missing - run freshclam or open ClamTk once)"
+        (( rc == 124 )) && check_note "The scan was stopped after $(( _CLAMAV_SCAN_LIMIT / 60 )) minutes, before it finished: other files may not have been scanned."
+    elif (( rc == 124 )); then
+        mark_skip "the scan was stopped after $(( _CLAMAV_SCAN_LIMIT / 60 )) minutes, before it finished (it scans $(_join ', ' "${targets[@]}"); many files there make it slow)"
+    elif [[ $rc -ne 0 && $rc -ne 1 ]] && grep -qiE '^(LibClamAV Error|ERROR):.*(databas|cl_load|cli_load|cvd|cld|malformed|engine)' <<< "$out"; then
+        if [[ "$host" -eq 1 ]] && _have freshclam; then
+            _clamav_defs_finding medium "ClamAV cannot load its virus definitions" \
+"The scan stopped because ClamAV could not load the definitions in ${db}
+(${first:-exit ${rc}}). They may be damaged or half written; a fresh download
+replaces them." "$db" "definitions that do not load"
+        fi
+        mark_skip "ClamAV could not load its virus definitions (${first:-exit ${rc}})$([[ $host -eq 0 ]] && echo "; open ClamTk once to download them" || true)$([[ $host -eq 1 ]] && ! _have freshclam && echo "; freshclam, which downloads them, is not installed" || true)"
+    elif [[ $rc -ne 0 && $rc -ne 1 && $rc -ne 2 ]]; then
+        mark_skip "the scan did not finish (exit ${rc}${first:+: ${first}})"
     else
         # Exit 2 without a database error: files the scanning account may
         # not read (other accounts' private files in /tmp) were left out.
-        check_note "ClamAV scanned: $(_join ', ' "${targets[@]}") - nothing found$([[ $rc -eq 2 ]] && echo " (files the scanning account may not read were left out)")"
+        check_note "ClamAV scanned: $(_join ', ' "${targets[@]}") - nothing found$([[ $rc -eq 2 ]] && echo " (files the scanning account may not read were left out)" || true)"
     fi
     return 0
 }

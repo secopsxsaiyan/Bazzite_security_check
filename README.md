@@ -43,7 +43,7 @@ It is a desktop-friendly counterpart to [ubuntu-sec-audit](https://github.com/se
 
 - Bazzite (KDE or GNOME) or another Fedora Atomic desktop image. On other systems it says so and asks before checking anything.
 - Administrator rights (it asks through pkexec or sudo).
-- Optional: PySide6 and Kirigami for the Plasma windows (present on Bazzite KDE), ClamAV for the `--deep` malware scan.
+- Optional: PySide6 and Kirigami for the Plasma windows (present on Bazzite KDE), ClamAV for the `--deep` malware scan: the system's `clamav` and `clamav-freshclam` (which ClamUI also needs), or ClamTk from Flathub. When the system's ClamAV or its virus definitions are missing, the deep check offers to set them up.
 
 ## Quick start
 
@@ -93,7 +93,7 @@ For a background check once a week (report only, with a notification), add
 | Accounts | user accounts and passwords, sudo rules, automatic login |
 | Desktop | screen locking, home folder permissions, keys and secrets in home folders |
 | Dev & gaming | Docker and containers, game streaming (Sunshine), anti-cheat readiness |
-| Deep (`--deep`) | SUID/SGID files, world-writable files, autostart entries, `/etc` changes compared with the image, ClamAV malware scan |
+| Deep (`--deep`) | SUID/SGID files, world-writable files, autostart entries, `/etc` changes compared with the image, ClamAV malware scan (and ClamAV's setup: packages, virus definitions and their automatic update) |
 
 `bazzite-sec-audit.sh --list-checks` prints the ids for `--check` and `--skip`, and `--help` lists every option.
 
