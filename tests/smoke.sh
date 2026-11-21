@@ -1795,11 +1795,11 @@ for line in open(sys.argv[1]):
         RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
         PYSIDE=no; HAVE="rpm-ostree"; ANSWER=0; PKG_RC=0; RPM_E=0
         _have() { [[ " $HAVE " == *" $1 "* ]]; }
-        _as_desktop_user() { [[ "$1" == python3 ]] && { [[ $PYSIDE == yes ]]; return; }; return 0; }
+        _as_desktop_user() { [[ "$1" == python3 ]] || return 0; case $PYSIDE in yes) return 0 ;; crash) return 1 ;; *) return 3 ;; esac; }
         rpm-ostree() { echo "rpm-ostree $*" >> "$W/fe-pkg"; return "$PKG_RC"; }
         dnf() { echo "dnf $*" >> "$W/fe-pkg"; return "$PKG_RC"; }
         rpm() { echo "rpm $*" >> "$W/fe-pkg"; [[ $RPM_E -eq 0 ]] || echo "kf6-kirigami is needed by (installed) neochat"; return "$RPM_E"; }
-        ui_yesno() { printf '%s|%s|%s|%s\n' "$2" "$3" "$4" "$5" >> "$W/fe-asked"; return "$ANSWER"; }
+        ui_yesno() { printf '%s|%s|%s|%s\n' "$2" "$3" "$4" "$5" >> "$W/fe-asked"; printf '%s\n' "$1" > "$W/fe-text"; return "$ANSWER"; }
         ui_msg() { echo "MSG ${1//$'\n'/ }" >> "$W/fe-msg"; }; ui_error() { echo "ERR ${1//$'\n'/ }" >> "$W/fe-msg"; }
         ui_busy_start() { :; }; ui_busy_stop() { :; }; ui_interactive() { return 0; }
         fe_clear() { : > "$W/fe-pkg"; : > "$W/fe-asked"; : > "$W/fe-msg"; }
@@ -1811,7 +1811,8 @@ for line in open(sys.argv[1]):
            && -e "$STATE_DIR/front-end-offered" ]] && echo "front-end-layered-on-install"
         # Kirigami missing too: both, in one transaction.
         rm -rf "$W/fe-qml/kirigami"; fe_case
-        [[ "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent --allow-inactive -- python3-pyside6 kf6-kirigami" ]] && echo "front-end-kirigami-too"
+        [[ "$(cat "$W/fe-pkg")" == "rpm-ostree install --idempotent --allow-inactive -- python3-pyside6 kf6-kirigami" ]] \
+            && grep -q "Install them now? They and the Qt libraries they need" "$W/fe-text" && [[ "$(_front_result_text)" == *"python3-pyside6, kf6-kirigami are added"* ]] && echo "front-end-kirigami-too"
         mkdir -p "$W/fe-qml/kirigami"; rm -f "$STATE_DIR/front-end-packages" "$STATE_DIR/front-end-offered"
         # Declined: nothing installed, nothing recorded, remembered as answered.
         ANSWER=1; fe_case
@@ -1830,8 +1831,8 @@ for line in open(sys.argv[1]):
             && grep -q "^ERR rpm-ostree install .* did not finish (exit 1)" "$W/fe-msg" && echo "front-end-failure-shown"
         PKG_RC=0
         # Everything there, or not a Plasma desktop: nothing asked.
-        PYSIDE=yes; fe_case; r1=$_FRONT_RESULT; PYSIDE=no; DESKTOP_ENV=gnome; fe_case
-        [[ "$r1" == none && "$_FRONT_RESULT" == none && ! -s "$W/fe-asked" ]] && echo "front-end-nothing-to-do"
+        PYSIDE=yes; fe_case; r1=$_FRONT_RESULT; PYSIDE=crash; fe_case; r2=$_FRONT_RESULT; PYSIDE=no; DESKTOP_ENV=gnome; fe_case
+        [[ "$r1" == none && "$r2" == none && "$_FRONT_RESULT" == none && ! -s "$W/fe-asked" ]] && echo "front-end-nothing-to-do"
         DESKTOP_ENV=kde
         # No desktop user: root's python3 is tried (here it has no PySide6).
         DESKTOP_USER=""; [[ "$(_front_end_missing)" == python3-pyside6 ]] && echo "front-end-probe-without-desktop-user"; DESKTOP_USER="$U"

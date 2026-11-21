@@ -189,15 +189,24 @@ readonly -a _FRONT_PKGS_KNOWN=(python3-pyside6 kf6-kirigami)
 # _front_end_missing — the packages the window needs that are not here, on
 # a KDE Plasma desktop (nothing on another desktop: kdialog and the window
 # are KDE's). PySide6 is tried with the desktop user's python3, as the
-# window runs; with no desktop user, with root's.
+# window runs; with no desktop user, with root's. Only an import that
+# finds no module counts as missing (exit 3): a probe that could not run
+# or crashed says nothing, and nothing is offered for it.
+readonly _PYSIDE_MISSING_PROBE='import sys
+try:
+    import PySide6.QtQml, PySide6.QtWidgets
+except ImportError:
+    sys.exit(3)'
 _front_end_missing() {
     [[ "$DESKTOP_ENV" == kde ]] || return 0
     local -a miss=()
+    local rc=0
     if [[ -n "${DESKTOP_USER:-}" ]]; then
-        _as_desktop_user python3 -I -c "$_PYSIDE_PROBE" >/dev/null 2>&1 < /dev/null || miss+=(python3-pyside6)
+        _as_desktop_user python3 -I -c "$_PYSIDE_MISSING_PROBE" >/dev/null 2>&1 < /dev/null || rc=$?
     else
-        python3 -I -c "$_PYSIDE_PROBE" >/dev/null 2>&1 < /dev/null || miss+=(python3-pyside6)
+        python3 -I -c "$_PYSIDE_MISSING_PROBE" >/dev/null 2>&1 < /dev/null || rc=$?
     fi
+    (( rc == 3 )) && miss+=(python3-pyside6)
     _kirigami_here || miss+=(kf6-kirigami)
     printf '%s' "${miss[*]}"
 }
@@ -217,8 +226,9 @@ _front_pkgs_recorded() {
 
 # _front_pkgs_record PACKAGE... — add PACKAGE to the list (no duplicates).
 _front_pkgs_record() {
-    local f="${STATE_DIR}/${_FRONT_PKGS_FILE}"
-    { _front_pkgs_recorded; printf '%s\n' "$@"; } | sort -u > "${f}.tmp" && mv -f -- "${f}.tmp" "$f"
+    local f="${STATE_DIR}/${_FRONT_PKGS_FILE}" tmp
+    tmp=$(mktemp "${f}.XXXXXX") || return 1
+    { _front_pkgs_recorded; printf '%s\n' "$@"; } | sort -u > "$tmp" && mv -f -- "$tmp" "$f"
 }
 
 # _front_offered — remember that the question was answered.
@@ -288,7 +298,7 @@ _pkg_run() {
 # defaults to "Not now": a lost dialog or nobody to ask adds nothing.
 _FRONT_RESULT=""; _FRONT_MISSING=""
 install_front_end() {
-    local miss tool pending booted p left="" it=it is=is need=needs
+    local miss tool pending booted p left="" it=it they=It is=is need=needs
     miss=$(_front_end_missing)
     _FRONT_MISSING="$miss"; _FRONT_RESULT=none
     [[ -n "$miss" ]] || return 0
@@ -317,10 +327,10 @@ install_front_end() {
         fi
         miss="$left"
     fi
-    [[ "$miss" == *" "* ]] && { it=them; is=are; need=need; }
+    [[ "$miss" == *" "* ]] && { it=them; they=They; is=are; need=need; }
     if ! ui_yesno "Security Check's window (one window for the setup, the results and the fixes) needs ${miss// /, }, which ${is} not installed. Without ${it}, the tool uses plain KDE dialogs.
 
-$([[ $tool == rpm-ostree ]] && echo "Install ${it} now? ${it^} and the Qt libraries ${it} ${need} (about 20 packages) are added to the system image with rpm-ostree as layered packages, updated with the system, and used after the next restart. If a system update ever fails because of them, remove the app or run: rpm-ostree uninstall ${miss}" || echo "Install ${it} now with dnf, with the Qt libraries ${it} ${need}?")
+$([[ $tool == rpm-ostree ]] && echo "Install ${it} now? ${they} and the Qt libraries ${they,,} ${need} (about 20 packages) are added to the system image with rpm-ostree as layered packages, updated with the system, and used after the next restart. If a system update ever fails because of them, remove the app or run: rpm-ostree uninstall ${miss}" || echo "Install ${it} now with dnf, with the Qt libraries ${they,,} ${need}?")
 Removing the app later offers to remove ${it} again." "Install" "Not now" "n" careful; then
         _FRONT_RESULT=declined
         _front_offered
@@ -343,13 +353,14 @@ Removing the app later offers to remove ${it} again." "Install" "Not now" "n" ca
 # _front_result_text — one line for the end of an install or a start, by
 # _FRONT_RESULT (nothing for "none").
 _front_result_text() {
-    local what="${_FRONT_MISSING// /, }"
+    local what="${_FRONT_MISSING// /, }" is=is
+    [[ "$_FRONT_MISSING" == *" "* ]] && is=are
     case "$_FRONT_RESULT" in
-        restart)  printf "Restart the PC to use Security Check's window: %s is added to the system image and used after the restart. Until then it uses plain KDE dialogs." "$what" ;;
+        restart)  printf "Restart the PC to use Security Check's window: %s %s added to the system image and used after the restart. Until then it uses plain KDE dialogs." "$what" "$is" ;;
         added)    printf "Security Check's window is used from the next start." ;;
         declined|failed) printf 'Without %s, Security Check uses plain KDE dialogs. Install the app again (--install) to add it.' "$what" ;;
         manual)   printf "Without %s, Security Check uses plain KDE dialogs. Install it with your system's package manager." "$what" ;;
-        broken)   printf "%s is layered on the running system, yet Security Check's window cannot use it, so it uses plain KDE dialogs. Check with: python3 -c 'import PySide6.QtQml'" "$what" ;;
+        broken)   printf "%s %s layered on the running system, yet Security Check's window cannot use it, so it uses plain KDE dialogs. Check with: python3 -c 'import PySide6.QtQml'" "$what" "$is" ;;
     esac
     return 0
 }
