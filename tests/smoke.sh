@@ -2057,9 +2057,11 @@ for line in open(sys.argv[1]):
         UI_MODE=none
         [[ -f "$STATE_DIR/undo/t6leave/01-undo.sh" ]] && grep -q '"t6 leave" was left as it is. Its undo step was kept' "$W/t6-leave-msg" && echo "failed-fix-left-says-so"
         # ... and one interrupted at the rollback question keeps it too.
-        RUN_ID="t6hup"; ui_yesno() { kill -HUP "$BASHPID"; sleep 1; return 1; }
-        ( trap _on_signal INT TERM HUP; _run_change "t6 hup" "echo half > $W/t6-hup; exit 1" "rm -f $W/t6-hup" ) > /dev/null 2>&1
-        [[ -e "$W/t6-hup" && -f "$STATE_DIR/undo/t6hup/01-undo.sh" ]] && echo "failed-fix-interrupted-at-question-keeps-undo"
+        RUN_ID="t6hup"; ui_yesno() { kill -HUP "$BASHPID"; sleep 1; return 1; }; : > "$W/t6-hup-msg"
+        ( UI_MODE=kde; ui_msg() { echo left >> "$W/t6-hup-msg"; }; trap _on_signal INT TERM HUP
+          _run_change "t6 hup" "echo half > $W/t6-hup; exit 1" "rm -f $W/t6-hup" ) > /dev/null 2>&1; rc=$?
+        [[ $rc -eq 130 && -e "$W/t6-hup" && -f "$STATE_DIR/undo/t6hup/01-undo.sh" && ! -s "$W/t6-hup-msg" ]] && echo "failed-fix-interrupted-at-question-keeps-undo" \
+            || echo "hup at question: rc=$rc"
     )
     # An action whose window stopped working on the way ends with status 1 and says so.
     (
