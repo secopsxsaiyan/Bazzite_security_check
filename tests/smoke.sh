@@ -1793,15 +1793,18 @@ for line in open(sys.argv[1]):
         DESKTOP_USER="$U"; DESKTOP_ENV=kde; IS_OSTREE=1; UI_MODE=none; FIX_MODE=confirm
         mkdir -p "$W/fe-qml/kirigami"; _KIRIGAMI_GLOB="$W/fe-qml/kirigam[i]"
         RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
-        PYSIDE=no; HAVE="rpm-ostree"; ANSWER=0; PKG_RC=0; RPM_E=0
+        PYSIDE=no; HAVE="rpm-ostree"; ANSWER=0; PKG_RC=0; RPM_E=0; RPM_HAVE=""; INTER=yes
         _have() { [[ " $HAVE " == *" $1 "* ]]; }
         _as_desktop_user() { [[ "$1" == python3 ]] || return 0; case $PYSIDE in yes) return 0 ;; crash) return 1 ;; *) return 3 ;; esac; }
         rpm-ostree() { echo "rpm-ostree $*" >> "$W/fe-pkg"; return "$PKG_RC"; }
         dnf() { echo "dnf $*" >> "$W/fe-pkg"; return "$PKG_RC"; }
-        rpm() { echo "rpm $*" >> "$W/fe-pkg"; [[ $RPM_E -eq 0 ]] || echo "kf6-kirigami is needed by (installed) neochat"; return "$RPM_E"; }
+        rpm() {
+            if [[ "$1" == -q ]]; then [[ " $RPM_HAVE " == *" ${*: -1} "* ]]; return; fi
+            echo "rpm $*" >> "$W/fe-pkg"; [[ $RPM_E -eq 0 ]] || echo "kf6-kirigami is needed by (installed) neochat"; return "$RPM_E"
+        }
         ui_yesno() { printf '%s|%s|%s|%s\n' "$2" "$3" "$4" "$5" >> "$W/fe-asked"; printf '%s\n' "$1" > "$W/fe-text"; return "$ANSWER"; }
         ui_msg() { echo "MSG ${1//$'\n'/ }" >> "$W/fe-msg"; }; ui_error() { echo "ERR ${1//$'\n'/ }" >> "$W/fe-msg"; }
-        ui_busy_start() { :; }; ui_busy_stop() { :; }; ui_interactive() { return 0; }
+        ui_busy_start() { :; }; ui_busy_stop() { :; }; ui_interactive() { [[ $INTER == yes ]]; }
         fe_clear() { : > "$W/fe-pkg"; : > "$W/fe-asked"; : > "$W/fe-msg"; }
         fe_case() { fe_clear; install_front_end; }
         # PySide6 missing on Bazzite: asked (a change: no default, "Not now" when nobody answers), layered, recorded.
@@ -1823,7 +1826,7 @@ for line in open(sys.argv[1]):
         [[ "$_FRONT_RESULT" == restart && ! -s "$W/fe-asked" && ! -s "$W/fe-pkg" ]] && echo "front-end-pending-not-asked"
         # Layered in the running image and still missing: no question, no restart promised.
         RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":["python3-pyside6"]}]}'; fe_case
-        [[ "$_FRONT_RESULT" == broken && ! -s "$W/fe-asked" && ! -s "$W/fe-pkg" && "$(_front_result_text)" == "python3-pyside6 is layered on the running system, yet"* ]] && echo "front-end-layered-but-broken"
+        [[ "$_FRONT_RESULT" == broken && ! -s "$W/fe-asked" && ! -s "$W/fe-pkg" && "$(_front_result_text)" == "python3-pyside6 is installed, yet"* ]] && echo "front-end-layered-but-broken"
         RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'; rm -f "$STATE_DIR/front-end-offered"
         # rpm-ostree fails: the error is shown, nothing recorded, asked again next time.
         PKG_RC=1; fe_case
@@ -1835,29 +1838,52 @@ for line in open(sys.argv[1]):
         [[ "$r1" == none && "$r2" == none && "$_FRONT_RESULT" == none && ! -s "$W/fe-asked" ]] && echo "front-end-nothing-to-do"
         DESKTOP_ENV=kde
         # No desktop user: root's python3 is tried (here it has no PySide6).
-        DESKTOP_USER=""; [[ "$(_front_end_missing)" == python3-pyside6 ]] && echo "front-end-probe-without-desktop-user"; DESKTOP_USER="$U"
+        DESKTOP_USER=""; python3() { [[ "$1 $2" == "-I -c" ]] && return 3; command python3 "$@"; }
+        [[ "$(_front_end_missing)" == python3-pyside6 ]] && echo "front-end-probe-without-desktop-user"; unset -f python3; DESKTOP_USER="$U"
+        # The probe itself: no PySide6 is 3; a PySide6 that is there but does not load (a library or module it needs) is not.
+        mkdir -p "$W/fakeps/PySide6"; : > "$W/fakeps/PySide6/__init__.py"
+        r0=0; python3 -I -c "$_PYSIDE_MISSING_PROBE" 2>/dev/null || r0=$?
+        echo 'raise ImportError("libQt6Qml.so.6: cannot open shared object file")' > "$W/fakeps/PySide6/QtQml.py"
+        r1=0; ( cd "$W/fakeps" && python3 -c "$_PYSIDE_MISSING_PROBE" ) 2>/dev/null || r1=$?
+        echo 'import shiboken6' > "$W/fakeps/PySide6/QtQml.py"
+        r2=0; ( cd "$W/fakeps" && python3 -c "$_PYSIDE_MISSING_PROBE" ) 2>/dev/null || r2=$?
+        [[ "$r0 $r1 $r2" == "3 4 4" ]] && echo "front-end-probe-only-missing-pyside" || echo "probe gave $r0 $r1 $r2"
         # Fedora without rpm-ostree: dnf, in use from the next start; an image without rpm-ostree, or no tool: told.
         IS_OSTREE=0; HAVE="dnf rpm-ostree"; fe_case
         [[ "$_FRONT_RESULT" == added && "$(cat "$W/fe-pkg")" == "dnf install -y -- python3-pyside6" ]] && echo "front-end-dnf"
         IS_OSTREE=1; HAVE="dnf"; fe_case; r1=$_FRONT_RESULT
-        IS_OSTREE=0; HAVE=""; fe_case
-        [[ "$r1" == manual && "$_FRONT_RESULT" == manual && ! -s "$W/fe-asked" && ! -s "$W/fe-pkg" ]] && echo "front-end-no-tool"
+        IS_OSTREE=0; HAVE=""; rm -f "$STATE_DIR/front-end-offered"; fe_case
+        [[ "$r1" == manual && "$_FRONT_RESULT" == manual && ! -s "$W/fe-asked" && ! -s "$W/fe-pkg" && -e "$STATE_DIR/front-end-offered" ]] && echo "front-end-no-tool"
+        # Installed already (dnf would say "already installed"), yet missing: broken, not "added", nothing recorded.
+        IS_OSTREE=0; HAVE="dnf"; RPM_HAVE="python3-pyside6"; rm -f "$STATE_DIR/front-end-packages"; fe_case
+        [[ "$_FRONT_RESULT" == broken && ! -s "$W/fe-pkg" && -z "$(_front_pkgs_recorded)" && "$(_front_result_text)" == "python3-pyside6 is installed, yet"* ]] && echo "front-end-installed-but-broken"
+        RPM_HAVE=""
+        # Nobody to ask, or a dialog that failed on the way: nothing added, and not remembered as answered.
+        rm -f "$STATE_DIR/front-end-offered"; INTER=no; fe_case; r1=$_FRONT_RESULT
+        INTER=yes; ui_yesno() { INTER=no; return 1; }; fe_case; r2=$_FRONT_RESULT
+        ui_yesno() { printf '%s|%s|%s|%s\n' "$2" "$3" "$4" "$5" >> "$W/fe-asked"; printf '%s\n' "$1" > "$W/fe-text"; return "$ANSWER"; }; INTER=yes
+        [[ "$r1 $r2" == "declined declined" && ! -s "$W/fe-pkg" && ! -e "$STATE_DIR/front-end-offered" ]] && echo "front-end-nobody-asked-not-remembered"
         IS_OSTREE=1; HAVE="rpm-ostree"
         # Removing the app offers to remove what it added (default: keep); only known names are ever passed on.
         printf '%s\n' python3-pyside6 'evil; rm -rf /' '-y' > "$STATE_DIR/front-end-packages"
+        RPMOSTREE_JSON='{"deployments":[{"staged":true,"requested-packages":["python3-pyside6"]},{"booted":true,"requested-packages":[]}]}'
         fe_clear; ANSWER=1; remove_front_end
         kept=$([[ ! -s "$W/fe-pkg" && -s "$STATE_DIR/front-end-packages" ]] && echo yes)
         ANSWER=0; _app_installed() { return 0; }; _timer_installed() { return 0; }; _refresh_menu() { :; }; uninstall_app
         [[ "$kept" == yes && "$(grep -v '^$' "$W/fe-pkg")" == "rpm-ostree uninstall --idempotent -- python3-pyside6" && ! -e "$STATE_DIR/front-end-packages" \
            && "$(grep -c '^Remove|Keep|n|careful$' "$W/fe-asked")" -eq 2 ]] && echo "front-end-removed-with-the-app"
+        RPMOSTREE_JSON='{"deployments":[{"booted":true,"requested-packages":[]}]}'
+        # Removed by hand since: nothing asked, and the list goes.
+        echo python3-pyside6 > "$STATE_DIR/front-end-packages"; fe_clear; remove_front_end
+        [[ ! -s "$W/fe-asked" && ! -s "$W/fe-pkg" && ! -e "$STATE_DIR/front-end-packages" ]] && echo "front-end-gone-already"
         # A list that is a link is not read.
         echo python3-pyside6 > "$W/fe-elsewhere"; ln -sfn "$W/fe-elsewhere" "$STATE_DIR/front-end-packages"
         [[ -z "$(_front_pkgs_recorded)" ]] && echo "front-end-list-link-ignored"; rm -f "$STATE_DIR/front-end-packages"
         # dnf removes what needs a package too: with something else needing it, it stays.
-        IS_OSTREE=0; HAVE="dnf"; RPM_E=1; echo kf6-kirigami > "$STATE_DIR/front-end-packages"; fe_clear; remove_front_end
+        IS_OSTREE=0; HAVE="dnf"; RPM_E=1; RPM_HAVE="kf6-kirigami"; echo kf6-kirigami > "$STATE_DIR/front-end-packages"; fe_clear; remove_front_end
         [[ "$(cat "$W/fe-pkg")" == "rpm -e --test -- kf6-kirigami" && ! -s "$W/fe-asked" && ! -e "$STATE_DIR/front-end-packages" ]] \
             && grep -q "^MSG .*need it now, so it stays.*neochat" "$W/fe-msg" && echo "front-end-dnf-keeps-what-others-need"
-        IS_OSTREE=1; HAVE="rpm-ostree"; RPM_E=0
+        IS_OSTREE=1; HAVE="rpm-ostree"; RPM_E=0; RPM_HAVE=""
         # A start of the installed app asks once; not without the app, nor without KDE dialogs, nor in a report-only run.
         rm -f "$STATE_DIR/front-end-offered"; fe_clear
         _app_installed() { return 1; }; UI_MODE=kde; offer_front_end_once
@@ -2097,7 +2123,8 @@ for m in backup-ok restore-ok symlink-restore-blocked symlink-backup-refused sec
          undo-enter-is-cancel-then-keep-it careful-questions-use-the-kdialog-warning root-changing-questions-are-marked \
          front-end-layered-on-install front-end-kirigami-too front-end-declined front-end-pending-not-asked front-end-failure-shown \
          front-end-nothing-to-do front-end-dnf front-end-no-tool front-end-removed-with-the-app front-end-offered-once front-end-install-says-restart \
-         front-end-layered-but-broken front-end-probe-without-desktop-user front-end-list-link-ignored front-end-dnf-keeps-what-others-need front-end-offer-wired; do
+         front-end-layered-but-broken front-end-probe-without-desktop-user front-end-list-link-ignored front-end-dnf-keeps-what-others-need front-end-offer-wired \
+         front-end-probe-only-missing-pyside front-end-installed-but-broken front-end-nobody-asked-not-remembered front-end-gone-already; do
     expect "$W/t6.out" "$m" "$m"
 done
 

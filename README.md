@@ -80,7 +80,8 @@ is added without a "yes": an unattended `--install` leaves it out. An app
 installed or updated by an older version asks once when a check-up starts
 (not in a report-only run). `--uninstall` offers to remove what was added
 (default: keep). If a system update ever fails because of the layered
-packages, remove them with `rpm-ostree uninstall python3-pyside6`.
+packages, remove them with `rpm-ostree uninstall python3-pyside6` (and
+`kf6-kirigami`, if it was added too).
 
 The setup wizard, the dashboard, the fixes and Settings are pages of one
 Kirigami (Plasma) window when PySide6 and Kirigami are installed (see
