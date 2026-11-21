@@ -1004,10 +1004,13 @@ ui_error() {
 #                        or reached with Tab.
 #   warn                 as "careful", and shown as a warning (a question
 #                        with side effects)
-# kdialog cannot be told which button is the default: its plain question
-# has YES, its warning has NO. So "careful" and "warn" both use its warning
-# dialog; the other questions get YES there whatever DEFAULT is, which is
-# why a question whose YES changes something must be marked.
+# kdialog cannot be told which button is the default: Enter presses the
+# button in its YES place, in the plain question and in the warning alike
+# (since kdialog 19.12). So unless YES is the default (DEFAULT y, not
+# marked), the NO answer is put in kdialog's YES place and YES in its NO
+# place, and the answer is read back the other way round. Esc or closing
+# the window is neither (exit 2): always NO. "careful" and "warn" use the
+# warning dialog.
 ui_yesno() {
     local text="$1" yes="${2:-Yes}" no="${3:-No}" def="${4:-n}" how="${5:-}" kind="--yesno" primary=1 a rc
     [[ -z "$how" ]] || { kind="--warningyesno"; primary=-1; }
@@ -1018,10 +1021,19 @@ ui_yesno() {
         1) return 1 ;;
     esac
     if [[ "$UI_MODE" == "kde" ]]; then
-        _kd --yes-label "$yes" --no-label "$no" \
-            "$kind" "$(_ui_html "$text")"
-        rc=$?
-        [[ $rc -ne 255 ]] && return "$rc"
+        if [[ "$def" == y && -z "$how" ]]; then
+            _kd --yes-label "$yes" --no-label "$no" "$kind" "$(_ui_html "$text")"
+            rc=$?
+            [[ $rc -ne 255 ]] && return "$rc"
+        else
+            _kd --yes-label "$no" --no-label "$yes" "$kind" "$(_ui_html "$text")"
+            rc=$?
+            case $rc in
+                1) return 0 ;;
+                255) ;;
+                *) return 1 ;;
+            esac
+        fi
     fi
     if [[ "$UI_MODE" == "tty" ]]; then
         printf '\n%s\n' "$(_ui_plain "$text")" > /dev/tty
@@ -1038,8 +1050,8 @@ ui_yesno() {
 # (only when it is needed). On the terminal, Enter gives the last
 # argument's answer (No unless "y" is given); with no one to ask, the
 # answer is always No. "warn", "careful" and the button that Enter presses
-# in a window: as in ui_yesno (kdialog's warning has Cancel as its
-# default).
+# in a window: as in ui_yesno (in kdialog, NO is put in the YES place, and
+# Esc or closing the window is CANCEL).
 ui_choice3() {
     local html="$1" text="$2" yes="$3" no="$4" cancel="$5" how="${6:-}" kind="--yesnocancel" def="${7:-n}" primary=2 a rc
     [[ -z "$how" ]] || { kind="--warningyesnocancel"; primary=-1; }
@@ -1050,10 +1062,22 @@ ui_choice3() {
         1) return 2 ;;
     esac
     if [[ "$UI_MODE" == "kde" ]]; then
-        _kd --yes-label "$yes" --no-label "$no" --cancel-label "$cancel" \
-            "$kind" "<html>${html#<html>}"
-        rc=$?
-        [[ $rc -ne 255 ]] && return "$rc"
+        if [[ "$def" == y && -z "$how" ]]; then
+            _kd --yes-label "$yes" --no-label "$no" --cancel-label "$cancel" \
+                "$kind" "<html>${html#<html>}"
+            rc=$?
+            [[ $rc -ne 255 ]] && return "$rc"
+        else
+            _kd --yes-label "$no" --no-label "$yes" --cancel-label "$cancel" \
+                "$kind" "<html>${html#<html>}"
+            rc=$?
+            case $rc in
+                0) return 1 ;;
+                1) return 0 ;;
+                255) ;;
+                *) return 2 ;;
+            esac
+        fi
     fi
     if [[ "$UI_MODE" == "tty" ]]; then
         [[ -n "$text" ]] || text=$(_html2text "<html>${html#<html>}")

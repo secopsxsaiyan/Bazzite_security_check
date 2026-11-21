@@ -124,8 +124,12 @@ All notable changes to this project are listed here. The format follows
 - A stray Enter or Space can no longer start a change in a question window.
   Where "Yes" changes the PC there and then (applying a fix in the plain
   dialog, each undo step, "Undo anyway", rolling back a failed fix, install,
-  remove, update), no button or the "No" button is the one Enter presses,
-  and the kdialog version is the warning dialog, whose default is "No".
+  remove, update), no button or the "No" button is the one Enter presses.
+  kdialog presses its first button (its "Yes" place) on Enter in every
+  question, warnings included, and cannot be told otherwise, so there the
+  "No" answer (Skip, Keep it, Leave it, Cancel) is put in that place and
+  the answer is read back the other way round; Esc or closing it is never
+  "Yes". The plain questions whose default is "No" get the same.
 - What a fix prints is copied into the run log like an undo step's output:
   only the end of it, cut to size and marked `fix:`. What kdialog or a
   one-page window prints is read only up to the size of an answer.
