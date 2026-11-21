@@ -402,7 +402,9 @@ except ValueError:
 deps = [x for x in (d.get("deployments") or []) if isinstance(x, dict)]
 booted = next((i for i, x in enumerate(deps) if x.get("booted")), 0)
 ahead = [x for i, x in enumerate(deps) if x.get("staged") or i < booted]
-print(" ".join(p for p in sys.argv[1:] if any(p in (x.get("requested-packages") or []) for x in ahead)))' "$@" <<< "$RPMOSTREE_JSON" 2>/dev/null || true
+req = [x.get("requested-packages") for x in ahead]
+req = [r for r in req if isinstance(r, list)]
+print(" ".join(p for p in sys.argv[1:] if any(p in r for r in req)))' "$@" <<< "$RPMOSTREE_JSON" 2>/dev/null || true
 }
 
 # _clamav_not_set_up CLAMUI HOST MISSING... — part of ClamAV is not
@@ -456,11 +458,11 @@ fix_clamav_install() {
 
 # _freshclam_plan STATE — what fix_clamav_defs does with
 # clamav-freshclam.service in this state (systemctl is-enabled): "on"
-# (it already runs or starts with the system), "masked",
-# "masked-runtime", "none" (not installed) or "off".
+# (it starts with the system), "masked", "masked-runtime", "none" (not
+# installed) or "off" (also "enabled-runtime": on only until the restart).
 _freshclam_plan() {
     case "$1" in
-        enabled|enabled-runtime|static|indirect|alias|generated|transient) echo on ;;
+        enabled|static|indirect|alias|generated|transient) echo on ;;
         masked|masked-runtime) echo "$1" ;;
         missing|not-found|bad|"") echo none ;;
         *) echo off ;;
@@ -471,21 +473,26 @@ _freshclam_plan() {
 # keep them up to date with clamav-freshclam.service. freshclam and the
 # service take the same lock, so the service is stopped while freshclam
 # runs. It is started (or turned on) afterwards even when the download
-# fails: the fix then fails, but the automatic updates are not left off.
+# failed: the fix then fails with freshclam's status, but the automatic
+# updates are not left off. A failure to start it fails the fix too.
 fix_clamav_defs() {
-    local unit="clamav-freshclam.service" script="rc=0"$'\n' undo=""
+    local unit="clamav-freshclam.service" script undo="" after=""
+    script="rc=0"$'\n'
     case "$(_freshclam_plan "$1")" in
-        on)   script+="systemctl stop ${unit} 2>/dev/null || true"$'\n'"freshclam || rc=\$?"$'\n'"systemctl start ${unit}" ;;
+        on)   after="systemctl start ${unit}" ;;
         masked)
-              script+="freshclam || rc=\$?"$'\n'"systemctl unmask ${unit}"$'\n'"systemctl enable --now ${unit}"
+              after="systemctl unmask ${unit} && systemctl enable --now ${unit}"
               undo="systemctl disable --now ${unit}"$'\n'"systemctl mask ${unit}" ;;
         masked-runtime)
-              script+="freshclam || rc=\$?"$'\n'"systemctl unmask --runtime ${unit}"$'\n'"systemctl enable --now ${unit}"
+              after="systemctl unmask --runtime ${unit} && systemctl enable --now ${unit}"
               undo="systemctl disable --now ${unit}"$'\n'"systemctl mask --runtime ${unit}" ;;
-        none) script+="freshclam || rc=\$?" ;;
-        *)    script+="systemctl stop ${unit} 2>/dev/null || true"$'\n'"freshclam || rc=\$?"$'\n'"systemctl enable --now ${unit}"
+        none) ;;
+        *)    after="systemctl enable --now ${unit}"
               undo="systemctl disable --now ${unit}" ;;
     esac
+    [[ -n "$after" ]] && script+="systemctl stop ${unit} 2>/dev/null || true"$'\n'
+    script+="freshclam || rc=\$?"
+    [[ -n "$after" ]] && script+=$'\n'"{ ${after}; } || { s=\$?; [ \"\$rc\" -ne 0 ] || rc=\$s; }"
     script+=$'\n'"exit \"\$rc\""
     apply_change "$script" "$undo" \
         "$([[ -n $undo ]] && echo "Undo turns the automatic updates off again; the downloaded definitions stay.")"
@@ -501,7 +508,7 @@ _clamav_defs_finding() {
     case "$(_freshclam_plan "$svc")" in
         on|none) ;;
         masked*) after+=", then updated automatically (clamav-freshclam.service)"
-                 manual+=$'\n'"sudo systemctl unmask clamav-freshclam.service"$'\n'"sudo systemctl enable --now clamav-freshclam.service   (keeps them up to date)" ;;
+                 manual+=$'\n'"sudo systemctl unmask$([[ $svc == masked-runtime ]] && echo " --runtime") clamav-freshclam.service"$'\n'"sudo systemctl enable --now clamav-freshclam.service   (keeps them up to date)" ;;
         *)       after+=", then updated automatically (clamav-freshclam.service)"
                  manual+=$'\n'"sudo systemctl enable --now clamav-freshclam.service   (keeps them up to date)" ;;
     esac
@@ -559,7 +566,7 @@ scan$([[ $clamui -eq 1 ]] && echo " - in ClamUI either"). The malware scan was l
             mark_skip "ClamAV has ${what} in ${db}"
             return 0
         fi
-        check_note "Virus definitions: updated ${age} day(s) ago (clamav-freshclam.service: ${svc})$([[ $clamui -eq 1 ]] && echo "; ClamUI uses this ClamAV")"
+        check_note "Virus definitions: updated $([[ $age -eq 0 ]] && echo "today" || echo "${age} day(s) ago") (clamav-freshclam.service: ${svc})$([[ $clamui -eq 1 ]] && echo "; ClamUI uses this ClamAV")"
         if (( age > _CLAMAV_DEFS_OLD )) && _have freshclam; then
             _clamav_defs_finding low "ClamAV's virus definitions are ${age} days old" \
 "New malware is added to the definitions every day; with definitions ${age} days old
@@ -624,7 +631,7 @@ alarm), then change passwords used on this PC if one of them was run."
         (( rc == 124 )) && check_note "The scan was stopped after $(( _CLAMAV_SCAN_LIMIT / 60 )) minutes, before it finished: other files may not have been scanned."
     elif (( rc == 124 )); then
         mark_skip "the scan was stopped after $(( _CLAMAV_SCAN_LIMIT / 60 )) minutes, before it finished (it scans $(_join ', ' "${targets[@]}"); many files there make it slow)"
-    elif [[ $rc -ne 0 && $rc -ne 1 ]] && grep -qiE '^(LibClamAV Error|ERROR):.*(databas|cl_load|cli_load|engine|\.c[lv]d)' <<< "$out"; then
+    elif [[ $rc -ne 0 && $rc -ne 1 ]] && grep -qiE '^(LibClamAV Error|ERROR):.*(databas|cl_load|cli_load|cvdload|malformed|engine|\.c[lv]d)' <<< "$out"; then
         if [[ "$host" -eq 1 ]]; then
             _clamav_defs_finding medium "ClamAV cannot load its virus definitions" \
 "The scan stopped because ClamAV could not load the definitions in ${db}
