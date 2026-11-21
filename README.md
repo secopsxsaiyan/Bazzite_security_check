@@ -73,10 +73,14 @@ installed only after its signature and checksums are verified. `--uninstall`
 removes the app; reports, history and undo steps are kept.
 
 When the Plasma window cannot run because `python3-pyside6` (or Kirigami) is
-missing, `--install` offers to add it: with rpm-ostree on Bazzite and other
-Fedora Atomic images (a layered package, active after the next restart), with
-dnf on Fedora. An app installed or updated by an older version asks once when
-it starts. `--uninstall` offers to remove what was added (default: keep).
+missing, `--install` offers to add it, with the Qt libraries it needs (about
+20 packages): with rpm-ostree on Bazzite and other Fedora Atomic images
+(layered packages, used after the next restart), with dnf on Fedora. Nothing
+is added without a "yes": an unattended `--install` leaves it out. An app
+installed or updated by an older version asks once when a check-up starts
+(not in a report-only run). `--uninstall` offers to remove what was added
+(default: keep). If a system update ever fails because of the layered
+packages, remove them with `rpm-ostree uninstall python3-pyside6`.
 
 The setup wizard, the dashboard, the fixes and Settings are pages of one
 Kirigami (Plasma) window when PySide6 and Kirigami are installed (see

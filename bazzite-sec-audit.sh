@@ -408,7 +408,6 @@ Many checks will not apply. Continue anyway?" "Continue" "Quit" "n"; then
         update_run quiet
         [[ $? -eq 10 ]] && { print_status "INFO" "Start Security Check again to use the new version."; exit 0; }
     fi
-    offer_front_end_once
     detect_usecases
     load_profile
     load_last_run
@@ -422,6 +421,7 @@ Many checks will not apply. Continue anyway?" "Continue" "Quit" "n"; then
     fi
     [[ -n "$REPORT_DIR" ]] || REPORT_DIR=$(_default_report_dir)
     ui_interactive || FIX_MODE="report"
+    offer_front_end_once
 
     FINDINGS_FILE="$STATE_DIR/history/findings-${RUN_ID}.jsonl"
     : > "$FINDINGS_FILE"

@@ -175,16 +175,16 @@ _install_app_files() {
 }
 
 # ---- what the Plasma window needs ----
-# The one window (ui/app.py) runs on PySide6 and Kirigami. Bazzite's KDE
-# image has Kirigami but not PySide6; without it the tool uses plain
-# kdialog windows. Installing the app offers to add what is missing; the
-# packages it added are listed in STATE_DIR so that removing the app can
-# offer to take them away again.
+# The one window (ui/app.py) runs on PySide6 and Kirigami (see _qml_ok).
+# Bazzite's KDE image has Kirigami but not PySide6; without it the tool
+# uses plain kdialog windows. Installing the app offers to add what is
+# missing; the packages it added are listed in STATE_DIR so that removing
+# the app can offer to take them away again.
 readonly _FRONT_PKGS_FILE="front-end-packages"
-# Where Kirigami's QML module is, when it is installed.
-_KIRIGAMI_GLOB="/usr/lib*/qt6/qml/org/kde/kirigami"
-# Set once the question was asked, so that a normal start asks only once.
+# Set once the question was answered, so that a normal start asks once.
 readonly _FRONT_OFFERED_FILE="front-end-offered"
+# The only packages this ever adds or removes.
+readonly -a _FRONT_PKGS_KNOWN=(python3-pyside6 kf6-kirigami)
 
 # _front_end_missing — the packages the window needs that are not here, on
 # a KDE Plasma desktop (nothing on another desktop: kdialog and the window
@@ -193,23 +193,26 @@ readonly _FRONT_OFFERED_FILE="front-end-offered"
 _front_end_missing() {
     [[ "$DESKTOP_ENV" == kde ]] || return 0
     local -a miss=()
-    local probe='import PySide6.QtQml, PySide6.QtWidgets'
     if [[ -n "${DESKTOP_USER:-}" ]]; then
-        _as_desktop_user python3 -I -c "$probe" >/dev/null 2>&1 < /dev/null || miss+=(python3-pyside6)
+        _as_desktop_user python3 -I -c "$_PYSIDE_PROBE" >/dev/null 2>&1 < /dev/null || miss+=(python3-pyside6)
     else
-        python3 -I -c "$probe" >/dev/null 2>&1 < /dev/null || miss+=(python3-pyside6)
+        python3 -I -c "$_PYSIDE_PROBE" >/dev/null 2>&1 < /dev/null || miss+=(python3-pyside6)
     fi
-    compgen -G "$_KIRIGAMI_GLOB" >/dev/null || miss+=(kf6-kirigami)
+    _kirigami_here || miss+=(kf6-kirigami)
     printf '%s' "${miss[*]}"
 }
 
-# _front_pkgs_recorded — the packages an earlier install added, one per line.
+# _front_pkgs_recorded — the packages an earlier install added, one per
+# line: only the known ones, from a regular file (not a link).
 _front_pkgs_recorded() {
-    local f="${STATE_DIR}/${_FRONT_PKGS_FILE}" p
+    local f="${STATE_DIR}/${_FRONT_PKGS_FILE}" p k
     [[ -f "$f" && ! -L "$f" ]] || return 0
     while IFS= read -r p; do
-        [[ "$p" =~ ^[a-z0-9][a-z0-9.+_-]*$ ]] && printf '%s\n' "$p"
+        for k in "${_FRONT_PKGS_KNOWN[@]}"; do
+            [[ "$p" == "$k" ]] && printf '%s\n' "$p"
+        done
     done < "$f"
+    return 0
 }
 
 # _front_pkgs_record PACKAGE... — add PACKAGE to the list (no duplicates).
@@ -218,12 +221,36 @@ _front_pkgs_record() {
     { _front_pkgs_recorded; printf '%s\n' "$@"; } | sort -u > "${f}.tmp" && mv -f -- "${f}.tmp" "$f"
 }
 
+# _front_offered — remember that the question was answered.
+_front_offered() { { : > "${STATE_DIR}/${_FRONT_OFFERED_FILE}"; } 2>/dev/null || true; }
+
 # _pkg_tool — how packages are added here: "rpm-ostree" (Bazzite and other
-# Fedora Atomic images: layered, active after a restart), "dnf", or nothing.
+# Fedora Atomic images: layered, active after a restart), "dnf" (a system
+# that is not image-based), or nothing (on an image without rpm-ostree, dnf
+# would write to a read-only or throw-away /usr).
 _pkg_tool() {
-    if [[ "$IS_OSTREE" -eq 1 ]] && _have rpm-ostree; then echo rpm-ostree
-    elif _have dnf; then echo dnf
+    if [[ "$IS_OSTREE" -eq 1 ]]; then
+        _have rpm-ostree && echo rpm-ostree
+    elif _have dnf; then
+        echo dnf
     fi
+    return 0
+}
+
+# _layered_booted PACKAGE... — those of PACKAGE the running image already
+# has as layered packages (requested in the booted deployment).
+_layered_booted() {
+    [[ -n "${RPMOSTREE_JSON:-}" ]] || return 0
+    python3 -I -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except ValueError:
+    sys.exit(0)
+deps = [x for x in (d.get("deployments") or []) if isinstance(x, dict)]
+req = next((x.get("requested-packages") for x in deps if x.get("booted")), None)
+req = req if isinstance(req, list) else []
+print(" ".join(p for p in sys.argv[1:] if p in req))' "$@" <<< "$RPMOSTREE_JSON" 2>/dev/null || true
 }
 
 # _pkg_run TOOL install|uninstall PACKAGE... — add or remove PACKAGE, with a
@@ -235,7 +262,7 @@ _pkg_run() {
     local -a cmd
     case "$tool:$verb" in
         rpm-ostree:install)   cmd=(rpm-ostree install --idempotent --allow-inactive -- "$@") ;;
-        rpm-ostree:uninstall) cmd=(rpm-ostree uninstall -- "$@") ;;
+        rpm-ostree:uninstall) cmd=(rpm-ostree uninstall --idempotent -- "$@") ;;
         dnf:install)          cmd=(dnf install -y -- "$@") ;;
         dnf:uninstall)        cmd=(dnf remove -y -- "$@") ;;
         *) return 2 ;;
@@ -255,11 +282,13 @@ _pkg_run() {
 # install_front_end — offer to add what the Plasma window needs (see above).
 # _FRONT_RESULT tells how it went: "none" (nothing missing), "added" (in
 # use from the next start), "restart" (layered, or already waiting: active
-# after the restart), "declined", "failed" or "manual" (no package tool
-# known here). _FRONT_MISSING: the packages that were missing.
+# after the restart), "declined", "failed", "manual" (no package tool known
+# here) or "broken" (layered in the running image, yet the window still
+# cannot run). _FRONT_MISSING: the packages that were missing. The question
+# defaults to "Not now": a lost dialog or nobody to ask adds nothing.
 _FRONT_RESULT=""; _FRONT_MISSING=""
 install_front_end() {
-    local miss tool pending="" p left=""
+    local miss tool pending booted p left="" it=it is=is need=needs
     miss=$(_front_end_missing)
     _FRONT_MISSING="$miss"; _FRONT_RESULT=none
     [[ -n "$miss" ]] || return 0
@@ -270,59 +299,98 @@ install_front_end() {
     fi
     if [[ "$tool" == rpm-ostree ]]; then
         # shellcheck disable=SC2086 # package names, one word each
+        booted=$(_layered_booted $miss)
+        if [[ -n "$booted" ]]; then
+            # Layered and running, and still missing: adding it again does
+            # nothing ("--idempotent"), and a restart would not help.
+            _FRONT_RESULT=broken; _FRONT_MISSING="$booted"
+            _front_offered
+            return 1
+        fi
+        # shellcheck disable=SC2086
         pending=$(_layered_pending $miss)
         for p in $miss; do [[ " $pending " == *" $p "* ]] || left+="${left:+ }$p"; done
         if [[ -z "$left" ]]; then
             _FRONT_RESULT=restart
+            _front_offered
             return 0
         fi
         miss="$left"
     fi
-    local it=it is=is
-    [[ "$miss" == *" "* ]] && { it=them; is=are; }
-    : > "${STATE_DIR}/${_FRONT_OFFERED_FILE}" 2>/dev/null || true
-    ui_yesno "Security Check's window (one window for the setup, the results and the fixes) needs ${miss// /, }, which ${is} not installed. Without ${it}, the tool uses plain KDE dialogs.
+    [[ "$miss" == *" "* ]] && { it=them; is=are; need=need; }
+    if ! ui_yesno "Security Check's window (one window for the setup, the results and the fixes) needs ${miss// /, }, which ${is} not installed. Without ${it}, the tool uses plain KDE dialogs.
 
-$([[ $tool == rpm-ostree ]] && echo "Install ${it} now? ${it^} ${is} added to the system image with rpm-ostree (layered packages, updated with the system) and active after the next restart." || echo "Install ${it} now with dnf?")
-Removing the app later offers to remove ${it} again." "Install" "Not now" "y" careful || { _FRONT_RESULT=declined; return 1; }
+$([[ $tool == rpm-ostree ]] && echo "Install ${it} now? ${it^} and the Qt libraries ${it} ${need} (about 20 packages) are added to the system image with rpm-ostree as layered packages, updated with the system, and used after the next restart. If a system update ever fails because of them, remove the app or run: rpm-ostree uninstall ${miss}" || echo "Install ${it} now with dnf, with the Qt libraries ${it} ${need}?")
+Removing the app later offers to remove ${it} again." "Install" "Not now" "n" careful; then
+        _FRONT_RESULT=declined
+        _front_offered
+        return 1
+    fi
     # shellcheck disable=SC2086 # package names, one word each
-    _pkg_run "$tool" install $miss || { _FRONT_RESULT=failed; return 1; }
+    if ! _pkg_run "$tool" install $miss; then
+        # Not remembered as answered: the next start asks again (another
+        # rpm-ostree transaction may have been running).
+        _FRONT_RESULT=failed
+        return 1
+    fi
+    _front_offered
     # shellcheck disable=SC2086
     _front_pkgs_record $miss
     if [[ "$tool" == rpm-ostree ]]; then _FRONT_RESULT=restart; else _FRONT_RESULT=added; fi
     return 0
 }
 
-# offer_front_end_once — at the start of a run of the installed app with
-# KDE dialogs: when the window cannot run, offer once what it needs (an
-# app installed or updated by an older version was never asked). Installing
-# the app again asks again.
-offer_front_end_once() {
-    [[ "$UI_MODE" == kde ]] && _app_installed && ui_interactive || return 0
-    [[ -e "${STATE_DIR}/${_FRONT_OFFERED_FILE}" ]] && return 0
-    [[ -n "$(_front_end_missing)" ]] || return 0
-    install_front_end || true
+# _front_result_text — one line for the end of an install or a start, by
+# _FRONT_RESULT (nothing for "none").
+_front_result_text() {
+    local what="${_FRONT_MISSING// /, }"
     case "$_FRONT_RESULT" in
-        restart) ui_msg "Security Check's window is used after the next restart (${_FRONT_MISSING// /, } is added to the system image). This time it uses plain KDE dialogs." ;;
-        added)   ui_msg "Security Check's window is used from the next start." ;;
+        restart)  printf "Restart the PC to use Security Check's window: %s is added to the system image and used after the restart. Until then it uses plain KDE dialogs." "$what" ;;
+        added)    printf "Security Check's window is used from the next start." ;;
+        declined|failed) printf 'Without %s, Security Check uses plain KDE dialogs. Install the app again (--install) to add it.' "$what" ;;
+        manual)   printf "Without %s, Security Check uses plain KDE dialogs. Install it with your system's package manager." "$what" ;;
+        broken)   printf "%s is layered on the running system, yet Security Check's window cannot use it, so it uses plain KDE dialogs. Check with: python3 -c 'import PySide6.QtQml'" "$what" ;;
     esac
     return 0
 }
 
-# remove_front_end — offer to remove the packages an install added.
+# offer_front_end_once — at the start of a check-up of the installed app
+# with KDE dialogs: when the window cannot run, offer once what it needs
+# (an app installed or updated by an older version was never asked). Not
+# in a report-only run, which changes nothing. Installing the app again
+# asks again.
+offer_front_end_once() {
+    [[ "$UI_MODE" == kde && "$FIX_MODE" != report ]] && _app_installed && ui_interactive || return 0
+    [[ -e "${STATE_DIR}/${_FRONT_OFFERED_FILE}" ]] && return 0
+    [[ -n "$(_front_end_missing)" ]] || return 0
+    install_front_end || true
+    [[ "$_FRONT_RESULT" == none ]] || ui_msg "$(_front_result_text)"
+    return 0
+}
+
+# remove_front_end — offer to remove the packages an install added. With
+# dnf, only when nothing else installed needs them (dnf would remove that
+# too); rpm-ostree only drops the layer request.
 remove_front_end() {
     local -a pkgs=()
-    local tool
+    local tool need
     mapfile -t pkgs < <(_front_pkgs_recorded)
     [[ ${#pkgs[@]} -gt 0 ]] || return 0
     tool=$(_pkg_tool)
     [[ -n "$tool" ]] || return 0
+    if [[ "$tool" == dnf ]] && ! need=$(rpm -e --test -- "${pkgs[@]}" 2>&1); then
+        ui_msg "Installing the app also installed ${pkgs[*]} for its window. Other installed programs need $([[ ${#pkgs[@]} -gt 1 ]] && echo them || echo it) now, so $([[ ${#pkgs[@]} -gt 1 ]] && echo they stay || echo it stays):
+
+$(printf '%s\n' "$need" | head -n 6)"
+        rm -f -- "${STATE_DIR:?}/${_FRONT_PKGS_FILE:?}"
+        return 0
+    fi
     ui_yesno "Installing the app also installed ${pkgs[*]} for its window. Remove $([[ ${#pkgs[@]} -gt 1 ]] && echo them || echo it) too?
 
 Other programs may use $([[ ${#pkgs[@]} -gt 1 ]] && echo them || echo it) as well.$([[ $tool == rpm-ostree ]] && echo " The change is active after the next restart.")" \
         "Remove" "Keep" "n" careful || return 0
     _pkg_run "$tool" uninstall "${pkgs[@]}" || return 1
-    rm -f -- "${STATE_DIR}/${_FRONT_PKGS_FILE}"
+    rm -f -- "${STATE_DIR:?}/${_FRONT_PKGS_FILE:?}"
 }
 
 # install_app — install the tool as an app: a "Security Check" entry in
@@ -349,11 +417,7 @@ Remove it any time with --uninstall." "${verb}" "Cancel" "y" careful || return 0
 
 The weekly check uses the same copy, so it was updated too.'
     install_front_end || true
-    case "$_FRONT_RESULT" in
-        restart) extra+=$'\n\n'"Restart the PC to use Security Check's window: ${_FRONT_MISSING// /, } is added to the system image and active after the restart. Until then it uses plain KDE dialogs." ;;
-        declined|failed) extra+=$'\n\n'"Without ${_FRONT_MISSING// /, }, Security Check uses plain KDE dialogs. Install the app again (--install) to add it." ;;
-        manual) extra+=$'\n\n'"Without ${_FRONT_MISSING// /, }, Security Check uses plain KDE dialogs. Install it with your system's package manager." ;;
-    esac
+    [[ "$_FRONT_RESULT" == none ]] || extra+=$'\n\n'"$(_front_result_text)"
     ui_msg "Security Check is installed. Start it from the application menu (System → Security Check) or with the command bazzite-sec-audit.
 
 Updates: Settings → Updates installs new releases (signature and checksums are verified first).${extra}"
@@ -370,9 +434,9 @@ Reports, history and undo steps are kept.$(_timer_installed && printf '\nThe wee
         "Remove" "Cancel" "y" careful || return 0
     rm -f -- "$APP_DESKTOP" "$APP_ICON_DIR/${APP_ID}.svg" "$APP_ICON_DIR/${APP_ID}-symbolic.svg" "$APP_ICON_22/${APP_ID}-symbolic.svg"
     [[ -L "$APP_BIN" ]] && rm -f -- "$APP_BIN"
+    remove_front_end || true
     _remove_copy
     _refresh_menu
-    remove_front_end || true
     ui_msg "The Security Check app was removed. Past reports were kept."
 }
 
