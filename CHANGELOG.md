@@ -18,6 +18,15 @@ All notable changes to this project are listed here. The format follows
 
 ### Changed
 
+- The deep check's malware scan helps set ClamAV up instead of only
+  skipping. When ClamUI is installed but the system's ClamAV is not (ClamUI
+  scans with it), when freshclam is missing, or when there are no or only
+  old virus definitions, the check says so and offers a fix: on Bazzite it
+  layers ClamAV with rpm-ostree, and it downloads the definitions and turns
+  on their automatic update (clamav-freshclam.service). A scan stopped by
+  the time limit now says that, instead of blaming the virus database, and
+  the scan no longer follows other drives or app images mounted inside the
+  scanned folders.
 - Security Check now has one window for the whole run. The setup wizard, the
   dashboard, a check's page, the lists of fixes, the "Apply this fix?" page
   and Settings are pages of that window, and questions, messages and errors
