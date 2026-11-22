@@ -22,7 +22,7 @@ It is a desktop-friendly counterpart to [ubuntu-sec-audit](https://github.com/se
 
 <p align="center">
   <img src="docs/screenshots/wizard.png" width="49%" alt="The setup wizard">
-  <img src="docs/screenshots/dashboard-dark.png" width="49%" alt="The dashboard after a check-up">
+  <img src="docs/screenshots/dashboard-dark.png" width="49%" alt="The check-up result: the score, what changed since the last check-up, and the start of the list of checks">
 </p>
 
 ## Features
@@ -35,6 +35,9 @@ It is a desktop-friendly counterpart to [ubuntu-sec-audit](https://github.com/se
 - **Signed updates.** Settings → Updates installs a new release only after its SSH signature and SHA-256 checksums are verified.
 - **Optional weekly check.** A report-only background run with a desktop notification.
 
+<p align="center">
+  <img src="docs/screenshots/confirm.png" width="70%" alt="A fix to confirm: the setting now and after, what it affects on this PC, its exact commands, and that it can be undone">
+</p>
 <p align="center">
   <img src="docs/screenshots/progress.png" width="60%" alt="The progress window holding at 90% during the malware scan">
 </p>
@@ -84,7 +87,8 @@ choose to remove it anyway. If a system update ever fails because of the layered
 packages, remove them with `rpm-ostree uninstall python3-pyside6` (and
 `kf6-kirigami`, if it was added too). The check-up's "Layered packages" fix
 can remove them too, and on KDE warns that Security Check then goes back to
-plain KDE dialogs.
+plain KDE dialogs (for a package that is really layered, not a request for
+one the image already has).
 
 The setup wizard, the dashboard, the fixes and Settings are pages of one
 Kirigami (Plasma) window when PySide6 and Kirigami are installed (see
@@ -141,7 +145,7 @@ Fixes that touch a Bazzite feature say so, in the fix list, the "Apply this fix?
 Each [release](https://github.com/secopsxsaiyan/Bazzite_security_check/releases) has the source archive, `SHA256SUMS` and an SSH signature of the checksums. To verify one by hand, with [`release-signers`](release-signers) from this repository:
 
 ```bash
-v=1.5.0
+v=1.6.0
 ssh-keygen -Y verify -f release-signers -I release@bazzite-sec-audit \
   -n bazzite-sec-audit-release -s SHA256SUMS.sig < SHA256SUMS
 sha256sum -c SHA256SUMS

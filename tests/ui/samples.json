@@ -36,7 +36,7 @@
    "low": 4,
    "info": 1
   },
-  "fixed": 2,
+  "fixed": 3,
   "verified": 2,
   "fixed_reboot": 1,
   "reboot_reasons": "Sunshine autostart was removed",
@@ -451,6 +451,28 @@
   "undo": true,
   "note": "Open ports you chose earlier stay open."
  },
+ "confirm-readme": {
+  "sev": "low",
+  "title": "alex's screen does not lock reliably",
+  "now": "alex: Autolock=false, LockOnResume=false",
+  "after": "alex: Autolock=true, LockOnResume=true",
+  "detail": "For alex: the screen never locks by itself; it does not lock when waking from sleep.\nAn unlocked desktop gives anyone who walks by your browser sessions, chats and\nfiles. Games and videos in fullscreen keep the screen awake on their own, so\nauto-lock does not interrupt them.",
+  "affects": [
+   {
+    "name": "Controller-only play and watching videos",
+    "how": "changes it",
+    "where": "in use here: Steam is installed",
+    "status": "in",
+    "mark": "-",
+    "stops": false,
+    "sentence": "The screen can lock while you play with only a controller or watch a video, if that app does not keep the screen awake."
+   }
+  ],
+  "warnings": [],
+  "commands": "runuser -u alex -- kwriteconfig6 --file kscreenlockerrc --group Daemon --key Autolock --type bool true\nrunuser -u alex -- kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnResume --type bool true\nrunuser -u alex -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus busctl --user call org.freedesktop.ScreenSaver /ScreenSaver org.kde.screensaver configure >/dev/null 2>&1 || true",
+  "undo": true,
+  "note": "If the change does not show up right away, it applies at the next login."
+ },
  "dialog": {
   "kind": "warning",
   "title": "Undo a change?",
@@ -601,7 +623,7 @@
   "items": []
  },
  "settings": {
-  "version": "1.5.0",
+  "version": "1.6.0",
   "repo": "example-org/security-check",
   "theme": "system",
   "update_check": "1"

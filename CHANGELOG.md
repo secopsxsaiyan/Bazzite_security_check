@@ -6,6 +6,8 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-21
+
 ### Added
 
 - An off-screen test of the real windows, `make test-ui`
@@ -29,7 +31,11 @@ All notable changes to this project are listed here. The format follows
   them fails, the app stays installed unless "Remove anyway" is chosen,
   and `--uninstall` then ends with status 1. The check-up's fix that
   removes layered packages marks these two as high risk on KDE and says that
-  without them Security Check goes back to plain KDE dialogs.
+  without them Security Check goes back to plain KDE dialogs (only for a
+  package that is really layered: a request for one the image already has
+  changes nothing when removed).
+- New README screenshots of the 1.6.0 window, including a fix waiting to be
+  confirmed.
 
 ### Changed
 
@@ -458,7 +464,8 @@ First release.
   a symlink in a user's folder. Changes to `sshd` and `sudoers` are
   validated and rolled back if they fail.
 
-[Unreleased]: https://github.com/secopsxsaiyan/Bazzite_security_check/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/secopsxsaiyan/Bazzite_security_check/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.6.0
 [1.5.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.5.0
 [1.4.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.4.0
 [1.3.0]: https://github.com/secopsxsaiyan/Bazzite_security_check/releases/tag/v1.3.0
