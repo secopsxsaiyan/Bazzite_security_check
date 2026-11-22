@@ -34,6 +34,7 @@ trap 'rm -rf "$OUT"' EXIT
     _unit_active() { return 1; }
     _user_unit_active() { return 1; }
     _steam_installed() { return 0; }
+    _sunshine_installed() { return 0; }
     # alex's screen locker settings: never locks by itself, nor on waking.
     _home_of() { mkdir -p "$OUT/home/$1/.config"; echo "$OUT/home/$1"; }
     _user_ini_get() { case "$4" in Autolock|LockOnResume) echo false ;; esac; }
@@ -50,21 +51,68 @@ trap 'rm -rf "$OUT"' EXIT
     _wizard_input > "$OUT/wizard"
 
     # ---- the check-up: these checks find something, the others pass.
+    # _found CHECK TITLE records that finding as CHECK's code does: its
+    # severity, fix and affected features are read from the finding call
+    # with that title in checks/*.sh (an error when there is none).
+    _found() {
+        local -a spec=()
+        mapfile -t spec < <(python3 -I - "$HERE/../../checks" "$1" "$2" <<'PY'
+import glob, os, re, sys
+d, check, title = sys.argv[1:]
+for f in sorted(glob.glob(os.path.join(d, "*.sh"))):
+    lines, fn = open(f, encoding="utf-8").read().split("\n"), None
+    for i, l in enumerate(lines):
+        m = re.match(r"^(check_\w+)\(\)", l)
+        if m:
+            fn = m.group(1)
+        m = re.match(r'^\s*finding (high|medium|low|info) "([^"$]*)"', l)
+        if not (m and fn == check and m.group(2) == title):
+            continue
+        fix, affects, j = "", [], i + 1
+        while j < len(lines) and not re.match(r"^\s*(finding |fi$|elif |else$|done$)", lines[j]):
+            if not fix and re.match(r"^\s*fix_\w+", lines[j]):
+                fix = lines[j].split()[0]
+            if re.match(r"^\s*finding_affects\b", lines[j]):
+                k = j + 1
+                while k < len(lines):
+                    a = re.match(r'^\s*"([^"$]*)"( \\)?$', lines[k])
+                    if not a:
+                        sys.exit("%s: an affected feature that is not plain text" % title)
+                    affects.append(a.group(1))
+                    if not a.group(2):
+                        break
+                    k += 1
+                break
+            j += 1
+        print(m.group(1)); print(fix)
+        for a in affects:
+            print(a)
+        sys.exit(0)
+sys.exit("%s: no finding with this title in %s" % (title, check))
+PY
+        ) || return 1
+        [[ ${#spec[@]} -ge 2 ]] || { echo "readme-samples: ${2}: not found in ${1}" >&2; exit 1; }
+        if [[ -n "${spec[1]}" ]]; then finding "${spec[0]}" "$2" - - "${spec[1]}" -; else finding "${spec[0]}" "$2" - -; fi
+        [[ ${#spec[@]} -gt 2 ]] && finding_affects "${spec[@]:2}"
+        return 0
+    }
     for entry in "${STANDARD_CHECKS[@]}"; do
         id="${entry%%|*}"
         [[ "$id" == check_screen_lock ]] || eval "${id}() { :; }"
     done
-    check_system_updates() { finding low "An update is downloaded and waits for a reboot" - -; }
-    check_flatpak_sandbox() { finding low "2 Flatpak app(s) are not really sandboxed" - - fix_flatpak_restrict -; }
-    check_kernel_args() { finding medium "CPU vulnerability protections are turned off" - - fix_kargs_delete mitigations=off; }
-    check_firewall() { finding high "The firewall lets in far more than this PC needs" - - fix_firewall_zone -; }
-    check_ssh_server() { finding medium "SSH accepts passwords" - - fix_ssh_dropin -; }
-    check_sudo() { finding medium "sudo works without a password" - - fix_sudo_line -; }
-    check_accounts() { finding info "The root account has its own password" - -; }
-    check_firmware() { finding low "Firmware updates are available" - -; }
+    check_system_updates() { _found check_system_updates "An update is downloaded and waits for a reboot" || exit 1; }
+    check_firmware() { _found check_firmware "Firmware updates are available" || exit 1; }
+    check_selinux() { _found check_selinux "SELinux is not protecting the system (permissive)" || exit 1; }
+    check_kernel_args() { _found check_kernel_args "CPU vulnerability protections are turned off" || exit 1; }
+    check_accounts() { _found check_accounts "The root account has its own password" || exit 1; }
+    check_sudo() {
+        _found check_sudo "sudo works without a password" || exit 1
+        _found check_sudo "A polkit rule approves admin actions without asking" || exit 1
+    }
     check_game_streaming() {
-        finding high "Sunshine's admin page accepts connections from the internet" - - fix_sunshine_setting -
-        finding medium "Sunshine opens ports on your router (UPnP)" - - fix_sunshine_setting -
+        _found check_game_streaming "Sunshine's admin page accepts connections from the internet" || exit 1
+        _found check_game_streaming "Sunshine opens ports on your router (UPnP)" || exit 1
+        _found check_game_streaming "Sunshine's admin page is reachable from your network" || exit 1
     }
     ui_progress_start() { :; }; ui_progress_set() { :; }; ui_progress_stop() { :; }
     run_all_checks
@@ -80,7 +128,10 @@ trap 'rm -rf "$OUT"' EXIT
     done
     NEEDS_REBOOT=1; REBOOT_REASONS=("$reason")
     # Since the last check-up: three problems are gone, one is new.
-    HAD_PREVIOUS_RUN=1; DELTA_GONE=(1 2 3); DELTA_NEW=("Sunshine opens ports on your router (UPnP)")
+    HAD_PREVIOUS_RUN=1; DELTA_GONE=(1 2 3); DELTA_NEW=()
+    for i in "${!F_TITLE[@]}"; do
+        [[ "${F_CHECK[$i]}" == check_game_streaming && "${F_SEV[$i]}" == medium ]] && DELTA_NEW+=("${F_TITLE[$i]}")
+    done
     SCORE_NOW=$(_score now); GRADE_NOW=$(_grade "$SCORE_NOW")
     _CSTATE=(); _CF_READY=0
     _dashboard_input "$(_fix_candidates | grep -c . || true)" > "$OUT/dashboard"

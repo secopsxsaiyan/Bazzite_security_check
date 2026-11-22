@@ -3599,6 +3599,16 @@ sys.exit(len(made) != 3 or bool(out))' \
 else
     bad "tests/ui/samples.json *-readme differ from what tests/ui/readme-samples.sh makes: make them again (docs/ui.md)"
 fi
+# ... and the pictures were made from those samples.
+want=$(python3 -I -c 'import hashlib, json, sys
+s = json.load(open(sys.argv[1]))
+print(hashlib.sha256(json.dumps([s[k] for k in ("wizard-readme", "dashboard-readme", "confirm-readme")],
+                                sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest())' "$HERE/ui/samples.json")
+if [[ -n "$want" && "$(cat "$HERE/../docs/screenshots/samples.sha256" 2>/dev/null)" == "$want" ]]; then
+    ok "the README's pictures show the current samples"
+else
+    bad "docs/screenshots/samples.sha256 does not match the README samples: make the pictures again (docs/ui.md)"
+fi
 
 echo
 echo "passed: $PASS  failed: $FAIL   (work dir: $W)"

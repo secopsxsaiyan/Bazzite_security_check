@@ -243,11 +243,11 @@
    },
    {
     "name": "Apps",
-    "state": "warn"
+    "state": "ok"
    },
    {
     "name": "Boot",
-    "state": "warn"
+    "state": "bad"
    },
    {
     "name": "Other",
@@ -255,11 +255,11 @@
    },
    {
     "name": "Network",
-    "state": "bad"
+    "state": "ok"
    },
    {
     "name": "Accounts",
-    "state": "ok"
+    "state": "bad"
    },
    {
     "name": "Desktop",
@@ -315,9 +315,9 @@
     "id": "check_flatpak_sandbox",
     "title": "Flatpak app permissions",
     "area": "Apps",
-    "state": "warn",
+    "state": "ok",
     "affects": "",
-    "summary": "1 low · fix available"
+    "summary": "OK"
    },
    {
     "id": "check_firmware",
@@ -363,9 +363,9 @@
     "id": "check_selinux",
     "title": "SELinux",
     "area": "Boot",
-    "state": "ok",
+    "state": "bad",
     "affects": "",
-    "summary": "OK"
+    "summary": "1 high · fix available"
    },
    {
     "id": "check_sysctl",
@@ -379,9 +379,9 @@
     "id": "check_firewall",
     "title": "Firewall",
     "area": "Network",
-    "state": "bad",
+    "state": "ok",
     "affects": "",
-    "summary": "1 high · fix available"
+    "summary": "OK"
    },
    {
     "id": "check_listening_services",
@@ -395,9 +395,9 @@
     "id": "check_ssh_server",
     "title": "SSH server",
     "area": "Network",
-    "state": "bad",
+    "state": "ok",
     "affects": "",
-    "summary": "1 medium · fix available"
+    "summary": "OK"
    },
    {
     "id": "check_accounts",
@@ -411,9 +411,9 @@
     "id": "check_sudo",
     "title": "sudo rules",
     "area": "Accounts",
-    "state": "fixed",
+    "state": "bad",
     "affects": "",
-    "summary": "fixed in this run"
+    "summary": "1 medium"
    },
    {
     "id": "check_autologin",
@@ -460,8 +460,8 @@
     "title": "Game streaming (Sunshine)",
     "area": "Dev & gaming",
     "state": "bad",
-    "affects": "",
-    "summary": "1 high, 1 medium · fix available"
+    "affects": "In use here: fix would stop Sunshine game streaming (Moonlight)",
+    "summary": "1 high, 1 medium, 1 low · fix available"
    }
   ],
   "open": {
@@ -470,8 +470,8 @@
    "low": 4,
    "info": 1
   },
-  "score": 82,
-  "score_was": 79,
+  "score": 83,
+  "score_was": 81,
   "grade": "B",
   "host": "living-room-pc",
   "os": "Bazzite",
@@ -486,9 +486,9 @@
   "gone": 3,
   "new": 1,
   "new_titles": "Sunshine opens ports on your router (UPnP)",
-  "nfix": 6,
+  "nfix": 5,
   "undo": true,
-  "keep": false,
+  "keep": true,
   "kept": 0
  },
  "dashboard-report-only": {
