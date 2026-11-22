@@ -22,7 +22,7 @@ It is a desktop-friendly counterpart to [ubuntu-sec-audit](https://github.com/se
 
 <p align="center">
   <img src="docs/screenshots/wizard.png" width="49%" alt="The setup wizard">
-  <img src="docs/screenshots/dashboard-dark.png" width="49%" alt="The check-up result: the score, what changed, and every check">
+  <img src="docs/screenshots/dashboard-dark.png" width="49%" alt="The check-up result: the score, what changed since the last check-up, and the start of the list of checks">
 </p>
 
 ## Features
@@ -36,8 +36,10 @@ It is a desktop-friendly counterpart to [ubuntu-sec-audit](https://github.com/se
 - **Optional weekly check.** A report-only background run with a desktop notification.
 
 <p align="center">
-  <img src="docs/screenshots/confirm.png" width="49%" alt="A fix to confirm: the setting now and after, what it affects on this PC, and its exact commands">
-  <img src="docs/screenshots/progress.png" width="49%" alt="The progress window holding at 90% during the malware scan">
+  <img src="docs/screenshots/confirm.png" width="70%" alt="A fix to confirm: the setting now and after, what it affects on this PC, its exact commands, and that it can be undone">
+</p>
+<p align="center">
+  <img src="docs/screenshots/progress.png" width="60%" alt="The progress window holding at 90% during the malware scan">
 </p>
 
 ## Requirements

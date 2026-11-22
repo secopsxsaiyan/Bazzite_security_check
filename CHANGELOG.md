@@ -34,9 +34,8 @@ All notable changes to this project are listed here. The format follows
   without them Security Check goes back to plain KDE dialogs (only for a
   package that is really layered: a request for one the image already has
   changes nothing when removed).
-- `tests/ui-offscreen.py --shots DIR readme` renders the README's
-  screenshots from the sample data, in the dark theme; they show the
-  current window, and a fix to confirm with its commands is new.
+- New README screenshots of the 1.6.0 window, including a fix waiting to be
+  confirmed.
 
 ### Changed
 

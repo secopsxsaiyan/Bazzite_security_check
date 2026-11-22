@@ -281,7 +281,8 @@ def key(k, repeat=False, text=""):
 
 def shot(name, win=None):
     if SHOTS:
-        (win or shell).grabWindow().save(os.path.join(SHOTS, name + ".png"))
+        path = os.path.join(SHOTS, name + ".png")
+        check((win or shell).grabWindow().save(path), "picture saved: %s" % path)
 
 
 def prop(name):
@@ -3186,21 +3187,32 @@ def sc_contrast():
 
 
 def sc_readme():
-    """The README's pictures (docs/screenshots), from the sample data in the
-    dark theme where it is installed: the wizard's first step, the check-up
-    result, a fix to confirm, and the progress window holding at 90% during
-    the malware scan (the line ui_progress_set sends for it). Made with
-    --shots DIR readme; without --shots it only checks that each one shows."""
+    """The README's pictures (docs/screenshots), made with
+    "--shots DIR readme" and copied to docs/screenshots: the wizard's first
+    step, the check-up result, a fix to confirm and the progress window
+    holding at 90% during the malware scan, in the dark theme with the
+    desktop's icons. The sample data has nothing from a real PC; the fix
+    ("confirm-readme") is what the root side sends for the real screen-lock fix
+    (tests/ui/readme-confirm.sh makes it), and the progress line is the one ui_progress_set
+    sends for the scan. Without --shots it only checks that each one shows.
+    With --shots, where the Breeze dark colour scheme or an icon theme is
+    missing, it makes no pictures and fails: they would not match the README."""
+    from PySide6.QtGui import QIcon
     S = SAMPLES
     path = appmod._scheme_path("dark")
+    icons = QIcon.hasThemeIcon("dialog-ok-apply")
+    if SHOTS and not (path and icons):
+        check(False, "readme: the Breeze dark colour scheme (%s) and an icon theme (%s) are here, for the README's pictures"
+              % ("yes" if path else "no", "yes" if icons else "no"))
+        send({"quit": True})
+        return
     if path:
         send({"theme": "dark"})
         yield W(lambda: (app.property("KDE_COLOR_SCHEME_PATH") or "") == path, "readme: the dark theme is set")
         yield P(0.3)
-    else:
-        say("     note: the Breeze dark colour scheme is not installed here: the pictures are in the colours as they come")
-    for rid, mode, name in (("r1", "wizard", "wizard"), ("r2", "dashboard", "dashboard-dark"), ("r3", "confirm", "confirm")):
-        if (yield from show(rid, mode, S[mode], "readme: " + mode)):
+    for rid, mode, sample, name in (("r1", "wizard", "wizard", "wizard"), ("r2", "dashboard", "dashboard", "dashboard-dark"),
+                                    ("r3", "confirm", "confirm-readme", "confirm")):
+        if (yield from show(rid, mode, S[sample], "readme: " + sample)):
             yield P(0.3)
             shot(name)
     send({"progress": "start", "heading": "Checking your PC"})
