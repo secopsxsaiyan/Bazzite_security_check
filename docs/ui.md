@@ -178,11 +178,11 @@ Without a display, save a picture of every page:
 
     python3 -I tests/ui-offscreen.py --shots /tmp/shots pages
 
-The README's pictures (`docs/screenshots`) come from the `readme` scenario, on a KDE desktop with the Breeze colour schemes and icon theme (without them it makes no pictures and fails). Copy the four files it writes into `docs/screenshots`:
+The README's pictures (`docs/screenshots`) come from the `readme` scenario, on a KDE desktop with the Breeze colour schemes and icons (without them it makes no pictures and fails). Copy the four files it writes into `docs/screenshots`:
 
     python3 -I tests/ui-offscreen.py --shots /tmp/shots readme
 
-Its fix to confirm is the sample `confirm-readme`: what the root side sends for the screen-lock fix. `make test` fails when the two differ; make the sample again with `bash tests/ui/readme-confirm.sh` (no root needed) rather than by hand.
+Their inputs are the samples `wizard-readme`, `dashboard-readme` and `confirm-readme`, which the tool's own code makes for a made-up PC (`tests/ui/readme-samples.sh`, no root needed). `make test` fails when they differ from what it makes; then make them again with that script rather than by hand, and the pictures after them.
 
 The same scenarios run in real windows of the session, for a look at them on a real desktop, with `BSA_UI_TEST_PLATFORM=wayland` (or `xcb`) in front. The default is off-screen, and CI uses only that. Checks that need the real keyboard focus or the real clipboard can fail there while another window is in front.
 

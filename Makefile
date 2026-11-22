@@ -1,6 +1,6 @@
 .PHONY: lint test test-ui shellcheck.sarif
 
-SHELLCHECK_ARGS := -x -S warning -e SC2034 bazzite-sec-audit.sh lib/*.sh checks/*.sh tests/smoke.sh tests/ui-e2e.sh tests/ui/readme-confirm.sh
+SHELLCHECK_ARGS := -x -S warning -e SC2034 bazzite-sec-audit.sh lib/*.sh checks/*.sh tests/smoke.sh tests/ui-e2e.sh tests/ui/readme-samples.sh
 
 # ShellCheck every script (modules are followed from the entry script).
 lint:

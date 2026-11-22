@@ -3580,14 +3580,15 @@ else
     bad "version string: declared '${ver:-}', --version '${got:-}', changelog section missing"
 fi
 
-# The README's picture of a fix shows what the tool really sends for it.
-if bash "$HERE/ui/readme-confirm.sh" > "$W/readme-confirm.json" \
+# The README's pictures show what the tool itself makes for those pages.
+if bash "$HERE/ui/readme-samples.sh" > "$W/readme-samples.json" \
     && python3 -I -c 'import json, sys
-sys.exit(json.load(open(sys.argv[1])) != json.load(open(sys.argv[2]))["confirm-readme"])' \
-        "$W/readme-confirm.json" "$HERE/ui/samples.json"; then
-    ok "the README's fix sample is what the tool sends"
+made, s = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+sys.exit(len(made) != 3 or any(s.get(k) != v for k, v in made.items()))' \
+        "$W/readme-samples.json" "$HERE/ui/samples.json"; then
+    ok "the README's samples are what the tool makes"
 else
-    bad "tests/ui/samples.json confirm-readme differs from tests/ui/readme-confirm.sh: make it again (docs/ui.md)"
+    bad "tests/ui/samples.json *-readme differ from what tests/ui/readme-samples.sh makes: make them again (docs/ui.md)"
 fi
 
 echo

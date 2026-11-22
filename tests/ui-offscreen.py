@@ -3187,32 +3187,38 @@ def sc_contrast():
 
 
 def sc_readme():
-    """The README's pictures (docs/screenshots), made with
-    "--shots DIR readme" and copied to docs/screenshots: the wizard's first
-    step, the check-up result, a fix to confirm and the progress window
-    holding at 90% during the malware scan, in the dark theme with the
-    desktop's icons. The sample data has nothing from a real PC; the fix
-    ("confirm-readme") is what the root side sends for the real screen-lock fix
-    (tests/ui/readme-confirm.sh makes it), and the progress line is the one ui_progress_set
-    sends for the scan. Without --shots it only checks that each one shows.
-    With --shots, where the Breeze dark colour scheme or an icon theme is
-    missing, it makes no pictures and fails: they would not match the README."""
+    """The README's pictures, made with "--shots DIR readme" and copied to
+    docs/screenshots: the wizard's first step, the check-up result, a fix
+    to confirm and the progress window holding at 90% during the malware
+    scan, in the dark theme with Breeze icons. Their inputs (the samples
+    "wizard-readme", "dashboard-readme" and "confirm-readme") are made by
+    the tool's own code with tests/ui/readme-samples.sh, and the progress
+    line is the one ui_progress_set sends for the scan. Without --shots it
+    only checks that each page shows. With --shots, where the Breeze dark
+    colour scheme or the Breeze icons are missing, it makes no pictures and
+    fails: they would not look like the README's."""
+    import configparser
     from PySide6.QtGui import QIcon
     S = SAMPLES
     path = appmod._scheme_path("dark")
-    icons = QIcon.hasThemeIcon("dialog-ok-apply")
-    if SHOTS and not (path and icons):
-        check(False, "readme: the Breeze dark colour scheme (%s) and an icon theme (%s) are here, for the README's pictures"
-              % ("yes" if path else "no", "yes" if icons else "no"))
+    # The icon theme KDE's icon loader uses: kdeglobals [Icons] Theme, or Breeze.
+    kdeglobals = configparser.ConfigParser(interpolation=None, strict=False)
+    kdeglobals.read(os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "kdeglobals"))
+    theme = QIcon.themeName() or kdeglobals.get("Icons", "Theme", fallback="breeze")
+    dirs = (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
+    breeze = (theme.lower().startswith("breeze") and QIcon.hasThemeIcon("dialog-ok-apply")
+              and any(os.path.isdir(os.path.join(d, "icons", theme)) for d in dirs))
+    if SHOTS and not (path and breeze):
+        check(False, "readme: the Breeze dark colour scheme (%s) and the Breeze icons (%s, icon theme %r) are here, for the README's pictures"
+              % ("yes" if path else "no", "yes" if breeze else "no", theme))
         send({"quit": True})
         return
     if path:
         send({"theme": "dark"})
         yield W(lambda: (app.property("KDE_COLOR_SCHEME_PATH") or "") == path, "readme: the dark theme is set")
         yield P(0.3)
-    for rid, mode, sample, name in (("r1", "wizard", "wizard", "wizard"), ("r2", "dashboard", "dashboard", "dashboard-dark"),
-                                    ("r3", "confirm", "confirm-readme", "confirm")):
-        if (yield from show(rid, mode, S[sample], "readme: " + sample)):
+    for rid, mode, name in (("r1", "wizard", "wizard"), ("r2", "dashboard", "dashboard-dark"), ("r3", "confirm", "confirm")):
+        if (yield from show(rid, mode, S[mode + "-readme"], "readme: " + mode)):
             yield P(0.3)
             shot(name)
     send({"progress": "start", "heading": "Checking your PC"})
