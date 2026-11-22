@@ -3584,7 +3584,16 @@ fi
 if bash "$HERE/ui/readme-samples.sh" > "$W/readme-samples.json" \
     && python3 -I -c 'import json, sys
 made, s = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
-sys.exit(len(made) != 3 or any(s.get(k) != v for k, v in made.items()))' \
+def diff(a, b, at):
+    if isinstance(a, dict) and isinstance(b, dict):
+        return [d for k in sorted(set(a) | set(b)) for d in diff(a.get(k), b.get(k), at + "." + k)]
+    if isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        return [d for i, (x, y) in enumerate(zip(a, b)) for d in diff(x, y, "%s[%d]" % (at, i))]
+    return [] if a == b else ["%s: made %r, sample %r" % (at, a, b)]
+out = [d for k, v in made.items() for d in diff(v, s.get(k), k)]
+for d in out[:10]:
+    print("    " + d[:300])
+sys.exit(len(made) != 3 or bool(out))' \
         "$W/readme-samples.json" "$HERE/ui/samples.json"; then
     ok "the README's samples are what the tool makes"
 else
