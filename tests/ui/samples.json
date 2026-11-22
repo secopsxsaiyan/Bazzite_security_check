@@ -601,7 +601,7 @@
   "items": []
  },
  "settings": {
-  "version": "1.5.0",
+  "version": "1.6.0",
   "repo": "example-org/security-check",
   "theme": "system",
   "update_check": "1"

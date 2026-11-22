@@ -3185,6 +3185,37 @@ def sc_contrast():
     send({"quit": True})
 
 
+def sc_readme():
+    """The README's pictures (docs/screenshots), from the sample data in the
+    dark theme where it is installed: the wizard's first step, the check-up
+    result, a fix to confirm, and the progress window holding at 90% during
+    the malware scan (the line ui_progress_set sends for it). Made with
+    --shots DIR readme; without --shots it only checks that each one shows."""
+    S = SAMPLES
+    path = appmod._scheme_path("dark")
+    if path:
+        send({"theme": "dark"})
+        yield W(lambda: (app.property("KDE_COLOR_SCHEME_PATH") or "") == path, "readme: the dark theme is set")
+        yield P(0.3)
+    else:
+        say("     note: the Breeze dark colour scheme is not installed here: the pictures are in the colours as they come")
+    for rid, mode, name in (("r1", "wizard", "wizard"), ("r2", "dashboard", "dashboard-dark"), ("r3", "confirm", "confirm")):
+        if (yield from show(rid, mode, S[mode], "readme: " + mode)):
+            yield P(0.3)
+            shot(name)
+    send({"progress": "start", "heading": "Checking your PC"})
+    yield W(lambda: progress_window() is not None and progress_window().isVisible(), "readme: the progress window shows")
+    pw = progress_window()
+    if pw is not None:
+        send({"progress": "set", "line": "90\t1\tMalware scan (ClamAV)\tThis can take several minutes. The bar moves on when it is done."})
+        yield W(lambda: pw.property("percent") == 90 and pw.property("slow") is True, "readme: the scan holds at 90%")
+        yield P(0.3)
+        shot("progress", pw)
+        send({"progress": "stop"})
+    no_warnings("readme")
+    send({"quit": True})
+
+
 def sc_layout(large):
     """What must fit in the smallest window. LARGE: with a font of 15 pt
     instead of 9 or 10, as for a person who needs large text (the pages are made
@@ -3497,6 +3528,7 @@ SCENARIOS = {
     "variants": (["serve"], lambda: {"busy": ""}, None, sc_variants, after_serve),
     "reveal": (["serve"], lambda: {"busy": ""}, None, sc_reveal, after_serve),
     "contrast": (["serve"], lambda: {"busy": ""}, None, sc_contrast, after_serve),
+    "readme": (["serve"], lambda: {"busy": ""}, None, sc_readme, after_serve),
     "layout": (["serve"], lambda: {"busy": ""}, None, sc_layout(False), after_serve),
     "large-text": (["serve"], lambda: {"busy": ""}, None, sc_layout(True), after_serve),
     "sample-keys": (["serve"], None, None, None, after_sample_keys),
