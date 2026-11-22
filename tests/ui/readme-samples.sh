@@ -43,6 +43,10 @@ trap 'rm -rf "$OUT"' EXIT
 
     # ---- the wizard
     detect_usecases
+    # It also looks for Docker's socket, which no stub can hide: the made-up
+    # PC has no Docker, whatever the machine running this has (a CI runner
+    # does).
+    if [[ "${DETECTED[dev]:-}" == "Docker is installed" ]]; then unset 'DETECTED[dev]'; USE_DEV=0; fi
     _wizard_input > "$OUT/wizard"
 
     # ---- the check-up: these checks find something, the others pass.
