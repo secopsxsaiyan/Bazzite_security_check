@@ -284,7 +284,10 @@ rpm-ostree override reset PACKAGE    (or --all), then reboot"
 fix_layered_remove() {
     local -a items=() pick=()
     local p
-    local sum risk warn running u
+    local sum risk warn running u layers
+    # What is really layered now (a request for a package the image already
+    # has is inactive: removing it changes nothing).
+    layers=" $(_deploy '" ".join(b.get("packages", []) or [])') "
     for p in "$@"; do
         # What it is (from the package), and whether a service of it runs now.
         sum=$(rpm -q --qf '%{SUMMARY}' "$p" 2>/dev/null | head -n1) || sum=""
@@ -293,6 +296,10 @@ fix_layered_remove() {
         risk=medium
         warn="Its programs are gone after the reboot; install them as a Flatpak, with Homebrew or in a Distrobox if you still need them."
         case "$p" in
+            # Security Check's window: on KDE, and only when the layer is what
+            # provides it (not an inactive request).
+            python3-pyside6|kf6-kirigami)
+                [[ "$DESKTOP_ENV" == kde && "$layers" == *" $p "* ]] && { risk=high; warn="Security Check's window needs it: after the reboot Security Check uses plain KDE dialogs. Installing the app again (--install) offers to add it back."; } ;;
             clamav*|clamd*) risk=high; warn="The deep check's ClamAV malware scan, ClamUI and any scan you run stop working after the reboot." ;;
             lact*) risk=high; warn="LACT controls your GPU's clocks, power limits and fan curve; what it applies stops after the reboot." ;;
             *akmod*|*kmod*|*nvidia*|mesa*|gamescope*|*firmware*|*driver*) risk=high; warn="A driver or graphics component: removing it can break graphics or gaming." ;;

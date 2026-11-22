@@ -71,12 +71,16 @@ _ui_app_cmd() {
 # and PySide6 and Kirigami are installed (checked once), and the front end
 # has not failed in this run. Once it is not to be used, its window is
 # closed too: the kdialog windows take over.
+# What the front end needs: Kirigami's QML module, and PySide6 for the
+# desktop user's python3 (also used by install_front_end in lib/install.sh).
+_KIRIGAMI_GLOB="/usr/lib*/qt6/qml/org/kde/kirigami"
+readonly _PYSIDE_PROBE='import PySide6.QtQml, PySide6.QtWidgets'
+_kirigami_here() { compgen -G "$_KIRIGAMI_GLOB" >/dev/null; }
 _qml_ok() {
     if [[ -z "$_QML_OK" ]]; then
         _QML_OK=no
-        if [[ "$UI_MODE" == "kde" && -f "$SCRIPT_DIR/ui/app.py" ]] \
-           && compgen -G "/usr/lib*/qt6/qml/org/kde/kirigami" >/dev/null \
-           && _as_desktop_user python3 -I -c 'import PySide6.QtQml, PySide6.QtWidgets' >/dev/null 2>&1; then
+        if [[ "$UI_MODE" == "kde" && -f "$SCRIPT_DIR/ui/app.py" ]] && _kirigami_here \
+           && _as_desktop_user python3 -I -c "$_PYSIDE_PROBE" >/dev/null 2>&1; then
             _QML_OK=yes
         fi
     fi

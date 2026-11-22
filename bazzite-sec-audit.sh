@@ -419,7 +419,7 @@ Many checks will not apply. Continue anyway?" "Continue" "Quit" "n"; then
         install)       install_app; _action_end ;;
         settings)      run_settings; exit 0 ;;
         update)        update_run; _action_end ;;
-        uninstall)     uninstall_app; _action_end ;;
+        uninstall)     uninstall_app || exit 1; _action_end ;;
         install-timer) install_timer; _action_end ;;
         remove-timer)  remove_timer; _action_end ;;
     esac
@@ -442,6 +442,7 @@ Many checks will not apply. Continue anyway?" "Continue" "Quit" "n"; then
     fi
     [[ -n "$REPORT_DIR" ]] || REPORT_DIR=$(_default_report_dir)
     ui_interactive || FIX_MODE="report"
+    offer_front_end_once
 
     FINDINGS_FILE="$STATE_DIR/history/findings-${RUN_ID}.jsonl"
     : > "$FINDINGS_FILE"
