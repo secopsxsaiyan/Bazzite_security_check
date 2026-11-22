@@ -39,7 +39,7 @@ It is a desktop-friendly counterpart to [ubuntu-sec-audit](https://github.com/se
   <img src="docs/screenshots/confirm.png" width="70%" alt="A fix to confirm: the setting now and after, what it affects on this PC, its exact commands, and that it can be undone">
 </p>
 <p align="center">
-  <img src="docs/screenshots/progress.png" width="60%" alt="The progress window holding at 90% during the malware scan">
+  <img src="docs/screenshots/progress.png" width="540" alt="The progress window holding at 90% during the malware scan">
 </p>
 
 ## Requirements

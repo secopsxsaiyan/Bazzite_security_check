@@ -21,6 +21,28 @@
    "report_dir": "/home/player/Documents/bazzite-security-check"
   }
  },
+ "wizard-readme": {
+  "facts": {
+   "os": "Bazzite",
+   "image": "bazzite:stable (Stable (F45.20261117.1))",
+   "hardware": "desktop",
+   "disk": "yes",
+   "last": "2026-11-14 19:05 · 61/100 (grade D)"
+  },
+  "detected": {
+   "gaming": "Steam or a game launcher is installed",
+   "streaming": "Sunshine is set to start"
+  },
+  "answers": {
+   "use": [
+    "gaming",
+    "streaming"
+   ],
+   "fix": true,
+   "deep": false,
+   "report_dir": "/home/alex/Documents/bazzite-security-check"
+  }
+ },
  "dashboard": {
   "score": 72,
   "score_was": 64,
@@ -212,6 +234,262 @@
     "summary": "1 fixed, restart needed"
    }
   ]
+ },
+ "dashboard-readme": {
+  "areas": [
+   {
+    "name": "System",
+    "state": "warn"
+   },
+   {
+    "name": "Apps",
+    "state": "ok"
+   },
+   {
+    "name": "Boot",
+    "state": "bad"
+   },
+   {
+    "name": "Other",
+    "state": "ok"
+   },
+   {
+    "name": "Network",
+    "state": "ok"
+   },
+   {
+    "name": "Accounts",
+    "state": "bad"
+   },
+   {
+    "name": "Desktop",
+    "state": "warn"
+   },
+   {
+    "name": "Dev & gaming",
+    "state": "bad"
+   }
+  ],
+  "checks": [
+   {
+    "id": "check_image_signature",
+    "title": "System image signature",
+    "area": "System",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_system_updates",
+    "title": "System updates",
+    "area": "System",
+    "state": "warn",
+    "affects": "",
+    "summary": "1 low"
+   },
+   {
+    "id": "check_layered_packages",
+    "title": "Layered packages and overrides",
+    "area": "System",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_repos",
+    "title": "Package repositories",
+    "area": "System",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_flatpak",
+    "title": "Flatpak updates and remotes",
+    "area": "Apps",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_flatpak_sandbox",
+    "title": "Flatpak app permissions",
+    "area": "Apps",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_firmware",
+    "title": "Firmware updates",
+    "area": "Boot",
+    "state": "warn",
+    "affects": "",
+    "summary": "1 low"
+   },
+   {
+    "id": "check_secure_boot",
+    "title": "Secure Boot",
+    "area": "Boot",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_disk_encryption",
+    "title": "Disk encryption",
+    "area": "Boot",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_kernel_args",
+    "title": "Kernel arguments and CPU mitigations",
+    "area": "Boot",
+    "state": "reboot",
+    "affects": "",
+    "summary": "fixed - active after a reboot"
+   },
+   {
+    "id": "check_anticheat_ready",
+    "title": "Anti-cheat readiness (Easy Anti-Cheat Linux v2)",
+    "area": "Other",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_selinux",
+    "title": "SELinux",
+    "area": "Boot",
+    "state": "bad",
+    "affects": "",
+    "summary": "1 high · fix available"
+   },
+   {
+    "id": "check_sysctl",
+    "title": "Kernel hardening settings",
+    "area": "Boot",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_firewall",
+    "title": "Firewall",
+    "area": "Network",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_listening_services",
+    "title": "Services reachable from the network",
+    "area": "Network",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_ssh_server",
+    "title": "SSH server",
+    "area": "Network",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_accounts",
+    "title": "User accounts and passwords",
+    "area": "Accounts",
+    "state": "note",
+    "affects": "",
+    "summary": "1 note(s)"
+   },
+   {
+    "id": "check_sudo",
+    "title": "sudo rules",
+    "area": "Accounts",
+    "state": "bad",
+    "affects": "",
+    "summary": "1 medium"
+   },
+   {
+    "id": "check_autologin",
+    "title": "Automatic login",
+    "area": "Accounts",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_screen_lock",
+    "title": "Screen locking",
+    "area": "Desktop",
+    "state": "warn",
+    "affects": "",
+    "summary": "1 low · fix available"
+   },
+   {
+    "id": "check_home_permissions",
+    "title": "Home folder permissions",
+    "area": "Desktop",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_secrets",
+    "title": "Keys and secrets in home folders",
+    "area": "Desktop",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_containers",
+    "title": "Docker and containers",
+    "area": "Dev & gaming",
+    "state": "ok",
+    "affects": "",
+    "summary": "OK"
+   },
+   {
+    "id": "check_game_streaming",
+    "title": "Game streaming (Sunshine)",
+    "area": "Dev & gaming",
+    "state": "bad",
+    "affects": "In use here: fix would stop Sunshine game streaming (Moonlight)",
+    "summary": "1 high, 1 medium, 1 low · fix available"
+   }
+  ],
+  "open": {
+   "high": 2,
+   "medium": 2,
+   "low": 4,
+   "info": 1
+  },
+  "score": 83,
+  "score_was": 81,
+  "grade": "B",
+  "host": "living-room-pc",
+  "os": "Bazzite",
+  "image": "bazzite:stable",
+  "use": "gaming, game streaming",
+  "depth": "standard check",
+  "fixed": 2,
+  "verified": 1,
+  "fixed_reboot": 1,
+  "reboot_reasons": "turn CPU vulnerability protections back on",
+  "prev": true,
+  "gone": 3,
+  "new": 1,
+  "new_titles": "Sunshine opens ports on your router (UPnP)",
+  "nfix": 5,
+  "undo": true,
+  "keep": true,
+  "kept": 0
  },
  "dashboard-report-only": {
   "score": 58,

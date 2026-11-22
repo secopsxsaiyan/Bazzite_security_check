@@ -3186,33 +3186,46 @@ def sc_contrast():
     send({"quit": True})
 
 
+def readme_samples_hash(samples):
+    """The SHA-256 of the README pages' samples, as tests/smoke.sh computes it."""
+    import hashlib
+    pages = [samples[k] for k in ("wizard-readme", "dashboard-readme", "confirm-readme")]
+    return hashlib.sha256(json.dumps(pages, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 def sc_readme():
-    """The README's pictures (docs/screenshots), made with
-    "--shots DIR readme" and copied to docs/screenshots: the wizard's first
-    step, the check-up result, a fix to confirm and the progress window
-    holding at 90% during the malware scan, in the dark theme with the
-    desktop's icons. The sample data has nothing from a real PC; the fix
-    ("confirm-readme") is what the root side sends for the real screen-lock fix
-    (tests/ui/readme-confirm.sh makes it), and the progress line is the one ui_progress_set
-    sends for the scan. Without --shots it only checks that each one shows.
-    With --shots, where the Breeze dark colour scheme or an icon theme is
-    missing, it makes no pictures and fails: they would not match the README."""
+    """The README's pictures, made with "--shots DIR readme" and copied to
+    docs/screenshots: the wizard's first step, the check-up result, a fix
+    to confirm and the progress window holding at 90% during the malware
+    scan, in the dark theme with Breeze icons. Their inputs (the samples
+    "wizard-readme", "dashboard-readme" and "confirm-readme") are made by
+    the tool's own code with tests/ui/readme-samples.sh, and samples.sha256
+    says which samples the pictures show; the progress
+    line is the one ui_progress_set sends for the scan. Without --shots it
+    only checks that each page shows. With --shots, where the Breeze dark
+    colour scheme or the Breeze icons are missing, it makes no pictures and
+    fails: they would not look like the README's."""
     from PySide6.QtGui import QIcon
     S = SAMPLES
     path = appmod._scheme_path("dark")
-    icons = QIcon.hasThemeIcon("dialog-ok-apply")
-    if SHOTS and not (path and icons):
-        check(False, "readme: the Breeze dark colour scheme (%s) and an icon theme (%s) are here, for the README's pictures"
-              % ("yes" if path else "no", "yes" if icons else "no"))
+    # KDE's icon loader uses Breeze when nothing else is set (this harness
+    # starts each scenario with an empty configuration folder).
+    theme = QIcon.themeName() or "breeze"
+    dirs = [os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")]
+    dirs += (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
+    breeze = (theme in ("breeze", "breeze-dark") and QIcon.hasThemeIcon("dialog-ok-apply")
+              and any(os.path.isdir(os.path.join(d, "icons", theme)) for d in dirs))
+    if SHOTS and not (path and breeze):
+        check(False, "readme: the Breeze dark colour scheme (%s) and the Breeze icons (%s, icon theme %r) are here, for the README's pictures"
+              % ("yes" if path else "no", "yes" if breeze else "no", theme))
         send({"quit": True})
         return
     if path:
         send({"theme": "dark"})
         yield W(lambda: (app.property("KDE_COLOR_SCHEME_PATH") or "") == path, "readme: the dark theme is set")
         yield P(0.3)
-    for rid, mode, sample, name in (("r1", "wizard", "wizard", "wizard"), ("r2", "dashboard", "dashboard", "dashboard-dark"),
-                                    ("r3", "confirm", "confirm-readme", "confirm")):
-        if (yield from show(rid, mode, S[sample], "readme: " + sample)):
+    for rid, mode, name in (("r1", "wizard", "wizard"), ("r2", "dashboard", "dashboard-dark"), ("r3", "confirm", "confirm")):
+        if (yield from show(rid, mode, S[mode + "-readme"], "readme: " + mode)):
             yield P(0.3)
             shot(name)
     send({"progress": "start", "heading": "Checking your PC"})
@@ -3224,6 +3237,10 @@ def sc_readme():
         yield P(0.3)
         shot("progress", pw)
         send({"progress": "stop"})
+    if SHOTS:
+        # Which samples the pictures show (tests/smoke.sh compares it).
+        with open(os.path.join(SHOTS, "samples.sha256"), "w", encoding="utf-8") as f:
+            f.write(readme_samples_hash(S) + "\n")
     no_warnings("readme")
     send({"quit": True})
 

@@ -3580,14 +3580,34 @@ else
     bad "version string: declared '${ver:-}', --version '${got:-}', changelog section missing"
 fi
 
-# The README's picture of a fix shows what the tool really sends for it.
-if bash "$HERE/ui/readme-confirm.sh" > "$W/readme-confirm.json" \
+# The README's pictures show what the tool itself makes for those pages.
+if bash "$HERE/ui/readme-samples.sh" > "$W/readme-samples.json" \
     && python3 -I -c 'import json, sys
-sys.exit(json.load(open(sys.argv[1])) != json.load(open(sys.argv[2]))["confirm-readme"])' \
-        "$W/readme-confirm.json" "$HERE/ui/samples.json"; then
-    ok "the README's fix sample is what the tool sends"
+made, s = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+def diff(a, b, at):
+    if isinstance(a, dict) and isinstance(b, dict):
+        return [d for k in sorted(set(a) | set(b)) for d in diff(a.get(k), b.get(k), at + "." + k)]
+    if isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        return [d for i, (x, y) in enumerate(zip(a, b)) for d in diff(x, y, "%s[%d]" % (at, i))]
+    return [] if a == b else ["%s: made %r, sample %r" % (at, a, b)]
+out = [d for k, v in made.items() for d in diff(v, s.get(k), k)]
+for d in out[:10]:
+    print("    " + d[:300])
+sys.exit(len(made) != 3 or bool(out))' \
+        "$W/readme-samples.json" "$HERE/ui/samples.json"; then
+    ok "the README's samples are what the tool makes"
 else
-    bad "tests/ui/samples.json confirm-readme differs from tests/ui/readme-confirm.sh: make it again (docs/ui.md)"
+    bad "tests/ui/samples.json *-readme differ from what tests/ui/readme-samples.sh makes: make them again (docs/ui.md)"
+fi
+# ... and the pictures were made from those samples.
+want=$(python3 -I -c 'import hashlib, json, sys
+s = json.load(open(sys.argv[1]))
+print(hashlib.sha256(json.dumps([s[k] for k in ("wizard-readme", "dashboard-readme", "confirm-readme")],
+                                sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest())' "$HERE/ui/samples.json")
+if [[ -n "$want" && "$(cat "$HERE/../docs/screenshots/samples.sha256" 2>/dev/null)" == "$want" ]]; then
+    ok "the README's pictures show the current samples"
+else
+    bad "docs/screenshots/samples.sha256 does not match the README samples: make the pictures again (docs/ui.md)"
 fi
 
 echo
